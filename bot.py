@@ -3,8 +3,7 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from config import BOT_TOKEN
 from database.crud import create_user, get_user
 from handlers import moderation
@@ -17,67 +16,33 @@ dp = Dispatcher()
 dp.include_router(moderation.router)
 
 
-def get_main_keyboard():
-    """Кнопки управления."""
+def main_keyboard():
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📋 Меню"), KeyboardButton(text="👤 Профиль")],
-            [KeyboardButton(text="⚠️ Варны"), KeyboardButton(text="🔇 Мут")],
-            [KeyboardButton(text="❓ Помощь")]
+            [KeyboardButton(text="⚠️ Варны"), KeyboardButton(text="🛡️ Права")],
+            [KeyboardButton(text="📊 Топ"), KeyboardButton(text="❓ Помощь")],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
     return kb
 
 
-@dp.message(Command("start"))
+@dp.message(F.text == "/start")
 async def cmd_start(message: types.Message):
     if message.chat.type == "private":
         await message.answer(
             "Привет! Я бот-модератор.\n"
             "Добавь меня в группу и назначь администратором.",
-            reply_markup=get_main_keyboard()
+            reply_markup=main_keyboard(),
         )
     else:
         await message.answer(f"Бот активирован в чате {message.chat.title}!")
 
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    help_text = (
-        "<b>📋 Команды модерации:</b>\n\n"
-        "<b>Русские:</b>\n"
-        "• мут @user 10м — замутить на 10 минут\n"
-        "• мут @user 1ч — замутить на 1 час\n"
-        "• мут @user 1д — замутить на 1 день\n"
-        "• мут @user 1мес — замутить на 1 месяц\n"
-        "• мут @user 1г — замутить на 1 год\n"
-        "• мут @user — бессрочно\n"
-        "• размут @user — снять мут\n"
-        "• бан @user — забанить\n"
-        "• разбан @user — разбанить\n"
-        "• кик @user — кикнуть\n"
-        "• варн @user — выдать предупреждение\n"
-        "• унварн @user / анварн @user — снять варны\n"
-        "• варны @user — посмотреть варны\n"
-        "• повысить @user — повысить ранг\n"
-        "• понизить @user — понизить ранг\n"
-        "• мойранг — мой ранг\n\n"
-        "<b>English:</b>\n"
-        "• mute @user 10m — mute for 10 minutes\n"
-        "• unmute @user — unmute\n"
-        "• ban @user — ban\n"
-        "• unban @user — unban\n"
-        "• kick @user — kick\n"
-        "• warn @user — warn\n"
-        "• unwarn @user — remove warns"
-    )
-    await message.answer(help_text)
-
-
 @dp.message(F.text == "📋 Меню")
 async def btn_menu(message: types.Message):
-    await message.answer("Главное меню:", reply_markup=get_main_keyboard())
+    await message.answer("Главное меню:", reply_markup=main_keyboard())
 
 
 @dp.message(F.text == "👤 Профиль")
@@ -86,10 +51,11 @@ async def btn_profile(message: types.Message):
     if not user:
         create_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.first_name)
         user = get_user(message.from_user.id, message.chat.id)
-    await message.answer(f"👤 {message.from_user.mention_html()}\n"
-                        f"💰 Ириски: {user['balance']}\n"
-                        f"⚠️ Варны: {user['warns']}\n"
-                        f"🏆 Ранг: {user['rank']}")
+    await message.answer(
+        f"👤 {message.from_user.mention_html()}\n"
+        f"⚠️ Варны: {user['warns']}\n"
+        f"🏆 Ранг: {user['rank']}"
+    )
 
 
 @dp.message(F.text == "⚠️ Варны")
@@ -101,15 +67,50 @@ async def btn_warns(message: types.Message):
         await message.answer("⚠️ У вас нет варнов.")
 
 
-@dp.message(F.text == "🔇 Мут")
-async def btn_mute(message: types.Message):
-    await message.answer("Напишите: <code>мут @user 10м</code>\n"
-                        "Сроки: 10с, 10м, 10ч, 10д, 1мес, 1г")
+@dp.message(F.text == "🛡️ Права")
+async def btn_perms(message: types.Message):
+    await message.answer("Напишите: <code>права</code> или <code>права @user</code>")
+
+
+@dp.message(F.text == "📊 Топ")
+async def btn_top(message: types.Message):
+    await message.answer("Напишите: <code>топ</code>")
 
 
 @dp.message(F.text == "❓ Помощь")
 async def btn_help(message: types.Message):
-    await cmd_help(message)
+    help_text = (
+        "<b>📋 Команды модерации:</b>\n\n"
+        "<b>Базовые:</b>\n"
+        "• мут @user 10м — замутить\n"
+        "• размут / анмут @user — снять мут\n"
+        "• бан @user — забанить\n"
+        "• разбан @user — разбанить\n"
+        "• кик @user — кикнуть\n"
+        "• варн @user — предупреждение\n"
+        "• унварн / анварн @user — снять варны\n"
+        "• варны @user — проверить варны\n\n"
+        "<b>Сроки:</b> 10с, 5м, 1 час, 1 день, 1 неделя, 1 месяц, 1 год\n\n"
+        "<b>Управление:</b>\n"
+        "• !модер — назначить модератора\n"
+        "• повысить / понизить\n"
+        "• снять модера — снять права\n\n"
+        "<b>Сообщения:</b>\n"
+        "• -смс — удалить сообщение\n"
+        "• .пин / .анпин — закрепить / открепить\n"
+        "• очистить 10 — удалить 10 сообщений\n\n"
+        "<b>Информация:</b>\n"
+        "• инфо @user / кто админ / кто модер\n"
+        "• топ / стата / логи / отчёт\n\n"
+        "<b>Фильтры:</b>\n"
+        "• +антиссылка / -антиссылка\n"
+        "• +антимат / -антимат\n"
+        "• +антифлуд / -антифлуд\n\n"
+        "<b>Триггеры:</b>\n"
+        "• триггер варн 3 мут 1ч\n"
+        "• триггеры — список триггеров"
+    )
+    await message.answer(help_text)
 
 
 @dp.message(F.new_chat_members)
@@ -119,7 +120,7 @@ async def greet_new_member(message: types.Message):
             continue
         if not get_user(new_member.id, message.chat.id):
             create_user(new_member.id, message.chat.id, new_member.username, new_member.first_name)
-        await message.answer(f"👋 Привет, {new_member.mention_html()}! Добро пожаловать.")
+        await message.answer(f"👋 Привет, {new_member.mention_html()}!")
 
 
 async def main():
