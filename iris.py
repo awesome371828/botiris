@@ -9,6 +9,8 @@ import asyncio
 import logging
 import os
 import re
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -57,6 +59,29 @@ bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
+
+# Runtime cache is used if Supabase is temporarily unavailable. Settings are also
+# persisted in bot_chat_settings when the table from schema.sql exists.
+FILTER_DEFAULTS = {
+    "antilink": False, "antiinvite": False, "antimat": False,
+    "antiflood": False, "anticaps": False, "antireklama": False,
+    "antikripta": False, "antifishing": False, "antiall": False,
+    "antibot": False, "antisticker": False, "antigif": False,
+    "antiphoto": False, "antivideo": False, "antivoice": False,
+    "antidocument": False, "flood_limit": 5, "flood_window": 10,
+    "caps_percent": 70, "filter_mute_minutes": 10,
+    "warn_3_action": "mute", "warn_3_time": "1ч",
+    "warn_5_action": "mute", "warn_5_time": "24ч",
+    "warn_7_action": "ban", "warn_7_time": "7д",
+    "warn_10_action": "ban", "warn_10_time": "навсегда",
+}
+_CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
+_FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+BAD_WORDS = ("хуй", "пизд", "бляд", "ебал", "ебат", "сука", "мраз", "fuck", "shit", "bitch", "asshole")
+AD_WORDS = ("купить", "продам", "продаю", "скидка", "акция", "распродажа", "заработок", "инвестиции", "крипта", "bitcoin", "ethereum", "usdt", "казино", "ставки", "букмекер", "промокод", "реферал", "подпишись")
+FISHING_RE = re.compile(r"(?:bit\.ly|tinyurl|goo\.gl|t\.me/joinchat|verify.{0,20}wallet|seed.{0,20}phrase)", re.I)
+URL_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/)", re.I)
+INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.I)
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
 def main_keyboard() -> ReplyKeyboardMarkup:
@@ -173,37 +198,111 @@ async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     except (TelegramBadRequest, TelegramForbiddenError):
         return False
 
+def user_rank(chat_id: int, user_id: int) -> int:
+    row = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
+    try:
+        return max(0, min(5, int(row.get("rank", 0))))
+    except (TypeError, ValueError):
+        return 0
+
 async def require_admin(message: Message) -> bool:
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
         return False
-    if not await is_admin(bot, message.chat.id, message.from_user.id):
-        await message.answer("⛔ Команда доступна только администраторам чата.")
+    if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
+        return True
+    await message.answer("⛔ Команда доступна администраторам и назначенным модераторам.")
+    return False
+
+async def require_real_admin(message: Message) -> bool:
+    if not message.from_user or not is_group(message):
+        await message.answer("Эта команда работает в группе.")
         return False
-    return True
+    if await is_admin(bot, message.chat.id, message.from_user.id):
+        return True
+    await message.answer("⛔ Назначать ранги и менять настройки могут только администраторы Telegram.")
+    return False
+
+_TIME_UNITS = {
+    "с": 1, "сек": 1, "секунда": 1, "секунды": 1, "секунд": 1,
+    "s": 1, "sec": 1, "секунду": 1,
+    "м": 60, "мин": 60, "минута": 60, "минуты": 60, "минут": 60,
+    "m": 60, "min": 60,
+    "ч": 3600, "час": 3600, "часа": 3600, "часов": 3600, "часе": 3600,
+    "h": 3600, "hr": 3600,
+    "д": 86400, "дн": 86400, "день": 86400, "дня": 86400, "дней": 86400,
+    "сутки": 86400, "суток": 86400, "day": 86400, "days": 86400, "d": 86400,
+    "н": 604800, "нед": 604800, "неделя": 604800, "недели": 604800,
+    "недель": 604800, "week": 604800, "weeks": 604800, "w": 604800,
+    "мес": 2592000, "месяц": 2592000, "месяца": 2592000, "месяцев": 2592000,
+    "month": 2592000, "months": 2592000,
+    "г": 31536000, "год": 31536000, "года": 31536000, "лет": 31536000,
+    "years": 31536000, "year": 31536000, "y": 31536000,
+}
+
+def _unit_seconds(unit: str) -> int | None:
+    unit = unit.lower().strip().rstrip(".,")
+    if unit in _TIME_UNITS:
+        return _TIME_UNITS[unit]
+    # Resolve grammatical variants such as "минутой" and long words.
+    for key, seconds in sorted(_TIME_UNITS.items(), key=lambda item: len(item[0]), reverse=True):
+        if len(key) >= 3 and unit.startswith(key):
+            return seconds
+    return None
 
 def parse_duration(value: str) -> timedelta | None:
-    """Accept 30с, 10м, 2ч, 3д, 1н, plus common English units."""
-    match = re.fullmatch(r"\s*(\d{1,5})\s*(с|сек|секунд[аы]?|s|м|мин|минут[аы]?|m|ч|час(?:а|ов)?|h|д|дн|день|дня|days?|d|н|нед(?:еля|ели|ель)?|w)\s*", value.lower())
-    if not match:
+    """Parse one or more duration units: '1 час 30 минут', '2д', '1 год'."""
+    parsed = parse_duration_prefix((value or "").split())
+    return parsed[0] if parsed else None
+
+def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | None:
+    total = 0
+    consumed = 0
+    shown: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i].strip().lower().strip(",.;")
+        m = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
+        if not m:
+            break
+        amount = int(m.group(1))
+        unit = m.group(2)
+        used = 1
+        if not unit and i + 1 < len(tokens):
+            unit = tokens[i + 1].lower().strip(",.;")
+            seconds = _unit_seconds(unit)
+            if seconds is not None:
+                used = 2
+            else:
+                break
+        elif unit:
+            seconds = _unit_seconds(unit)
+            if seconds is None:
+                break
+        else:
+            break
+        if amount < 1:
+            return None
+        total += amount * seconds
+        shown.append(f"{amount} {tokens[i + 1] if used == 2 else unit}")
+        consumed += used
+        i += used
+        if i >= len(tokens) or not re.match(r"^\d", tokens[i]):
+            break
+    # Telegram only accepts temporary restrictions up to about 366 days.
+    # A single year is represented as 365 days; longer periods are rejected.
+    if consumed == 0 or total <= 0 or total > 366 * 86400:
         return None
-    number = int(match.group(1))
-    unit = match.group(2)
-    if number < 1:
-        return None
-    if unit in {"с", "сек", "секунда", "секунды", "секунд", "s"}:
-        seconds = number
-    elif unit in {"м", "мин", "минута", "минуты", "минут", "m"}:
-        seconds = number * 60
-    elif unit in {"ч", "час", "часа", "часов", "h"}:
-        seconds = number * 3600
-    elif unit in {"д", "дн", "день", "дня", "day", "days", "d"}:
-        seconds = number * 86400
-    else:
-        seconds = number * 604800
-    if seconds > 366 * 86400:
-        return None
-    return timedelta(seconds=seconds)
+    return timedelta(seconds=total), consumed, " ".join(shown)
+
+def split_duration_reason(tokens: list[str]) -> tuple[timedelta | None, str | None, str | None]:
+    """Return duration, human-readable duration, and the remaining reason."""
+    result = parse_duration_prefix(tokens)
+    if not result:
+        return None, None, " ".join(tokens).strip() or None
+    duration, consumed, label = result
+    reason = " ".join(tokens[consumed:]).strip(" ,.;:-") or None
+    return duration, label, reason
 
 async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] | None:
     if message.reply_to_message and message.reply_to_message.from_user:
@@ -265,13 +364,15 @@ async def help_command(message: Message) -> None:
         "• /admins или «🛡 Кто админ» — список админов\n"
         "• /warns — мои предупреждения; /marry — брак в ответ на сообщение\n\n"
         "<b>Модерация (ответьте на сообщение участника)</b>\n"
-        "• /mute 10м или «мут 10м» — ограничить сообщения\n"
+        "• ответьте на сообщение: «мут 1 час спам» — мут на 1 час с причиной; «мут 1ч» — краткая форма\n"
         "• /unmute — снять мут; /ban — бан; /unban ID — разбан\n"
         "• /kick — исключить; /warn — выдать предупреждение\n"
         "• /unwarn — снять одно предупреждение; /clearwarns — обнулить\n"
         "• /del или «-смс» — удалить сообщение; /purge 10 — очистить сообщения\n"
         "• /pin или «.пин» — закрепить сообщение; /unpin или «.анпин» — открепить\n"
-        "• /info — информация об участнике; /logs — последние действия\n\n"
+        "• /info — информация об участнике; /logs — последние действия\n"
+        "• +антиссылка / -антиссылка — управление фильтрами (и другие +анти…/-анти…)\n"
+        "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
         reply_markup=main_keyboard(),
@@ -337,13 +438,19 @@ async def admins(message: Message) -> None:
 # ── Activity tracking and welcome ────────────────────────────────────────────
 @router.message(F.new_chat_members)
 async def welcome_members(message: Message) -> None:
+    settings = get_chat_settings(message.chat.id) if "get_chat_settings" in globals() else dict(FILTER_DEFAULTS)
     for user in message.new_chat_members:
         if user.is_bot:
+            if settings.get("antibot"):
+                try:
+                    await bot.ban_chat_member(message.chat.id, user.id)
+                    audit(message.chat.id, 0, "antibot_ban", user.id, "бот добавлен при включённом антиботе")
+                except Exception:
+                    log.exception("Could not remove bot blocked by antibot")
             continue
         ensure_user(user.id, message.chat.id, user.username, user.full_name)
         await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
 
-@router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)
 async def track_activity(message: Message) -> None:
     # This handler is registered last and only records regular messages.
     if not message.from_user or message.from_user.is_bot or not message.text:
@@ -379,32 +486,50 @@ async def check_mod(message: Message) -> bool:
     return True
 
 @router.message(Command("mute"))
-@router.message(F.text.regexp(r"(?i)^мут(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?мут(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
-    args = args_after_command(message) if (message.text or "").startswith("/") else (message.text or "").split()[1:]
-    duration = parse_duration(args[-1]) if args else None
-    if not duration:
-        await message.answer("Формат: ответьте на сообщение и напишите <code>/mute 10м</code> (с, м, ч, д, н).")
-        return
-    target = await moderation_target(message, "mute")
+    raw_args = args_after_command(message)
+    # In reply-mode every argument follows the command. Without a reply, the
+    # first argument identifies the target (@username or known numeric ID).
+    target_args = [] if message.reply_to_message else raw_args[:1]
+    target = await resolve_target(message, target_args)
     if not target:
+        await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
-    until = datetime.now(timezone.utc) + duration
+    if message.from_user and target[0] == message.from_user.id:
+        await message.answer("Нельзя замутить самого себя.")
+        return
+    if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Нельзя замутить владельца бота.")
+        return
+    duration_tokens = raw_args if message.reply_to_message else raw_args[1:]
+    duration, duration_label, reason = split_duration_reason(duration_tokens)
+    if duration is None:
+        # No recognized duration means a permanent mute; all remaining text is the reason.
+        reason = " ".join(duration_tokens).strip() or None
+        duration_label = "бессрочно"
+        until = None
+    else:
+        until = datetime.now(timezone.utc) + duration
+    reason = reason or "не указана"
     try:
         await bot.restrict_chat_member(
-            message.chat.id, target[0],
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until,
+            chat_id=message.chat.id, user_id=target[0],
+            permissions=ChatPermissions(can_send_messages=False), until_date=until,
         )
-        audit(message.chat.id, message.from_user.id, "mute", target[0], f"until={until.isoformat()}")
-        await message.answer(f"🔇 {mention(target[0], target[1])} ограничен до <b>{until.strftime('%Y-%m-%d %H:%M UTC')}</b>.")
+        audit(message.chat.id, message.from_user.id, "mute", target[0], f"duration={duration_label}; reason={reason}")
+        if until:
+            when = until.strftime('%Y-%m-%d %H:%M UTC')
+            await message.answer(f"🔇 {mention(target[0], target[1])} замучен на <b>{duration_label}</b> по причине: <b>{reason}</b>. До {when}.")
+        else:
+            await message.answer(f"🔇 {mention(target[0], target[1])} замучен бессрочно по причине: <b>{reason}</b>.")
     except Exception as exc:
         await safe_error(message, exc)
 
 @router.message(Command("unmute"))
-@router.message(F.text.regexp(r"(?i)^размут(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/! ]?(?:размут|анмут|унмут)(?:\s|$)"))
 async def unmute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -427,17 +552,19 @@ async def unmute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("ban"))
-@router.message(F.text.regexp(r"(?i)^бан(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?бан(?:\s|$)"))
 async def ban_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
     target = await moderation_target(message, "ban")
     if not target:
         return
+    raw_args = args_after_command(message)
+    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
-        audit(message.chat.id, message.from_user.id, "ban", target[0])
-        await message.answer(f"⛔ {mention(target[0], target[1])} заблокирован в чате.")
+        audit(message.chat.id, message.from_user.id, "ban", target[0], f"reason={reason}")
+        await message.answer(f"⛔ {mention(target[0], target[1])} заблокирован в чате. Причина: <b>{reason}</b>.")
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -457,45 +584,66 @@ async def unban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("kick"))
-@router.message(F.text.regexp(r"(?i)^кик(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?кик(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
     target = await moderation_target(message, "kick")
     if not target:
         return
+    raw_args = args_after_command(message)
+    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
-        audit(message.chat.id, message.from_user.id, "kick", target[0])
-        await message.answer(f"👢 {mention(target[0], target[1])} исключён из чата.")
+        audit(message.chat.id, message.from_user.id, "kick", target[0], f"reason={reason}")
+        await message.answer(f"👢 {mention(target[0], target[1])} исключён из чата. Причина: <b>{reason}</b>.")
     except Exception as exc:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^варн(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
-    target = await moderation_target(message, "warn")
+    raw_args = args_after_command(message)
+    target = await resolve_target(message, [] if message.reply_to_message else raw_args[:1])
     if not target:
+        await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
+    if message.from_user and target[0] == message.from_user.id:
+        await message.answer("Нельзя выдать варн самому себе.")
+        return
+    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
     count = set_warns(message.chat.id, target[0], 1)
-    audit(message.chat.id, message.from_user.id, "warn", target[0], f"warns={count}")
-    await message.answer(f"⚠️ {mention(target[0], target[1])}: предупреждение <b>{count}</b>.")
-    if count >= 3 and await bot_can_restrict(message):
-        try:
-            until = datetime.now(timezone.utc) + timedelta(hours=1)
-            await bot.restrict_chat_member(
-                message.chat.id, target[0],
-                permissions=ChatPermissions(can_send_messages=False), until_date=until,
-            )
-            audit(message.chat.id, message.from_user.id, "auto_mute", target[0], "3 warns")
-            await message.answer("🔇 Автоматический мут на 1 час за 3 предупреждения.")
-        except Exception:
-            log.exception("Auto-mute failed")
+    audit(message.chat.id, message.from_user.id, "warn", target[0], f"warns={count}; reason={reason}")
+    await message.answer(f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}</b> по причине: <b>{reason}</b>.")
+    settings = get_chat_settings(message.chat.id)
+    thresholds = [(10, "warn_10"), (7, "warn_7"), (5, "warn_5"), (3, "warn_3")]
+    for threshold, key in thresholds:
+        if count >= threshold:
+            action = str(settings.get(f"{key}_action", "mute"))
+            time_label = str(settings.get(f"{key}_time", "1ч"))
+            if action == "ban":
+                try:
+                    await bot.ban_chat_member(message.chat.id, target[0])
+                    audit(message.chat.id, message.from_user.id, "auto_ban", target[0], f"{count} warns; reason={reason}")
+                    await message.answer(f"⛔ Автобан {mention(target[0], target[1])}: {count} предупреждений.")
+                except Exception as exc:
+                    await safe_error(message, exc)
+            elif action == "mute" and await bot_can_restrict(message):
+                parsed = parse_duration(time_label)
+                until = datetime.now(timezone.utc) + (parsed or timedelta(days=365))
+                try:
+                    await bot.restrict_chat_member(message.chat.id, target[0], permissions=ChatPermissions(can_send_messages=False), until_date=until)
+                    audit(message.chat.id, message.from_user.id, "auto_mute", target[0], f"{count} warns; time={time_label}")
+                    await message.answer(f"🔇 Автомут {mention(target[0], target[1])} на {time_label}: {count} предупреждений.")
+                except Exception as exc:
+                    await safe_error(message, exc)
+            break
 
 @router.message(Command("unwarn"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -507,6 +655,7 @@ async def unwarn_cmd(message: Message) -> None:
     await message.answer(f"✅ Предупреждений осталось: <b>{count}</b>.")
 
 @router.message(Command("clearwarns"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
 async def clearwarns_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -719,6 +868,182 @@ async def divorce_cmd(message: Message) -> None:
             return
     await message.answer("У вас нет активного брака.")
 
+# ── Integrated moderation stages from moderation.py ──────────────────────────
+# Stage A: durable per-chat filter settings and human-readable time/reason parsing.
+def get_chat_settings(chat_id: int) -> dict[str, Any]:
+    if chat_id in _CHAT_SETTINGS_CACHE:
+        return _CHAT_SETTINGS_CACHE[chat_id]
+    settings = dict(FILTER_DEFAULTS)
+    row = db_one("bot_chat_settings", chat_id=chat_id)
+    if row and isinstance(row.get("settings"), dict):
+        settings.update(row["settings"])
+    _CHAT_SETTINGS_CACHE[chat_id] = settings
+    return settings
+
+def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
+    _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+    db_upsert("bot_chat_settings", {
+        "chat_id": chat_id, "settings": settings,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, "chat_id")
+
+FILTER_ALIASES = {
+    "антиссылка": "antilink", "антилинк": "antilink",
+    "антиинвайт": "antiinvite", "антивызов": "antiinvite",
+    "антимат": "antimat", "антифлуд": "antiflood", "антикапс": "anticaps",
+    "антиреклама": "antireklama", "антикрипта": "antikripta",
+    "антифишинг": "antifishing", "антиолл": "antiall", "антиалл": "antiall",
+    "антибот": "antibot", "антистикер": "antisticker", "антигиф": "antigif",
+    "антифото": "antiphoto", "антивидео": "antivideo", "антиголос": "antivoice",
+    "антидок": "antidocument", "антидокумент": "antidocument",
+}
+
+@router.message(F.text.regexp(r"(?i)^[+-](?:антиссылка|антилинк|антиинвайт|антивызов|антимат|антифлуд|антикапс|антиреклама|антикрипта|антифишинг|антиолл|антиалл|антибот|антистикер|антигиф|антифото|антивидео|антиголос|антидок|антидокумент)(?:\s|$)"))
+async def filter_toggle_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    parts = (message.text or "").split()
+    sign_name = parts[0]
+    enabled = sign_name.startswith("+")
+    alias = sign_name[1:].lower()
+    key = FILTER_ALIASES.get(alias)
+    if not key:
+        return
+    settings = get_chat_settings(message.chat.id)
+    settings[key] = enabled
+    save_chat_settings(message.chat.id, settings)
+    await message.answer(f"{'✅ Включён' if enabled else '🛑 Выключен'} фильтр <b>{alias}</b>.")
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:ранг|rank)(?:\s|$)"))
+async def rank_cmd(message: Message) -> None:
+    parts = (message.text or "").split()
+    if len(parts) == 1:
+        if not message.from_user:
+            return
+        await message.answer(f"🏅 Ваш ранг: <b>{user_rank(message.chat.id, message.from_user.id)}</b> (0 — участник, 1 — модератор, 5 — создатель).")
+        return
+    if not await require_real_admin(message):
+        return
+    target = await resolve_target(message, [] if message.reply_to_message else parts[1:2])
+    rank_arg_index = 1 if message.reply_to_message else 2
+    if not target or len(parts) <= rank_arg_index or not parts[rank_arg_index].isdigit():
+        await message.answer("Формат: ответьте на участника и напишите <code>ранг 1</code> либо <code>ранг @username 1</code>.")
+        return
+    rank = int(parts[rank_arg_index])
+    if rank < 0 or rank > 5:
+        await message.answer("Ранг должен быть от 0 до 5.")
+        return
+    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
+        "username": user.get("username"), "first_name": user.get("first_name") or target[1],
+        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": rank}, "user_id,chat_id")
+    audit(message.chat.id, message.from_user.id, "set_rank", target[0], f"rank={rank}")
+    await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank}</b>.")
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:настройки фильтров|фильтры|filters)(?:\s|$)"))
+async def filters_status_cmd(message: Message) -> None:
+    settings = get_chat_settings(message.chat.id)
+    enabled = [name for name, key in FILTER_ALIASES.items() if settings.get(key)]
+    await message.answer("🛡 <b>Фильтры чата</b>\n" + ("\n".join(f"• {name}: включён" for name in sorted(set(enabled))) if enabled else "Нет включённых фильтров.") + "\n\nВкл: <code>+антиссылка</code>; выкл: <code>-антиссылка</code>.")
+
+@router.message(Command("settrigger"))
+async def set_trigger_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    parts = args_after_command(message)
+    if len(parts) < 3 or parts[0] not in {"3", "5", "7", "10"} or parts[1] not in {"mute", "ban", "off"}:
+        await message.answer("Формат: <code>/settrigger 3 mute 1ч</code>, <code>/settrigger 7 ban</code> или <code>/settrigger 5 off</code>.")
+        return
+    threshold, action = parts[0], parts[1]
+    settings = get_chat_settings(message.chat.id)
+    settings[f"warn_{threshold}_action"] = "off" if action == "off" else action
+    if action != "off" and len(parts) >= 3:
+        settings[f"warn_{threshold}_time"] = " ".join(parts[2:])
+    save_chat_settings(message.chat.id, settings)
+    await message.answer(f"✅ Триггер {threshold} варнов обновлён: {action}.")
+
+async def auto_moderation_filters(message: Message) -> None:
+    if not message.from_user or message.from_user.is_bot or not is_group(message):
+        return
+    # This handler is the catch-all for group messages, so activity is recorded
+    # here (a handler registered earlier would swallow updates in aiogram 3).
+    await track_activity(message)
+    # Never filter commands; moderation/admin commands must remain reachable.
+    text_value = message.text or message.caption or ""
+    if text_value and re.match(r"^\s*(?:[/!.+-]|мут(?:\s|$)|бан(?:\s|$)|кик(?:\s|$)|варн(?:\s|$)|размут(?:\s|$))", text_value, re.I):
+        return
+    if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
+        return
+    settings = get_chat_settings(message.chat.id)
+    reason = None
+    if settings.get("antibot") and message.new_chat_members and any(u.is_bot for u in message.new_chat_members):
+        reason = "добавление бота"
+    if text_value:
+        if settings.get("antiinvite") and INVITE_RE.search(text_value):
+            reason = "пригласительная ссылка"
+        elif settings.get("antilink") and URL_RE.search(text_value):
+            reason = "ссылка"
+        elif settings.get("antifishing") and FISHING_RE.search(text_value):
+            reason = "фишинг"
+        elif settings.get("antimat") and any(word in text_value.lower() for word in BAD_WORDS):
+            reason = "нецензурная лексика"
+        elif settings.get("antireklama") and any(word in text_value.lower() for word in AD_WORDS):
+            reason = "реклама"
+        elif settings.get("antikripta") and any(word in text_value.lower() for word in ("bitcoin", "btc", "ethereum", "usdt", "крипта", "binance", "bybit", "кошелёк", "wallet")):
+            reason = "криптореклама"
+        elif settings.get("antiall") and re.search(r"@(all|everyone|here)\b", text_value, re.I):
+            reason = "массовое упоминание"
+        elif settings.get("anticaps"):
+            letters = [c for c in text_value if c.isalpha()]
+            if len(letters) >= 8 and sum(c.isupper() for c in letters) / len(letters) * 100 >= int(settings.get("caps_percent", 70)):
+                reason = "капс"
+        if settings.get("antiflood") and not reason:
+            key = (message.chat.id, message.from_user.id)
+            now = time.monotonic()
+            times = _FLOOD_TIMES[key]
+            times.append(now)
+            window = max(2, min(60, int(settings.get("flood_window", 10))))
+            while times and now - times[0] > window:
+                times.popleft()
+            if len(times) >= max(3, min(20, int(settings.get("flood_limit", 5)))):
+                reason = "флуд"
+                times.clear()
+    if not reason:
+        if settings.get("antisticker") and message.sticker:
+            reason = "стикер запрещён"
+        elif settings.get("antigif") and message.animation:
+            reason = "GIF запрещён"
+        elif settings.get("antiphoto") and message.photo:
+            reason = "фото запрещено"
+        elif settings.get("antivideo") and (message.video or message.video_note):
+            reason = "видео запрещено"
+        elif settings.get("antivoice") and (message.voice or message.audio):
+            reason = "голосовые/аудио запрещены"
+        elif settings.get("antidocument") and message.document:
+            reason = "документы запрещены"
+    if not reason:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        log.warning("Could not delete filtered message in %s", message.chat.id)
+    audit(message.chat.id, 0, "filter_delete", message.from_user.id, reason)
+    try:
+        mute_minutes = max(1, min(1440, int(settings.get("filter_mute_minutes", 10))))
+        if await bot_can_restrict(message):
+            await bot.restrict_chat_member(message.chat.id, message.from_user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=datetime.now(timezone.utc) + timedelta(minutes=mute_minutes))
+            audit(message.chat.id, 0, "filter_mute", message.from_user.id, f"reason={reason}; minutes={mute_minutes}")
+        await message.answer(f"🚫 {mention(message.from_user.id, message.from_user.full_name)}: сообщение удалено. Причина: <b>{reason}</b>.")
+    except Exception:
+        log.exception("Filter punishment failed")
+
+# Important: the old track_activity catch-all handler was registered before
+# moderation and consumed ordinary group updates. Register it last so command
+# handlers and automatic filters can actually run first.
+router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)(auto_moderation_filters)
+
 # ── Global error handling / startup ──────────────────────────────────────────
 @dp.errors()
 async def global_error_handler(event) -> bool:
@@ -733,7 +1058,9 @@ async def main() -> None:
         BotCommand(command="admins", description="Администраторы чата"),
         BotCommand(command="warns", description="Мои предупреждения"),
         BotCommand(command="top", description="Топ участников"),
-        BotCommand(command="mute", description="Мут участника (ответ + срок)"),
+        BotCommand(command="mute", description="Мут: срок и причина (ответ)"),
+        BotCommand(command="rank", description="Ранг модератора"),
+        BotCommand(command="settrigger", description="Настроить триггеры варнов"),
         BotCommand(command="unmute", description="Снять мут (ответ)"),
         BotCommand(command="ban", description="Забанить (ответ)"),
         BotCommand(command="kick", description="Исключить (ответ)"),
