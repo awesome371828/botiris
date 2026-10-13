@@ -3,8 +3,7 @@ name: Run Pear CM
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,23 +11,31 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-24.04
+    # GitHub Actions is a temporary runner, not a permanent bot host.
+    # This job will stop at the timeout; restart it manually when needed.
     timeout-minutes: 350
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install aiogram aiosqlite
+          python -m pip install -r requirements.txt
 
-      - name: Run Pear CM
+      - name: Validate Python syntax
+        run: python -m py_compile iris.py
+
+      - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          BOT_OWNER_ID: "6652898792"
         run: python iris.py
