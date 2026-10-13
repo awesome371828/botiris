@@ -12,6 +12,7 @@ import re
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -35,6 +36,17 @@ SUPABASE_KEY = (
     or os.getenv("SUPABASE_PUBL", "").strip()
 )
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+def moscow_now() -> datetime:
+    """Current aware Moscow time (MSK, UTC+3), updated from system time."""
+    return datetime.now(MOSCOW_TZ)
+
+def format_moscow_time(value: datetime) -> str:
+    """Format an aware/UTC datetime in Moscow time."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(MOSCOW_TZ).strftime("%d.%m.%Y в %H:%M:%S МСК")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -355,24 +367,27 @@ async def start(message: Message) -> None:
         )
 
 @router.message(Command("help", "commands"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:помощь|команды)(?:\s|$)"))
 @router.message(F.text.in_({"🔗 Команды", "❓ Помощь"}))
 async def help_command(message: Message) -> None:
     await message.answer(
         "<b>📚 Команды Pear CM</b>\n\n"
         "<b>Профиль и чат</b>\n"
-        "• /profile — профиль; /top — активные участники\n"
-        "• /admins или «🛡 Кто админ» — список админов\n"
-        "• /warns — мои предупреждения; /marry — брак в ответ на сообщение\n\n"
-        "<b>Модерация (ответьте на сообщение участника)</b>\n"
-        "• ответьте на сообщение: «мут 1 час спам» — мут на 1 час с причиной; «мут 1ч» — краткая форма\n"
-        "• /unmute — снять мут; /ban — бан; /unban ID — разбан\n"
-        "• /kick — исключить; /warn — выдать предупреждение\n"
-        "• /unwarn — снять одно предупреждение; /clearwarns — обнулить\n"
-        "• /del или «-смс» — удалить сообщение; /purge 10 — очистить сообщения\n"
+        "• /profile или профиль — профиль; /top или топ — активные участники\n"
+        "• /admins или админы / кто админ — список админов\n"
+        "• /warns или варны — мои предупреждения; /marry или брак — брак в ответ на сообщение\n\n"
+        "<b>Модерация (команды можно писать по-русски или по-английски)</b>\n"
+        "• ответьте на сообщение: «мут 1 час спам» или «/mute 1h spam» — мут на 1 час с причиной\n"
+        "• /unmute или размут — снять мут; /ban или бан — бан; /unban или разбан — разбан\n"
+        "• Разбан: ответом на сообщение, либо «разбан 123456789» / «/unban 123456789»\n"
+        "• /kick или кик — исключить; /warn или варн — выдать предупреждение\n"
+        "• /unwarn или анварн — снять одно предупреждение; /clearwarns или сбросварнов — обнулить\n"
+        "• /del или «-смс» — удалить сообщение; /purge 10 или «очистить 10» — очистить сообщения\n"
         "• /pin или «.пин» — закрепить сообщение; /unpin или «.анпин» — открепить\n"
-        "• /info — информация об участнике; /logs — последние действия\n"
+        "• /info или инфо — информация об участнике; /logs или логи — последние действия\n"
         "• +антиссылка / -антиссылка — управление фильтрами (и другие +анти…/-анти…)\n"
-        "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n\n"
+        "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n"
+        "• /time — текущее московское время (Europe/Moscow, UTC+3)\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
         reply_markup=main_keyboard(),
@@ -397,6 +412,7 @@ async def chat_top_placeholder(message: Message) -> None:
 
 @router.message(F.text == "💠 Профиль")
 @router.message(Command("profile"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?профиль(?:\s|$)"))
 async def profile(message: Message) -> None:
     if not message.from_user:
         return
@@ -410,7 +426,20 @@ async def profile(message: Message) -> None:
     )
 
 @router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
+@router.message(Command("time"))
+@router.message(F.text.regexp(r"(?i)^[.!]?время(?:\s|$)"))
+async def moscow_time_cmd(message: Message) -> None:
+    now = moscow_now()
+    await message.answer(
+        "🕒 <b>Московское время</b>\n"
+        f"{now.strftime('%d.%m.%Y')} · <b>{now.strftime('%H:%M:%S')} МСК</b>\n"
+        "Часовой пояс: <code>Europe/Moscow</code> (UTC+3)\n"
+        "Время обновляется при каждом вызове команды."
+    )
+
+
 @router.message(Command("warns"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:варны|мои варны)(?:\s|$)"))
 async def my_warns(message: Message) -> None:
     if not message.from_user:
         return
@@ -423,6 +452,7 @@ async def marriage_menu(message: Message) -> None:
 
 @router.message(F.text == "🛡 Кто админ")
 @router.message(Command("admins"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:админы|кто админ)(?:\s|$)"))
 async def admins(message: Message) -> None:
     try:
         members = await bot.get_chat_administrators(message.chat.id)
@@ -521,7 +551,7 @@ async def mute_cmd(message: Message) -> None:
         )
         audit(message.chat.id, message.from_user.id, "mute", target[0], f"duration={duration_label}; reason={reason}")
         if until:
-            when = until.strftime('%Y-%m-%d %H:%M UTC')
+            when = format_moscow_time(until)
             await message.answer(f"🔇 {mention(target[0], target[1])} замучен на <b>{duration_label}</b> по причине: <b>{reason}</b>. До {when}.")
         else:
             await message.answer(f"🔇 {mention(target[0], target[1])} замучен бессрочно по причине: <b>{reason}</b>.")
@@ -569,21 +599,27 @@ async def ban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unban"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?разбан(?:\s|$)"))
 async def unban_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
     args = args_after_command(message)
-    if not args or not args[0].isdigit():
-        await message.answer("Формат: <code>/unban ID_пользователя</code>.")
+    target = await resolve_target(message, args)
+    if not target:
+        await message.answer(
+            "Формат: ответьте на сообщение командой <code>разбан</code> / <code>/unban</code> "
+            "или укажите ID/известный чату @username: <code>разбан 123456789</code>."
+        )
         return
     try:
-        await bot.unban_chat_member(message.chat.id, int(args[0]), only_if_banned=True)
-        audit(message.chat.id, message.from_user.id, "unban", int(args[0]))
-        await message.answer("✅ Пользователь разблокирован.")
+        await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
+        audit(message.chat.id, message.from_user.id, "unban", target[0], "manual unban")
+        await message.answer(f"✅ {mention(target[0], target[1])} разблокирован в этом чате.")
     except Exception as exc:
         await safe_error(message, exc)
 
 @router.message(Command("kick"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?кик(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^[.!/!]?кик(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
     if not await check_mod(message):
@@ -602,6 +638,7 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await require_admin(message):
@@ -688,6 +725,7 @@ async def delete_message_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("purge"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:очистить|чистка)(?:\s|$)"))
 async def purge_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -748,6 +786,7 @@ async def unpin_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("info"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?инфо(?:\s|$)"))
 async def info_cmd(message: Message) -> None:
     target = await resolve_target(message, args_after_command(message))
     if not target and message.from_user:
@@ -770,6 +809,7 @@ async def info_cmd(message: Message) -> None:
     )
 
 @router.message(Command("top"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
     rows = db_rows("bot_users", limit=10, order="messages", chat_id=message.chat.id)
     if not rows:
@@ -781,6 +821,7 @@ async def top_cmd(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 @router.message(Command("logs"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?логи(?:\s|$)"))
 async def logs_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -796,6 +837,7 @@ async def logs_cmd(message: Message) -> None:
 
 # ── Simple marriage feature ───────────────────────────────────────────────────
 @router.message(Command("marry"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?брак(?:\s|$)"))
 async def marry_cmd(message: Message) -> None:
     if not message.from_user or not is_group(message):
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
@@ -854,6 +896,7 @@ async def marriage_status_cmd(message: Message) -> None:
     await message.answer("💔 Вы пока не состоите в браке в этой группе.")
 
 @router.message(Command("divorce"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:развод|развестись)(?:\s|$)"))
 async def divorce_cmd(message: Message) -> None:
     if not message.from_user:
         return
@@ -1057,6 +1100,7 @@ async def main() -> None:
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="admins", description="Администраторы чата"),
         BotCommand(command="warns", description="Мои предупреждения"),
+        BotCommand(command="time", description="Текущее московское время"),
         BotCommand(command="top", description="Топ участников"),
         BotCommand(command="mute", description="Мут: срок и причина (ответ)"),
         BotCommand(command="rank", description="Ранг модератора"),
