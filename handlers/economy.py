@@ -6,17 +6,20 @@ from database.supabase_client import supabase
 
 router = Router()
 
+
 @router.message(Command("balance"))
 async def cmd_balance(message: types.Message):
     user = get_user(message.from_user.id, message.chat.id)
     if not user:
         create_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.first_name)
         user = get_user(message.from_user.id, message.chat.id)
+
     await message.answer(
         f"💰 Баланс:\n"
         f"Ириски: <b>{user['balance']}</b>\n"
         f"Ирис-коины: <b>{user['gold']}</b>"
     )
+
 
 @router.message(Command("bonus"))
 async def cmd_bonus(message: types.Message):
