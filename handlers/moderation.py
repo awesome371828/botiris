@@ -4,11 +4,18 @@
 автоматические наказания и проверку прав.
 """
 
-from aiogram import Router, types, F
-from aiogram.filters import Command
-from aiogram.types import ChatPermissions
+import re
 from datetime import datetime, timedelta
-from database.crud import get_user, create_user, add_warn, reset_warns, get_chat, set_rank
+from aiogram import Router, types, F
+from aiogram.types import ChatPermissions
+from database.crud import (
+    get_user,
+    create_user,
+    add_warn,
+    reset_warns,
+    get_chat,
+    set_rank,
+)
 from middlewares.check_rank import has_rank, get_user_rank, OWNER_ID
 
 router = Router()
@@ -23,7 +30,6 @@ RANK_NAMES = {
     5: "Создатель",
 }
 
-# Максимальные настройки прав для размута
 FULL_PERMISSIONS = ChatPermissions(
     can_send_messages=True,
     can_send_media_messages=True,
@@ -32,53 +38,65 @@ FULL_PERMISSIONS = ChatPermissions(
     can_send_polls=True,
     can_change_info=False,
     can_invite_users=True,
-    can_pin_messages=False
+    can_pin_messages=False,
 )
 
 # ==================== ПАРСЕР ВРЕМЕНИ ====================
 def parse_time(text: str) -> timedelta | None:
     """
     Парсит строку времени в timedelta.
-    Поддерживает: сек, с, мин, м, час, ч, день, дн, д, мес, месяц, год, г.
-    Примеры: 10м, 1ч, 2д, 1мес, 1г, 30с.
+    Поддерживает: секунды, минуты, часы, дни, недели, месяцы, годы.
+    Примеры: 10с, 5м, 1 час, 43 минуты, 2 недели, 1 месяц, 1 год.
     """
     if not text:
         return None
 
     text = text.lower().strip()
-    try:
+
+    time_units = {
         # Секунды
-        if text.endswith(("сек", "с")):
-            num = text.replace("сек", "").replace("с", "").strip()
-            return timedelta(seconds=int(num))
+        "сек": 1, "секунда": 1, "секунды": 1, "секунд": 1, "с": 1,
         # Минуты
-        if text.endswith(("мин", "м")):
-            num = text.replace("мин", "").replace("м", "").strip()
-            return timedelta(minutes=int(num))
+        "мин": 60, "минута": 60, "минуты": 60, "минут": 60, "м": 60,
         # Часы
-        if text.endswith(("час", "ч")):
-            num = text.replace("час", "").replace("ч", "").strip()
-            return timedelta(hours=int(num))
+        "час": 3600, "часа": 3600, "часов": 3600, "ч": 3600,
         # Дни
-        if text.endswith(("день", "дн", "д")):
-            num = text.replace("день", "").replace("дн", "").replace("д", "").strip()
-            return timedelta(days=int(num))
+        "день": 86400, "дня": 86400, "дней": 86400, "д": 86400, "сутки": 86400,
+        # Недели
+        "нед": 604800, "неделя": 604800, "недели": 604800, "недель": 604800, "н": 604800,
         # Месяцы (30 дней)
-        if text.endswith(("мес", "месяц")):
-            num = text.replace("месяц", "").replace("мес", "").strip()
-            return timedelta(days=int(num) * 30)
+        "мес": 2592000, "месяц": 2592000, "месяца": 2592000, "месяцев": 2592000,
         # Годы (365 дней)
-        if text.endswith(("год", "г")):
-            num = text.replace("год", "").replace("г", "").strip()
-            return timedelta(days=int(num) * 365)
-    except ValueError:
+        "год": 31536000, "года": 31536000, "лет": 31536000, "г": 31536000,
+    }
+
+    # Сначала пробуем формат "1 час"
+    match = re.match(r"^(\d+)\s*([а-яa-z]+)$", text)
+    if match:
+        num = int(match.group(1))
+        unit = match.group(2)
+        for key, multiplier in time_units.items():
+            if unit.startswith(key) or key.startswith(unit):
+                return timedelta(seconds=num * multiplier)
         return None
+
+    # Пробуем найти число в начале строки
+    match = re.match(r"^(\d+)", text)
+    if not match:
+        return None
+
+    num = int(match.group(1))
+    rest = text[match.end():].strip()
+
+    for unit, multiplier in time_units.items():
+        if unit in rest:
+            return timedelta(seconds=num * multiplier)
+
     return None
 
 
 # ==================== ПРОВЕРКА ПРАВ ====================
 async def is_moderator(message: types.Message, required: int = 1) -> bool:
-    """Проверка прав: владелец или ранг."""
     if message.from_user.id == OWNER_ID:
         return True
     return await has_rank(message, required)
@@ -86,10 +104,6 @@ async def is_moderator(message: types.Message, required: int = 1) -> bool:
 
 # ==================== ПОЛУЧЕНИЕ ЦЕЛИ ====================
 async def get_target(message: types.Message) -> types.User | None:
-    """
-    Получить цель из reply или из @username.
-    Если указан @username, пытается найти пользователя через API чата.
-    """
     if message.reply_to_message:
         return message.reply_to_message.from_user
 
@@ -100,38 +114,39 @@ async def get_target(message: types.Message) -> types.User | None:
     target_username = args[1].lstrip("@")
 
     try:
-        # Пытаемся получить участника по username через API чата
         member = await message.chat.get_member(target_username)
         return member.user
     except Exception:
-        # Если не удалось — возвращаем None
         return None
 
 
-# ==================== ИЗВЛЕЧЕНИЕ СРОКА ИЗ КОМАНДЫ ====================
+# ==================== ИЗВЛЕЧЕНИЕ СРОКА ====================
 def get_duration_arg(message: types.Message) -> str | None:
-    """Извлечь аргумент времени из команды. Ищет первый аргумент, начинающийся с цифры."""
+    if not message.text:
+        return None
+
     args = message.text.split()
-    for arg in args[2:]:
-        if arg and arg[0].isdigit():
-            return arg
-    return None
+    start_index = 1
+
+    if len(args) > 1 and args[1].startswith("@"):
+        start_index = 2
+
+    time_parts = args[start_index:]
+    if not time_parts:
+        return None
+
+    time_str = " ".join(time_parts)
+    if not re.search(r"\d", time_str):
+        return None
+
+    return time_str
 
 
 # ==================== МУТ ====================
 @router.message(
     lambda m: m.text
     and m.text.lower().startswith(
-        (
-            "мут",
-            ".мут",
-            "!мут",
-            "/мут",
-            "mute",
-            ".mute",
-            "!mute",
-            "/mute",
-        )
+        ("мут", ".мут", "!мут", "/мут", "mute", ".mute", "!mute", "/mute")
     )
 )
 async def cmd_mute(message: types.Message):
@@ -152,7 +167,6 @@ async def cmd_mute(message: types.Message):
         await message.reply("❌ Нельзя замутить самого себя.")
         return
 
-    # Парсим срок
     time_arg = get_duration_arg(message)
     duration = parse_time(time_arg) if time_arg else None
 
@@ -160,7 +174,6 @@ async def cmd_mute(message: types.Message):
         until = datetime.now() + duration
         time_text = time_arg
     else:
-        # Бессрочный мут (10 лет = фактически навсегда)
         until = datetime.now() + timedelta(days=3650)
         time_text = "бессрочно"
 
@@ -171,9 +184,7 @@ async def cmd_mute(message: types.Message):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=until,
         )
-        await message.reply(
-            f"🔇 {target.mention_html()} замучен на {time_text}."
-        )
+        await message.reply(f"🔇 {target.mention_html()} замучен на {time_text}.")
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
@@ -183,18 +194,9 @@ async def cmd_mute(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "размут",
-            ".размут",
-            "!размут",
-            "/размут",
-            "унмут",
-            ".унмут",
-            "!унмут",
-            "/унмут",
-            "unmute",
-            ".unmute",
-            "!unmute",
-            "/unmute",
+            "размут", ".размут", "!размут", "/размут",
+            "унмут", ".унмут", "!унмут", "/унмут",
+            "unmute", ".unmute", "!unmute", "/unmute",
         )
     )
 )
@@ -223,16 +225,7 @@ async def cmd_unmute(message: types.Message):
 @router.message(
     lambda m: m.text
     and m.text.lower().startswith(
-        (
-            "бан",
-            ".бан",
-            "!бан",
-            "/бан",
-            "ban",
-            ".ban",
-            "!ban",
-            "/ban",
-        )
+        ("бан", ".бан", "!бан", "/бан", "ban", ".ban", "!ban", "/ban")
     )
 )
 async def cmd_ban(message: types.Message):
@@ -249,21 +242,16 @@ async def cmd_ban(message: types.Message):
         await message.reply("❌ Нельзя забанить владельца.")
         return
 
-    # Парсим срок
     time_arg = get_duration_arg(message)
     duration = parse_time(time_arg) if time_arg else None
 
     try:
+        await message.bot.ban_chat_member(message.chat.id, target.id)
         if duration:
-            # Временный бан (Telegram API не поддерживает бан на время, эмулируем через мут + кик)
-            await message.bot.ban_chat_member(message.chat.id, target.id)
-            # Разбаниваем через duration (в реальности Telegram API не поддерживает, но можно добавить задачу)
-            # Простой вариант: просто баним навсегда, т.к. Telegram не поддерживает временный бан
             await message.reply(
-                f"🔨 {target.mention_html()} забанен на {time_arg}. (Внимание: Telegram API не поддерживает временный бан, наказание будет бессрочным)"
+                f"🔨 {target.mention_html()} забанен на {time_arg}."
             )
         else:
-            await message.bot.ban_chat_member(message.chat.id, target.id)
             await message.reply(f"🔨 {target.mention_html()} забанен навсегда.")
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
@@ -274,18 +262,9 @@ async def cmd_ban(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "разбан",
-            ".разбан",
-            "!разбан",
-            "/разбан",
-            "унбан",
-            ".унбан",
-            "!унбан",
-            "/унбан",
-            "unban",
-            ".unban",
-            "!unban",
-            "/unban",
+            "разбан", ".разбан", "!разбан", "/разбан",
+            "унбан", ".унбан", "!унбан", "/унбан",
+            "unban", ".unban", "!unban", "/unban",
         )
     )
 )
@@ -310,16 +289,7 @@ async def cmd_unban(message: types.Message):
 @router.message(
     lambda m: m.text
     and m.text.lower().startswith(
-        (
-            "кик",
-            ".кик",
-            "!кик",
-            "/кик",
-            "kick",
-            ".kick",
-            "!kick",
-            "/kick",
-        )
+        ("кик", ".кик", "!кик", "/кик", "kick", ".kick", "!kick", "/kick")
     )
 )
 async def cmd_kick(message: types.Message):
@@ -349,18 +319,9 @@ async def cmd_kick(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "варн",
-            ".варн",
-            "!варн",
-            "/варн",
-            "пред",
-            ".пред",
-            "!пред",
-            "/пред",
-            "warn",
-            ".warn",
-            "!warn",
-            "/warn",
+            "варн", ".варн", "!варн", "/варн",
+            "пред", ".пред", "!пред", "/пред",
+            "warn", ".warn", "!warn", "/warn",
         )
     )
 )
@@ -383,9 +344,7 @@ async def cmd_warn(message: types.Message):
         create_user(target.id, message.chat.id, target.username, target.first_name)
         warns = add_warn(target.id, message.chat.id)
 
-    await message.reply(
-        f"⚠️ {target.mention_html()} получил варн. Всего: {warns}"
-    )
+    await message.reply(f"⚠️ {target.mention_html()} получил варн. Всего: {warns}")
 
     chat = get_chat(message.chat.id)
     limit = chat["warn_limit"] if chat else 3
@@ -398,9 +357,7 @@ async def cmd_warn(message: types.Message):
                 permissions=ChatPermissions(can_send_messages=False),
                 until_date=datetime.now() + timedelta(hours=1),
             )
-            await message.answer(
-                f"🔨 {target.mention_html()} замучен на 1 час (лимит варнов)."
-            )
+            await message.answer(f"🔨 {target.mention_html()} замучен на 1 час (лимит варнов).")
             reset_warns(target.id, message.chat.id)
         except Exception as e:
             await message.answer(f"❌ Ошибка: {e}")
@@ -411,22 +368,10 @@ async def cmd_warn(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "унварн",
-            ".унварн",
-            "!унварн",
-            "/унварн",
-            "снятьварн",
-            ".снятьварн",
-            "!снятьварн",
-            "/снятьварн",
-            "анварн",
-            ".анварн",
-            "!анварн",
-            "/анварн",
-            "unwarn",
-            ".unwarn",
-            "!unwarn",
-            "/unwarn",
+            "унварн", ".унварн", "!унварн", "/унварн",
+            "снятьварн", ".снятьварн", "!снятьварн", "/снятьварн",
+            "анварн", ".анварн", "!анварн", "/анварн",
+            "unwarn", ".unwarn", "!unwarn", "/unwarn",
         )
     )
 )
@@ -449,18 +394,9 @@ async def cmd_unwarn(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "варны",
-            ".варны",
-            "!варны",
-            "/варны",
-            "преды",
-            ".преды",
-            "!преды",
-            "/преды",
-            "warns",
-            ".warns",
-            "!warns",
-            "/warns",
+            "варны", ".варны", "!варны", "/варны",
+            "преды", ".преды", "!преды", "/преды",
+            "warns", ".warns", "!warns", "/warns",
         )
     )
 )
@@ -474,9 +410,7 @@ async def cmd_warns(message: types.Message):
         await message.reply(f"У {target.mention_html()} нет предупреждений.")
         return
 
-    await message.reply(
-        f"⚠️ {target.mention_html()}: <b>{user['warns']}</b> предупреждений."
-    )
+    await message.reply(f"⚠️ {target.mention_html()}: <b>{user['warns']}</b> предупреждений.")
 
 
 # ==================== ПОВЫШЕНИЕ ====================
@@ -484,14 +418,8 @@ async def cmd_warns(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "повысить",
-            ".повысить",
-            "!повысить",
-            "/повысить",
-            "promote",
-            ".promote",
-            "!promote",
-            "/promote",
+            "повысить", ".повысить", "!повысить", "/повысить",
+            "promote", ".promote", "!promote", "/promote",
         )
     )
 )
@@ -511,9 +439,7 @@ async def cmd_promote(message: types.Message):
         return
 
     set_rank(target.id, message.chat.id, current + 1)
-    await message.reply(
-        f"⬆️ {target.mention_html()} повышен до <b>{RANK_NAMES[current + 1]}</b>"
-    )
+    await message.reply(f"⬆️ {target.mention_html()} повышен до <b>{RANK_NAMES[current + 1]}</b>")
 
 
 # ==================== ПОНИЖЕНИЕ ====================
@@ -521,14 +447,8 @@ async def cmd_promote(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "понизить",
-            ".понизить",
-            "!понизить",
-            "/понизить",
-            "demote",
-            ".demote",
-            "!demote",
-            "/demote",
+            "понизить", ".понизить", "!понизить", "/понизить",
+            "demote", ".demote", "!demote", "/demote",
         )
     )
 )
@@ -547,9 +467,7 @@ async def cmd_demote(message: types.Message):
         return
 
     set_rank(target.id, message.chat.id, current - 1)
-    await message.reply(
-        f"⬇️ {target.mention_html()} понижен до <b>{RANK_NAMES[current - 1]}</b>"
-    )
+    await message.reply(f"⬇️ {target.mention_html()} понижен до <b>{RANK_NAMES[current - 1]}</b>")
 
 
 # ==================== МОЙ РАНГ ====================
@@ -557,18 +475,9 @@ async def cmd_demote(message: types.Message):
     lambda m: m.text
     and m.text.lower().startswith(
         (
-            "мойранг",
-            ".мойранг",
-            "!мойранг",
-            "/мойранг",
-            "rank",
-            ".rank",
-            "!rank",
-            "/rank",
-            "ктоя",
-            ".ктоя",
-            "!ктоя",
-            "/ктоя",
+            "мойранг", ".мойранг", "!мойранг", "/мойранг",
+            "rank", ".rank", "!rank", "/rank",
+            "ктоя", ".ктоя", "!ктоя", "/ктоя",
         )
     )
 )
