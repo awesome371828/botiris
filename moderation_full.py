@@ -6416,17 +6416,24 @@ async def cmd_ban(message: types.Message):
         await message.reply(f"❌ Ошибка: {e}")
 
 
-@router.message(lambda m: m.text and m.text.lower().startswith(("разбан", ".разбан", "унбан", "unban")))
+@router.message(lambda m: m.text and m.text.lower().split()[0].lstrip(".!/") in {"разбан", "унбан", "unban"})
 async def cmd_unban(message: types.Message):
     if not await is_moderator(message, 2):
         return
     target = await get_target(message)
-    if not target:
-        await message.reply("❌ Ответьте на сообщение.")
+    target_id = getattr(target, "id", None) if target else None
+    target_label = target.mention_html() if target and hasattr(target, "mention_html") else None
+    if not target_id:
+        args = (message.text or "").split()
+        if len(args) > 1 and args[1].isdigit():
+            target_id = int(args[1])
+            target_label = f"<code>{target_id}</code>"
+    if not target_id:
+        await message.reply("❌ Ответьте на сообщение пользователя или укажите числовой ID: <code>разбан 123456789</code> / <code>/unban 123456789</code>")
         return
     try:
-        await message.bot.unban_chat_member(message.chat.id, target.id)
-        await message.reply(f"✅ {target.mention_html()} разбанен.")
+        await message.bot.unban_chat_member(message.chat.id, int(target_id), only_if_banned=True)
+        await message.reply(f"✅ {target_label or f'<code>{target_id}</code>'} разблокирован.")
     except Exception as e:
         await message.reply(f"❌ Ошибка: {e}")
 
@@ -7136,3 +7143,12 @@ async def auto_filters(message: types.Message):
                 flood_tracker[chat_id][message.from_user.id] = []
             except Exception:
                 pass
+
+
+# ── Compatibility note for the standalone legacy module ──────────────────────
+# This file is a standalone Router and depends on database.crud and
+# middlewares.check_rank. The main production entrypoint in this repository is
+# iris.py, which uses its own single Router and Supabase helpers. Do not import
+# this file into iris.py without reconciling duplicate handlers and dependencies.
+# Both English and Russian unban aliases exist above; the recommended current
+# implementation supporting reply + numeric ID is in iris.py.
