@@ -11,21 +11,22 @@ permissions:
 
 jobs:
   run-bot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 350
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: pip
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip aiogram aiosqlite
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aiogram aiosqlite
 
       - name: Run Pear CM
         env:
