@@ -483,7 +483,7 @@ async def menu_button(message: Message) -> None:
         "💠 Профиль — ваша статистика и предупреждения.\n"
         "🔗 Команды — список доступных команд.\n"
         "🛠 Установка — понятная инструкция по подключению.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
     )
 
 @router.message(F.text == "➕ Добавить в чат")
@@ -519,7 +519,7 @@ async def installation_help(message: Message) -> None:
         "<b>4.</b> Включите необходимые права: удаление сообщений, блокировка/ограничение участников. Для команд «-чат» и «+чат» нужны права управления чатом.\n"
         "<b>5.</b> Проверьте в группе: <code>/admins</code>, <code>-смс 10</code>, <code>-чат</code> и <code>+чат</code>.\n\n"
         "Если нужна только статистика, не выдавайте права модерации. Команды доступны в группе через меню «/».",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
     )
 
 @router.callback_query(F.data.startswith("group:"))
