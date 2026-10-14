@@ -782,7 +782,7 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
         return
     action = (callback.data or "").split(":", 1)[-1]
     if action == "profile" and callback.from_user:
-        user = ensure_user(callback.from_user.id, callback.message.chat.id, callback.from_user.username, callback.from_user.full_name)
+        user = await asyncio.to_thread(ensure_user, callback.from_user.id, callback.message.chat.id, callback.from_user.username, callback.from_user.full_name)
         body = (f"👤 <b>Профиль</b>\n{mention(callback.from_user.id, callback.from_user.full_name)}\n\n"
                 f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>\n\n"
                 + await await_bot_rights_hint(callback.message.chat.id))
@@ -807,10 +807,10 @@ async def profile(message: Message) -> None:
     if not message.from_user:
         return
     chat_id = message.chat.id
-    user = ensure_user(message.from_user.id, chat_id, message.from_user.username, message.from_user.full_name)
+    user = await asyncio.to_thread(ensure_user, message.from_user.id, chat_id, message.from_user.username, message.from_user.full_name)
     messages = int(user.get("messages", 0))
     rank = int(user.get("rank", 0))
-    warns = active_warn_count(message.chat.id, message.from_user.id)
+    warns = await asyncio.to_thread(active_warn_count, message.chat.id, message.from_user.id)
     level_name = "Новичок" if messages < 25 else "Участник" if messages < 100 else "Активный" if messages < 500 else "Легенда чата"
     next_goal = next((goal for goal in (25, 100, 500, 1000) if messages < goal), None)
     progress = f"📈 До следующего рубежа: <b>{next_goal - messages}</b> сообщ." if next_goal else "✨ Достигнут высокий рубеж активности!"
@@ -839,13 +839,13 @@ async def moscow_time_cmd(message: Message) -> None:
 async def my_warns(message: Message) -> None:
     if not message.from_user:
         return
-    user = ensure_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
+    user = await asyncio.to_thread(ensure_user, message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
     if message.from_user.username:
         username = message.from_user.username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         display = f'<a href="https://t.me/{username}">@{username}</a>'
     else:
         display = mention(message.from_user.id, message.from_user.full_name)
-    active = active_warn_count(message.chat.id, message.from_user.id)
+    active = await asyncio.to_thread(active_warn_count, message.chat.id, message.from_user.id)
     await message.answer(f"⚠️ {display}, у вас <b>{active}</b> действующих предупреждений. Срок каждого — 7 дней.")
 
 @router.message(F.text == "💍 Брак")
@@ -895,7 +895,7 @@ async def welcome_members(message: Message) -> None:
                       "monitor_only; bot joined; no automatic ban or deletion")
                 log.info("Bot joined chat=%s user=%s; antibot is monitor-only", message.chat.id, user.id)
             continue
-        ensure_user(user.id, message.chat.id, user.username, user.full_name)
+        await asyncio.to_thread(ensure_user, user.id, message.chat.id, user.username, user.full_name)
         await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
     # Process anti-raid after welcoming; this is called directly because aiogram stops at the first matching service-message handler.
     await apply_raid_protection(message)
@@ -996,7 +996,6 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     return target
 
 async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool = True) -> bool:
-    min_rank = required_rank_for(message, min_rank)
     if not await require_admin(message, min_rank=min_rank):
         return False
     if not require_restrict:
@@ -1238,9 +1237,9 @@ async def warn_cmd(message: Message) -> None:
                 _WARN_RECENT.pop(key, None)
     reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
     # Each warning expires after seven days.
-    before = active_warn_count(message.chat.id, target[0])
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {
+    before = await asyncio.to_thread(active_warn_count, message.chat.id, target[0])
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": before + 1, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
@@ -1278,12 +1277,12 @@ async def unwarn_cmd(message: Message) -> None:
     target = await moderation_target(message, "unwarn")
     if not target:
         return
-    count = active_warn_count(message.chat.id, target[0])
+    count = await asyncio.to_thread(active_warn_count, message.chat.id, target[0])
     if count <= 0:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
