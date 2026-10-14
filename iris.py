@@ -2022,23 +2022,20 @@ async def top_cmd(message: Message) -> None:
         await message.answer(f"📊 Пока нет данных для статистики {labels[period]}. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
         return
 
-    # Iris-inspired visual hierarchy and Telegram-clickable profile names.
+    # Plain-text leaderboard names: no clickable Telegram profile links.
     lines = [f"📊 <b>Статистика по общительным пользователям {labels[period]}</b>", ""]
     for index, row in enumerate(rows, 1):
-        uid = int(row.get("user_id") or 0)
         username = str(row.get("username") or "").lstrip("@")
-        display = escape(str(row.get("first_name") or "Участник"))
-        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-            link = f"https://t.me/{username}"
-        else:
-            link = f"tg://user?id={uid}"
+        display_name = str(row.get("first_name") or "Участник")
+        # Show @username as ordinary text; fall back to the display name.
+        display = escape(f"@{username}" if username else display_name)
         if period == "month":
             badge = "🔥🔥🔥 " if index <= 5 else ("💥💥 " if index <= 11 else ("⭐️ " if index <= 22 else "⚡️ "))
         elif period == "week":
             badge = "⚡️ " if index <= 2 else ("✨ " if index == 3 else "")
         else:
             badge = ""
-        lines.append(f"{badge}{index}. <a href=\"{link}\">{display}</a> — {int(row.get('messages') or 0):,}".replace(",", " "))
+        lines.append(f"{badge}{index}. {display} — {int(row.get('messages') or 0):,}".replace(",", " "))
     lines.extend(["", f"Всего сообщений: {total_messages:,}".replace(",", " ")])
     # Telegram message limit is 4096 chars; split defensively.
     chunks: list[str] = []
