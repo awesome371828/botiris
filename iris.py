@@ -494,23 +494,56 @@ def split_duration_reason(tokens: list[str]) -> tuple[timedelta | None, str | No
 async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] | None:
     if message.reply_to_message and message.reply_to_message.from_user:
         u = message.reply_to_message.from_user
-        return u.id, u.full_name
-    if args:
-        raw = args[0].strip()
+        if not u.is_bot:
+            return u.id, u.full_name
+    for raw_value in args:
+        raw = raw_value.strip().strip(",;:")
         if raw.isdigit():
             return int(raw), f"ID {raw}"
-        if raw.startswith("@"):
+        if raw.startswith("@") and len(raw) > 1:
             username = raw[1:].lower()
-            # Telegram doesn't offer a general username-to-ID lookup; use users known to this chat.
             rows = db_rows("bot_users", limit=1000, chat_id=message.chat.id)
             for row in rows:
-                if (row.get("username") or "").lower() == username:
+                if (row.get("username") or "").lower().lstrip("@") == username:
                     return int(row["user_id"]), row.get("first_name") or raw
     return None
 
 def args_after_command(message: Message) -> list[str]:
     parts = (message.text or "").split()
-    return parts[1:] if len(parts) > 1 else []
+    if len(parts) <= 1:
+        return []
+    parts[0] = re.sub(r"@\\w+$", "", parts[0])
+    return parts[1:]
+
+def role_name(rank: int) -> str:
+    return {0: "Участник", 1: "Младший модератор", 2: "Старший модератор",
+            3: "Младший администратор", 4: "Старший администратор",
+            5: "Создатель"}.get(max(0, min(5, int(rank))), "Участник")
+
+def moderation_command_key(message: Message) -> str | None:
+    text_value = re.sub(r"^[.!/]+", "", (message.text or "").strip().lower())
+    text_value = re.sub(r"@\\w+", "", text_value)
+    words = text_value.split()
+    if not words:
+        return None
+    first = words[0]
+    if first in {"дать", "выдать", "снять", "убрать", "удалить"} and len(words) > 1:
+        first = words[1]
+    return {"мут":"mute", "замутить":"mute", "замуть":"mute", "бан":"ban",
+            "забанить":"ban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick",
+            "варн":"warn", "предупредить":"warn", "анварн":"unwarn",
+            "снятьварн":"unwarn", "убратьварн":"unwarn", "размут":"unmute",
+            "анмут":"unmute", "унмут":"unmute", "разбан":"unban"}.get(first,
+            first if first in {"mute","unmute","ban","unban","kick","warn","unwarn","clearwarns"} else None)
+
+def required_rank_for(message: Message, default_rank: int) -> int:
+    key = moderation_command_key(message)
+    if not key:
+        return default_rank
+    try:
+        return max(1, min(5, int(get_chat_settings(message.chat.id).get(f"modrank_{key}", default_rank))))
+    except (TypeError, ValueError):
+        return default_rank
 
 async def bot_can_restrict(message: Message) -> bool:
     try:
@@ -867,6 +900,7 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     return target
 
 async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool = True) -> bool:
+    min_rank = required_rank_for(message, min_rank)
     if not await require_admin(message, min_rank=min_rank):
         return False
     if not require_restrict:
