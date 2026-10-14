@@ -99,6 +99,9 @@ class CommandRateLimitMiddleware(BaseMiddleware):
         if not command_match and not plain_match:
             return await handler(event, data)
         command_name = (command_match.group(1) if command_match else plain_match.group(1)).lower()
+        # Keep help/start responsive in groups even after repeated taps.
+        if command_name in {"/help", "/commands", "/start", "/помощь", "/команды"}:
+            return await handler(event, data)
         key = (event.chat.id, event.from_user.id, command_name)
         now = time.monotonic()
         previous = _COMMAND_LAST.get(key, 0.0)
@@ -509,11 +512,25 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
     return None
 
 def args_after_command(message: Message) -> list[str]:
-    parts = (message.text or "").split()
-    if len(parts) <= 1:
+    text_value = (message.text or "").strip()
+    if not text_value:
         return []
-    parts[0] = re.sub(r"@\\w+$", "", parts[0])
-    return parts[1:]
+    # Treat multi-word Russian aliases as one command, then parse only its arguments.
+    aliases = (
+        r"^(?:снять|убрать|удалить)\s+(?:варн|предупреждение|мут)\s*",
+        r"^(?:дать|выдать)\s+(?:мут|варн|бан|кик|предупреждение)\s*",
+    )
+    for pattern in aliases:
+        stripped = re.sub(pattern, "", text_value, flags=re.I)
+        if stripped != text_value:
+            return stripped.split()
+    text_value = re.sub(r"^[/!.][\w]+(?:@\w+)?\s*", "", text_value, count=1)
+    text_value = re.sub(
+        r"^[.!/]?(?:мут|замутить|замуть|замут|размут|анмут|унмут|бан|забанить|кик|кикнуть|выгнать|варн|предупредить|предупреждение|анварн|снятьварн|убратьварн|разбан|повысить|понизить)\s*",
+        "", text_value, count=1, flags=re.I
+    )
+    return text_value.split()
+
 
 def role_name(rank: int) -> str:
     return {0: "Участник", 1: "Младший модератор", 2: "Старший модератор",
