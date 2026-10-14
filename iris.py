@@ -195,7 +195,7 @@ FILTER_DEFAULTS = {
     "antikripta": False, "antifishing": False, "antiall": False,
     "antibot": False, "antisticker": False, "antigif": False, "antispam": False, "antiraid": False,
     "antiphoto": False, "antivideo": False, "antivoice": False,
-    "antidocument": False, "flood_limit": 8, "flood_window": 10,
+    "antidocument": False, "filter_action": "monitor", "flood_limit": 8, "flood_window": 10,
     "caps_percent": 70, "filter_mute_minutes": 10, "raid_threshold": 8, "raid_window": 30, "raid_restrict_minutes": 2,
     "warn_3_action": "ban", "warn_3_time": "7д",
     "warn_5_action": "ban", "warn_5_time": "7д",
@@ -3085,6 +3085,78 @@ async def set_trigger_cmd(message: Message) -> None:
     save_chat_settings(message.chat.id, settings)
     await message.answer(f"✅ Триггер {threshold} варнов обновлён: {action}.")
 
+@router.message(Command("filteraction"))
+@router.message(F.text.regexp(r"(?i)^\\s*(?:фильтрдействие|антиспам действие)(?:\\s|$)"))
+async def filter_action_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    raw = (message.text or "").strip()
+    value = re.sub(
+        r"(?i)^\\s*(?:/filteraction(?:@\\w+)?|[.!/]?(?:фильтрдействие|антиспам действие))\\s*",
+        "", raw,
+    ).strip().casefold()
+    aliases = {
+        "monitor": "monitor", "наблюдение": "monitor", "только лог": "monitor",
+        "delete": "delete", "удалять": "delete", "удаление": "delete",
+        "mute": "mute", "мут": "mute", "мутить": "mute",
+    }
+    action = aliases.get(value)
+    if action is None:
+        await message.answer(
+            "Формат: <code>фильтрдействие monitor</code>, <code>фильтрдействие delete</code> "
+            "или <code>фильтрдействие mute</code>. По умолчанию стоит monitor."
+        )
+        return
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id, True)
+    settings["filter_action"] = action
+    saved = await asyncio.to_thread(db_upsert, "bot_chat_settings", {
+        "chat_id": message.chat.id, "settings": dict(settings),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, "chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить настройку в Supabase; действие фильтра не изменено.")
+        return
+    _CHAT_SETTINGS_CACHE[message.chat.id] = dict(settings)
+    _CHAT_SETTINGS_CACHE_TIME[message.chat.id] = time.monotonic()
+    audit(message.chat.id, message.from_user.id if message.from_user else 0,
+          "filter_action_changed", details=f"action={action}")
+    labels = {"monitor": "только журналировать", "delete": "удалять обнаруженные сообщения", "mute": "выдавать временный мут"}
+    await message.answer(f"✅ Действие антиспама: <b>{labels[action]}</b>.")
+
+
+async def apply_configured_filter_action(message: Message, settings: dict[str, Any], reason: str) -> None:
+    action = str(settings.get("filter_action") or "monitor").casefold()
+    if action not in {"delete", "mute"} or not message.from_user:
+        return
+    try:
+        member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+        if member and member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
+            log.info("Skipped configured filter action for Telegram admin chat=%s user=%s action=%s",
+                     message.chat.id, message.from_user.id, action)
+            return
+        if action == "delete":
+            await message.delete()
+            audit(message.chat.id, 0, "spam_deleted", message.from_user.id,
+                  f"reason={reason}; message_id={message.message_id}")
+            return
+        minutes = max(1, min(60, int(settings.get("filter_mute_minutes", 10) or 10)))
+        await bot.restrict_chat_member(
+            message.chat.id, message.from_user.id,
+            permissions=ChatPermissions(
+                can_send_messages=False, can_send_audios=False, can_send_documents=False,
+                can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+                can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
+                can_add_web_page_previews=False,
+            ),
+            until_date=datetime.now(timezone.utc) + timedelta(minutes=minutes),
+        )
+        audit(message.chat.id, 0, "spam_muted", message.from_user.id,
+              f"reason={reason}; minutes={minutes}; message_id={message.message_id}")
+    except Exception:
+        log.exception("Configured anti-spam action failed chat=%s user=%s action=%s reason=%s",
+                      message.chat.id, message.from_user.id, action, reason)
+
+
 async def auto_moderation_filters(message: Message) -> None:
     """Monitor-only automatic moderation. This handler NEVER deletes or restricts messages."""
     if not message.from_user or message.from_user.is_bot or not is_group(message):
@@ -3167,9 +3239,11 @@ async def auto_moderation_filters(message: Message) -> None:
     _SPAM_LAST[notice_key] = (reason, now)
     audit(message.chat.id, 0, "spam_detected", message.from_user.id,
           f"monitor_only; reason={reason}; message_id={message.message_id}")
-    log.info("Monitor-only spam signal chat=%s user=%s reason=%s message=%s",
-             message.chat.id, message.from_user.id, reason, message.message_id)
-    # No message.delete(), delete_message(), ban_chat_member(), or restrict_chat_member().
+    log.info("Spam signal chat=%s user=%s reason=%s message=%s action=%s",
+             message.chat.id, message.from_user.id, reason, message.message_id,
+             settings.get("filter_action", "monitor"))
+    # Penalties are disabled by default and run only after a real-admin explicitly configures them.
+    await apply_configured_filter_action(message, settings, reason)
 
 # Important: the old track_activity catch-all handler was registered before
 # moderation and consumed ordinary group updates. Register it last so command
@@ -4714,6 +4788,7 @@ async def main() -> None:
         BotCommand(command="trusted", description="Доверенные участники"),
         BotCommand(command="reasons", description="Шаблоны причин"),
         BotCommand(command="modrights", description="Пороги рангов команд"),
+        BotCommand(command="filteraction", description="Действие антиспама"),
         BotCommand(command="schedule", description="Расписание чата"),
         BotCommand(command="modstats", description="Статистика модераторов"),
         BotCommand(command="marriages", description="Все браки чата"),
