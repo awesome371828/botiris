@@ -1628,7 +1628,7 @@ async def apply_raid_protection(message: Message) -> None:
 
 # ── Chat open/close commands (Russian Iris-style aliases) ────────────────────
 @router.message(Command("openchat", "unlockchat"))
-@router.message(F.text.regexp(r"(?i)^\s*\+чат\s*$"))
+@router.message(F.text.regexp(r"(?i)^\s*\+\s*чат\s*$"))
 async def open_chat_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Команда работает только в группе.")
@@ -1665,7 +1665,7 @@ async def open_chat_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("closechat", "lockchat"))
-@router.message(F.text.regexp(r"(?i)^\s*-чат\s*$"))
+@router.message(F.text.regexp(r"(?i)^\s*-\s*чат\s*$"))
 async def close_chat_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Команда работает только в группе.")
