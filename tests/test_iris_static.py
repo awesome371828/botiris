@@ -159,8 +159,8 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertLess(clear_body.index('ledger_saved = await audit_wait'), clear_body.index('db_upsert, "bot_users"'))
 
     def test_warning_updates_check_database_write_results(self):
-        self.assertIn("Не удалось сохранить снятие варна", self.source)
-        self.assertIn("Не удалось сбросить предупреждения", self.source)
+        self.assertIn("Не удалось записать снятие предупреждения", self.source)
+        self.assertIn("Не удалось записать сброс предупреждений", self.source)
 
     def test_chat_lock_persists_restore_state_before_telegram_change(self):
         close_start = self.source.index("async def close_chat_cmd")
