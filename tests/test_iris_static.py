@@ -138,6 +138,21 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("create or replace function public.record_bot_activity_batch", schema)
         self.assertIn("on conflict (chat_id, message_id) do nothing", schema)
 
+    def test_polling_conflicts_stop_the_restart_loop(self):
+        self.assertIn("except TelegramConflictError", self.source)
+        self.assertIn("raise SystemExit(23)", self.source)
+        workflow = (ROOT / ".github" / "workflows" / "main.yml").read_text(encoding="utf-8")
+        self.assertIn('elif [ "$code" -eq 23 ]', workflow)
+        self.assertIn("stopping instead of restarting forever", workflow)
+
+    def test_moderation_protects_chat_creator_and_telegram_admins(self):
+        self.assertIn("async def ensure_moderation_target_safe", self.source)
+        self.assertIn("Нельзя применять это действие к создателю чата", self.source)
+        self.assertIn("Telegram не позволяет боту применять это действие к администратору чата", self.source)
+        self.assertIn('ensure_moderation_target_safe(message, target, "mute")', self.source)
+        self.assertIn('ensure_moderation_target_safe(message, target, "ban")', self.source)
+        self.assertIn('ensure_moderation_target_safe(message, target, "kick")', self.source)
+
     def test_global_ban_is_enforced_before_message_handlers(self):
         self.assertIn("await asyncio.to_thread(_is_globally_banned, event.from_user.id)", self.source)
         self.assertIn("Доступ к функциям Pear CM для этого аккаунта ограничен", self.source)
