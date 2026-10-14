@@ -1946,18 +1946,21 @@ async def rank_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    try:
-        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    except Exception:
+    actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+    if actor_member is None and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Не удалось проверить ваши права в Telegram.")
         return
-    is_chat_creator = actor_member.status == ChatMemberStatus.CREATOR or (message.from_user and message.from_user.id == OWNER_ID)
-    target_existing = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    is_chat_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR) or message.from_user.id == OWNER_ID
+    target_existing, actor_existing = await asyncio.gather(
+        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
+        asyncio.to_thread(db_one, "bot_users", user_id=message.from_user.id, chat_id=message.chat.id),
+    )
+    target_existing = target_existing or {}
+    actor_existing = actor_existing or {}
     try:
         target_existing_rank = max(0, min(5, int(target_existing.get("rank", 0) or 0)))
     except (TypeError, ValueError):
         target_existing_rank = 0
-    actor_existing = db_one("bot_users", user_id=message.from_user.id, chat_id=message.chat.id) or {}
     try:
         actor_existing_rank = max(0, min(5, int(actor_existing.get("rank", 0) or 0)))
     except (TypeError, ValueError):
@@ -1969,7 +1972,7 @@ async def rank_cmd(message: Message) -> None:
     if not is_chat_creator and target_existing_rank >= effective_actor_rank and target_existing_rank > 0:
         await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    user = target_existing
     saved = await asyncio.to_thread(db_upsert, "bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": rank}, "user_id,chat_id")
