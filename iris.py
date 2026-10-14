@@ -1570,10 +1570,10 @@ async def warn_cmd(message: Message) -> None:
     if not saved:
         log.error("Warning audit saved but profile counter update failed chat=%s user=%s", message.chat.id, target[0])
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
-    profile_note = "" if saved else "\\n⚠️ Журнал сохранён, но счётчик профиля не обновился. Не повторяй команду."
+    profile_note = "" if saved else "\n⚠️ Журнал сохранён, но счётчик профиля не обновился. Не повторяй команду."
     await message.answer(
         f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
-        f"Причина: <b>{escape(reason[:300])}</b>.\\n👮 Модератор: {actor}. "
+        f"Причина: <b>{escape(reason[:300])}</b>.\n👮 Модератор: {actor}. "
         f"Варн действует 7 дней.{profile_note}"
     )
     # Three active warnings trigger a ban. This is intentionally a single threshold
