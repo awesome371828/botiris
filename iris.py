@@ -89,7 +89,7 @@ class CommandRateLimitMiddleware(BaseMiddleware):
         if not isinstance(event, Message) or not event.from_user or event.from_user.is_bot:
             return await handler(event, data)
         text_value = (event.text or "").strip()
-        looks_like_command = bool(re.match(r"^(?:/|[!.])\\w+", text_value, re.I)) or bool(re.match(r"^(?:мут|бан|кик|варн|размут|разбан|очистить|профиль|команды|помощь)(?:\\s|$)", text_value, re.I))
+        looks_like_command = bool(re.match(r"^(?:/|[!.])\w+", text_value, re.I)) or bool(re.match(r"^(?:мут|бан|кик|варн|размут|разбан|очистить|профиль|команды|помощь)(?:\s|$)", text_value, re.I))
         if not looks_like_command:
             return await handler(event, data)
         key = (event.chat.id, event.from_user.id)
@@ -472,7 +472,7 @@ async def help_command(message: Message) -> None:
         "<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
     )
 
 @router.message(F.text.in_({"📋 Меню", "Меню"}))
@@ -543,7 +543,7 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
 async def removed_chat_top_button(message: Message) -> None:
     await message.answer("Эти рейтинги чатов убраны из меню. Используйте /top, чтобы посмотреть активных участников текущей группы.")
 
-@router.message(F.chat.type != ChatType.PRIVATE, F.text.in_({"➕ Добавить в чат", "💠 Профиль", "💍 Брак", "🛠 Установка", "🔗 Команды", "🌐 Открыть приложение", "⚠️ Мои варны", "🛡 Кто админ"}))
+@router.message(F.chat.type != ChatType.PRIVATE, F.text.in_({"➕ Добавить в чат", "💍 Брак", "🛠 Установка", "🌐 Открыть приложение", "⚠️ Мои варны", "🛡 Кто админ"}))
 async def group_menu_text_fallback(message: Message) -> None:
     await message.answer("Я вижу нажатие кнопки, но часть функций доступна только в личке или в группе с нужными правами.\n\n⚠️ <b>Чтобы Pear CM полноценно работал в чате, выдайте ему права администратора</b> — как минимум необходимые права для модерации. Затем повторите команду.\nПодсказка: /help — команды, /profile — профиль, /top — топ участников.")
 
@@ -565,6 +565,7 @@ async def profile(message: Message) -> None:
         f"👤 <b>Профиль участника</b>\n{mention(message.from_user.id, message.from_user.full_name)}\n\n"
         f"💬 Сообщений: <b>{messages}</b>\n🏅 Ранг: <b>{rank}</b> · <b>{level_name}</b>\n⚠️ Предупреждения: <b>{warns}</b>\n{progress}\n\n"
         "💡 Подсказка: /top — рейтинг участников, /activity — статистика активности."
+        + ("\n\n⚠️ Чтобы модерация работала, выдайте боту права администратора чата." if message.chat.type != ChatType.PRIVATE else "")
     )
 
 @router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
