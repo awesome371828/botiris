@@ -556,6 +556,7 @@ async def welcome_members(message: Message) -> None:
 # Keep synchronous Supabase I/O off aiogram's event loop. Message updates can
 # continue while activity counters/events are persisted in a worker thread.
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
+_ACTIVITY_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 
 def _persist_activity_sync(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
     user = ensure_user(user_id, chat_id, username, first_name)
@@ -575,8 +576,12 @@ def _persist_activity_sync(chat_id: int, user_id: int, username: str | None, fir
 
 async def _persist_activity_limited(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
     try:
-        async with _ACTIVITY_WRITE_SEMAPHORE:
-            await asyncio.to_thread(_persist_activity_sync, chat_id, user_id, username, first_name)
+        # Serialize updates for the same member so concurrent messages don't
+        # overwrite each other's message counter; different members still run concurrently.
+        lock = _ACTIVITY_LOCKS.setdefault((chat_id, user_id), asyncio.Lock())
+        async with lock:
+            async with _ACTIVITY_WRITE_SEMAPHORE:
+                await asyncio.to_thread(_persist_activity_sync, chat_id, user_id, username, first_name)
     except Exception:
         log.exception("Background activity persistence failed")
 
