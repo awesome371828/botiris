@@ -1761,7 +1761,7 @@ async def info_cmd(message: Message) -> None:
         f"Сообщений: <b>{int(user.get('messages', 0))}</b>"
     )
 
-@router.message(Command("top", "stats", "stat", "стата", "статистика"))
+@router.message(Command("top", "stats", "stat"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:топ|стата|статистика)(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
