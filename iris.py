@@ -113,6 +113,18 @@ class CommandRateLimitMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if not isinstance(event, Message) or not event.from_user or event.from_user.is_bot:
             return await handler(event, data)
+        # Enforce the bot's global-ban table before any command/feature handler runs.
+        # The helper has a TTL cache; run its cold Supabase lookup off the event loop.
+        if event.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, event.from_user.id):
+            now = time.monotonic()
+            notice_at = _GLOBAL_BAN_NOTICE_LAST.get(event.from_user.id, 0.0)
+            if event.chat.type == ChatType.PRIVATE and now - notice_at >= 10:
+                _GLOBAL_BAN_NOTICE_LAST[event.from_user.id] = now
+                try:
+                    await event.answer("⛔ Доступ к функциям Pear CM для этого аккаунта ограничен.")
+                except Exception:
+                    pass
+            return None
         text_value = (event.text or "").strip()
         command_match = re.match(r"^([/!.][\w]+)(?:@\w+)?", text_value, re.I)
         plain_match = re.match(
@@ -2405,6 +2417,9 @@ async def marriage_proposal_callback(callback: CallbackQuery) -> None:
     if not callback.from_user or not callback.data:
         await callback.answer("Не удалось определить пользователя.", show_alert=True)
         return
+    if callback.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, callback.from_user.id):
+        await callback.answer("Доступ к функциям Pear CM ограничен.", show_alert=True)
+        return
     parts = callback.data.split(":")
     if len(parts) != 3 or parts[1] not in {"accept", "decline"}:
         await callback.answer("Некорректное действие.", show_alert=True)
@@ -4112,6 +4127,7 @@ _PROCESS_STARTED = time.monotonic()
 _RUNTIME_FLAGS: dict[str, Any] = {"maintenance": False}
 _GLOBAL_SETTINGS_CACHE: dict[str, tuple[Any, float]] = {}
 _GLOBAL_BAN_CACHE: dict[int, tuple[bool, float]] = {}
+_GLOBAL_BAN_NOTICE_LAST: dict[int, float] = {}
 _GLOBAL_SETTING_TTL = 5.0
 _GLOBAL_BAN_TTL = 10.0
 
