@@ -433,8 +433,14 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
     # creator and configured bot owner remain emergency overrides.
     key = moderation_command_key(message)
     try:
-        # get_chat_settings already has a short-lived per-chat cache; avoid a thread hop per command.
-        settings = get_chat_settings(message.chat.id)
+        # Fast path for hot chats; a cache miss stays off the event loop.
+        now = time.monotonic()
+        cached_settings = _CHAT_SETTINGS_CACHE.get(message.chat.id)
+        cached_at = _CHAT_SETTINGS_CACHE_TIME.get(message.chat.id, 0.0)
+        if cached_settings is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
+            settings = dict(cached_settings)
+        else:
+            settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
         custom_rank = settings.get(f"modrank_{key}") if key else None
         if custom_rank is None and key:
             custom_rank = settings.get("modrank_default")
