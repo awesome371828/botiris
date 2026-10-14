@@ -48,3 +48,12 @@ The welcome handler already greets new non-bot members by default. The Telegram 
 - Marriage records currently live in process memory and reset when the bot restarts. User profile, warnings, ranks, message counts, and audit events use Supabase when configured.
 - GitHub-hosted runners are not designed for permanent 24/7 bot hosting. Workflow runs have time limits and may be stopped. For stable uptime use a VPS or a persistent hosting service.
 - This is not and cannot be “everything in Iris”: Iris has proprietary/large-scale features and platform constraints; this code is a base you can extend.
+
+
+## Iris-style activity statistics and moderator list
+
+- `топ вся`, `топ день` / `топ сутки`, `топ неделя`, `топ месяц`, `топ год` show chat-specific activity with clickable profile names and the total message count.
+- `стата вся`, `стата неделя`, etc. are aliases; `топ 30 месяц` selects the number of rows (1–100).
+- `кто админ` groups Pear CM ranks into star-headed sections and links each name to the Telegram profile.
+- The fast period-statistics path uses `bot_activity_daily`; run the updated `schema.sql` in Supabase to enable atomic daily aggregation. If the table is not present, the bot falls back to the raw activity-event log.
+- Message counts begin when Pear CM observes messages in the chat. Telegram Bot API does not provide a method to fetch a group's complete historical message archive, so older messages from before the bot was added cannot be reconstructed automatically.
