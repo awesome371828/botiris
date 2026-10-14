@@ -2327,6 +2327,9 @@ async def accept_marry_cmd(message: Message) -> None:
 async def marriage_status_cmd(message: Message) -> None:
     if not message.from_user:
         return
+    if _feature_normalize(message.text or "") in {"отн действия", "отношения действия", "действия отношений", "список действий"}:
+        await message.answer("💞 <b>Действия отношений</b>\n• обнять\n• поцеловать\n• поддержать\n• погладить\n• подарить айфон\n• подарить цветы\n• подарить шоколад\n• подарить кольцо\n• подарить машину\n• пожать руку\n• дать пять\n• поздравить\n• утешить\n• успокоить\n• покормить\n• угостить\n• пригласить на свидание\n• помочь\n• спасти\n• простить\n• помириться\n\nОтветь на сообщение участника нужной командой.")
+        return
     rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
     active_marriage = next((row for row in rows if row.get("status") == "married" and
         message.from_user.id in (int(row.get("user1_id") or 0), int(row.get("user2_id") or 0))), None)
