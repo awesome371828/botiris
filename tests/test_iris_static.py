@@ -148,6 +148,16 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Администраторы Telegram", self.source)
         self.assertIn("Telegram administrators are listed once", self.source)
 
+    def test_warning_removal_requires_audit_ledger_write(self):
+        unwarn_start = self.source.index("async def unwarn_cmd")
+        unwarn_end = self.source.index("@router.message(Command(\"clearwarns\")", unwarn_start)
+        unwarn_body = self.source[unwarn_start:unwarn_end]
+        self.assertLess(unwarn_body.index('ledger_saved = await audit_wait'), unwarn_body.index('db_upsert, "bot_users"'))
+        clear_start = self.source.index("async def clearwarns_cmd")
+        clear_end = self.source.index("# ── Message tools", clear_start)
+        clear_body = self.source[clear_start:clear_end]
+        self.assertLess(clear_body.index('ledger_saved = await audit_wait'), clear_body.index('db_upsert, "bot_users"'))
+
     def test_warning_updates_check_database_write_results(self):
         self.assertIn("Не удалось сохранить снятие варна", self.source)
         self.assertIn("Не удалось сбросить предупреждения", self.source)
