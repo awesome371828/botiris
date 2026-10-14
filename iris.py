@@ -384,6 +384,8 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
     try:
         settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
         custom_rank = settings.get(f"modrank_{key}") if key else None
+        if custom_rank is None and key:
+            custom_rank = settings.get("modrank_default")
         if custom_rank is not None:
             min_rank = max(1, min(5, int(custom_rank)))
     except (TypeError, ValueError):
@@ -616,7 +618,11 @@ def required_rank_for(message: Message, default_rank: int) -> int:
     if not key:
         return default_rank
     try:
-        return max(1, min(5, int(get_chat_settings(message.chat.id).get(f"modrank_{key}", default_rank))))
+        settings = get_chat_settings(message.chat.id)
+        configured = settings.get(f"modrank_{key}")
+        if configured is None:
+            configured = settings.get("modrank_default", default_rank)
+        return max(1, min(5, int(configured)))
     except (TypeError, ValueError):
         return default_rank
 
@@ -1502,7 +1508,7 @@ async def info_cmd(message: Message) -> None:
     )
 
 @router.message(Command("top"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
     arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip().replace("ё", "е")
@@ -1946,8 +1952,21 @@ async def command_rank_rule_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     parts = (message.text or "").strip().split()
+    if len(parts) == 2 and parts[1].isdigit():
+        required = int(parts[1])
+        if not 1 <= required <= 5:
+            await message.answer("Ранг должен быть от 1 до 5.")
+            return
+        settings = get_chat_settings(message.chat.id)
+        settings["modrank_default"] = required
+        save_chat_settings(message.chat.id, settings)
+        await message.answer(
+            f"🔐 Минимальный ранг для команд модерации установлен: <b>{required} — {role_name(required)}</b>. "
+            "Индивидуальные правила команд имеют приоритет."
+        )
+        return
     if len(parts) < 3:
-        await message.answer("Формат: <code>.дк мут 4</code> или <code>.дк снять варн 3</code>. Допустимые ранги: 1–5.")
+        await message.answer("Формат: <code>.дк 4</code> (общий уровень) или <code>.дк мут 4</code> / <code>.дк снять варн 3</code>. Допустимые ранги: 1–5.")
         return
     try:
         required = int(parts[-1])
