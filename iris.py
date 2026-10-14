@@ -2467,6 +2467,35 @@ async def marry_cmd(message: Message) -> None:
         reply_markup=keyboard,
     )
 
+@router.message(Command("cancelmarry", "cancelmarriage"))
+async def cancel_marriage_proposal_cmd(message: Message) -> None:
+    """Cancel the caller's own pending proposal in this chat."""
+    if not message.from_user or not is_group(message):
+        await message.answer("💍 Отменить своё предложение можно в группе.")
+        return
+    if db is None:
+        await message.answer("Не удалось проверить предложение: база данных не настроена.")
+        return
+    try:
+        result = await asyncio.to_thread(
+            lambda: db.table("bot_marriages").update({"status": "cancelled"})
+            .eq("chat_id", message.chat.id)
+            .eq("user1_id", message.from_user.id)
+            .eq("status", "pending")
+            .select("*").execute()
+        )
+        cancelled = result.data or []
+    except Exception:
+        log.exception("Could not cancel pending marriage proposal chat=%s user=%s",
+                      message.chat.id, message.from_user.id)
+        await message.answer("Не удалось отменить предложение из-за ошибки базы данных. Попробуйте позже.")
+        return
+    if not cancelled:
+        await message.answer("У вас нет ожидающего предложения брака, которое можно отменить.")
+        return
+    await message.answer("💔 Ваше предложение брака отменено. Старые кнопки больше не сработают.")
+
+
 @router.callback_query(F.data.startswith("marriage:"))
 async def marriage_proposal_callback(callback: CallbackQuery) -> None:
     if not callback.from_user or not callback.data:
