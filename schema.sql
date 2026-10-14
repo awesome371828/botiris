@@ -362,12 +362,78 @@ alter table public.bot_activity_daily enable row level security;
 revoke all on public.bot_activity_daily from anon, authenticated;
 grant all on public.bot_activity_daily to service_role;
 
+-- Record each Telegram message and update both counters in one transaction.
+-- The unique message key makes retrying the RPC safe after network timeouts.
+create or replace function public.record_bot_activity_batch(p_items jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $
+begin
+    with inserted as (
+        insert into public.bot_activity_events
+            (chat_id, user_id, message_id, username, first_name, created_at)
+        select
+            (item->>'chat_id')::bigint,
+            (item->>'user_id')::bigint,
+            (item->>'message_id')::bigint,
+            nullif(item->>'username', ''),
+            coalesce(nullif(item->>'first_name', ''), 'Пользователь'),
+            coalesce(nullif(item->>'created_at', '')::timestamptz, now())
+        from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) as item
+        where nullif(item->>'message_id', '') is not null
+        on conflict (chat_id, message_id) do nothing
+        returning chat_id, user_id, username, first_name, created_at
+    ),
+    grouped as (
+        select
+            chat_id, user_id,
+            (created_at at time zone 'Europe/Moscow')::date as day,
+            count(*)::bigint as messages,
+            max(username) as username,
+            coalesce(max(first_name), 'Пользователь') as first_name,
+            max(created_at) as last_seen
+        from inserted
+        group by chat_id, user_id, (created_at at time zone 'Europe/Moscow')::date
+    ),
+    daily_write as (
+        insert into public.bot_activity_daily
+            (chat_id, user_id, day, username, first_name, messages, updated_at)
+        select chat_id, user_id, day, username, first_name, messages, now()
+        from grouped
+        on conflict (chat_id, user_id, day)
+        do update set
+            messages = public.bot_activity_daily.messages + excluded.messages,
+            username = coalesce(excluded.username, public.bot_activity_daily.username),
+            first_name = coalesce(excluded.first_name, public.bot_activity_daily.first_name),
+            updated_at = now()
+        returning chat_id, user_id
+    )
+    insert into public.bot_users
+        (user_id, chat_id, username, first_name, warns, rank, messages, last_seen)
+    select user_id, chat_id, max(username), coalesce(max(first_name), 'Пользователь'),
+           0, 0, sum(messages), max(last_seen)
+    from grouped
+    group by user_id, chat_id
+    on conflict (user_id, chat_id)
+    do update set
+        username = coalesce(excluded.username, public.bot_users.username),
+        first_name = coalesce(excluded.first_name, public.bot_users.first_name),
+        messages = public.bot_users.messages + excluded.messages,
+        last_seen = greatest(public.bot_users.last_seen, excluded.last_seen);
+end;
+$;
+
+revoke all on function public.record_bot_activity_batch(jsonb) from public, anon, authenticated;
+grant execute on function public.record_bot_activity_batch(jsonb) to service_role;
+
 create or replace function public.increment_bot_activity_daily_batch(p_items jsonb)
 returns void
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $
 declare
     item jsonb;
 begin
