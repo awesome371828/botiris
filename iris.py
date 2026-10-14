@@ -29,7 +29,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
     BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
-    ReplyKeyboardMarkup, ReplyKeyboardRemove,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup,
 )
 from supabase import Client, create_client
 
@@ -119,7 +119,7 @@ INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔀 Случайный чат")],
+            [KeyboardButton(text="➕ Добавить в чат")],
             [KeyboardButton(text="🏅 Чаты: топ дня"), KeyboardButton(text="🏆 Супер топ чатов")],
             [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
             [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
@@ -415,18 +415,52 @@ async def help_command(message: Message) -> None:
         reply_markup=main_keyboard(),
     )
 
-@router.message(F.text.in_({"📋 Меню", "Меню", "🛠 Установка"}))
+@router.message(F.text.in_({"📋 Меню", "Меню"}))
 async def menu_button(message: Message) -> None:
     await message.answer(
-        "👋 <b>Главное меню</b>\n\n"
-        "Выберите раздел ниже или используйте /commands.\n"
-        "Для работы в группе добавьте бота и выдайте необходимые права.",
+        "👋 <b>Главное меню Pear CM</b>\n\n"
+        "➕ Добавить в чат — выберите группу и подтвердите права бота.\n"
+        "💠 Профиль — ваша статистика и предупреждения.\n"
+        "🔗 Команды — список доступных команд.\n"
+        "🛠 Установка — понятная инструкция по подключению.",
         reply_markup=main_keyboard(),
     )
 
-@router.message(F.text == "🔀 Случайный чат")
-async def random_chat(message: Message) -> None:
-    await message.answer("🔀 Эта функция требует отдельного сервиса знакомств/случайных чатов и здесь не включена.")
+@router.message(F.text == "➕ Добавить в чат")
+async def add_to_chat(message: Message) -> None:
+    if message.chat.type != ChatType.PRIVATE:
+        await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат».")
+        return
+    try:
+        me = await bot.get_me()
+        add_url = f"https://t.me/{me.username}?startgroup=true"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="➕ Выбрать группу и добавить бота", url=add_url)
+        ]])
+        await message.answer(
+            "➕ <b>Добавление Pear CM в группу</b>\n\n"
+            "1. Нажмите кнопку ниже и выберите группу.\n"
+            "2. Подтвердите добавление бота.\n"
+            "3. Для удаления сообщений, мутов и банов выдайте права администратора: «Удаление сообщений», «Блокировка пользователей» и «Ограничение участников».\n"
+            "4. Чтобы закрывать и открывать чат, боту также нужны права управления чатом.\n\n"
+            "Выдавайте только те права, которые действительно нужны.",
+            reply_markup=keyboard,
+        )
+    except Exception as exc:
+        await safe_error(message, exc)
+
+@router.message(F.text == "🛠 Установка")
+async def installation_help(message: Message) -> None:
+    await message.answer(
+        "🛠 <b>Установка Pear CM — пошагово</b>\n\n"
+        "<b>1.</b> Нажмите «➕ Добавить в чат» в главном меню.\n"
+        "<b>2.</b> Выберите нужную группу в Telegram и подтвердите добавление.\n"
+        "<b>3.</b> Откройте настройки группы → Администраторы → Добавить администратора → Pear CM.\n"
+        "<b>4.</b> Включите необходимые права: удаление сообщений, блокировка/ограничение участников. Для команд «-чат» и «+чат» нужны права управления чатом.\n"
+        "<b>5.</b> Проверьте в группе: <code>/admins</code>, <code>-смс 10</code>, <code>-чат</code> и <code>+чат</code>.\n\n"
+        "Если нужна только статистика, не выдавайте права модерации. Команды доступны в группе через меню «/».",
+        reply_markup=main_keyboard(),
+    )
 
 @router.message(F.text.in_({"🏅 Чаты: топ дня", "🏆 Супер топ чатов"}))
 async def chat_top_placeholder(message: Message) -> None:
@@ -466,7 +500,11 @@ async def my_warns(message: Message) -> None:
     if not message.from_user:
         return
     user = ensure_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
-    display = f"@{message.from_user.username}" if message.from_user.username else mention(message.from_user.id, message.from_user.full_name)
+    if message.from_user.username:
+        username = message.from_user.username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        display = f'<a href="https://t.me/{username}">@{username}</a>'
+    else:
+        display = mention(message.from_user.id, message.from_user.full_name)
     await message.answer(f"⚠️ {display}, у вас <b>{int(user.get('warns', 0))}</b> предупреждений.")
 
 @router.message(F.text == "💍 Брак")
@@ -746,46 +784,43 @@ async def delete_message_cmd(message: Message) -> None:
     match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
     if match and match.group(1):
         count = max(1, min(100, int(match.group(1))))
-        # Delete actual recent IDs seen by the bot, newest first, excluding this command.
-        seen = list(_RECENT_MESSAGE_IDS.get(message.chat.id, ()))
-        candidates = list(dict.fromkeys(mid for mid in reversed(seen) if mid < message.message_id))[:count]
-        # Probe older IDs only if the bot has not observed enough recent messages.
-        if len(candidates) < count:
-            known = set(candidates)
-            mid = message.message_id - 1
-            scanned = 0
-            while len(candidates) < count and mid > 0 and scanned < 5000:
-                if mid not in known:
-                    candidates.append(mid)
-                    known.add(mid)
-                mid -= 1
-                scanned += 1
+        # Telegram не предоставляет историю чата: перебираем ID назад и считаем только
+        # реально удалённые сообщения, а не просто проверенные ID. Иначе пропуски
+        # в истории приводили к удалению заметно меньшего числа сообщений.
         deleted = 0
+        scanned = 0
         forbidden = False
-        for mid in candidates:
+        mid = message.message_id - 1
+        max_scan = min(5000, max(500, count * 20))
+        while mid > 0 and deleted < count and scanned < max_scan:
             try:
                 await bot.delete_message(chat_id=message.chat.id, message_id=mid)
                 deleted += 1
+                # Keep a little distance between API calls to avoid Telegram rate limits.
+                await asyncio.sleep(0.035)
             except TelegramForbiddenError:
                 forbidden = True
                 break
-            except TelegramBadRequest:
-                continue
+            except TelegramBadRequest as exc:
+                # Expected for service messages, already deleted IDs and messages too old.
+                log.debug("Cannot delete chat=%s message=%s: %s", message.chat.id, mid, exc)
             except Exception:
                 log.exception("Failed to delete message_id=%s chat_id=%s", mid, message.chat.id)
+            mid -= 1
+            scanned += 1
         try:
             await message.delete()
         except Exception:
             pass
-        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted}")
+        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted};scanned={scanned}")
         if forbidden:
-            await message.answer("⛔ У бота нет права «Удаление сообщений».")
+            await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
         else:
             response = await message.answer(
-                f"🧹 Удалено сообщений: <b>{deleted}</b> из {count}."
-                + (" Некоторые сообщения уже удалены или недоступны." if deleted < count else "")
+                f"🧹 Удалено предыдущих сообщений: <b>{deleted}</b> из {count}."
+                + ("\nЧасть старых сообщений недоступна для удаления через Telegram API." if deleted < count else "")
             )
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             try:
                 await response.delete()
             except Exception:
@@ -892,15 +927,27 @@ async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
     arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip()
     aliases = {
-        "день":"day", "дня":"day", "сегодня":"day", "за день":"day",
+        # День
+        "день":"day", "дня":"day", "дне":"day", "сегодня":"day", "за день":"day",
+        "топ дня":"day", "топ за день":"day", "топ сегодня":"day", "сутки":"day", "24 часа":"day",
+        # Неделя
         "неделя":"week", "неделю":"week", "недели":"week", "за неделю":"week",
-        "месяц":"month", "месяца":"month", "за месяц":"month",
-        "год":"year", "года":"year", "за год":"year",
+        "топ недели":"week", "топ неделю":"week", "топ за неделю":"week", "7 дней":"week",
+        # Месяц
+        "месяц":"month", "месяца":"month", "месяце":"month", "за месяц":"month",
+        "топ месяца":"month", "топ месяц":"month", "топ за месяц":"month", "30 дней":"month",
+        # Год
+        "год":"year", "года":"year", "году":"year", "за год":"year",
+        "топ года":"year", "топ год":"year", "топ за год":"year", "365 дней":"year",
+        # Всё время
         "вся":"all", "все":"all", "всё":"all", "всё время":"all", "все время":"all",
-        "за всё время":"all", "за все время":"all", "all":"all", "alltime":"all",
-        "day":"day", "week":"week", "month":"month", "year":"year",
+        "топ вся":"all", "топ все":"all", "топ всё":"all", "топ всё время":"all", "топ все время":"all",
+        "за всё время":"all", "за все время":"all", "навсегда":"all", "общий":"all", "общий топ":"all",
+        "all":"all", "alltime":"all", "day":"day", "week":"week", "month":"month", "year":"year",
     }
-    period = aliases.get(arg, "all")
+    # Разрешаем варианты «топ за месяц», «топ месяц», «за месяц», «месячный» и т. п.
+    normalized_arg = re.sub(r"^(?:за|топ|топ за)\s+", "", arg).strip()
+    period = aliases.get(arg, aliases.get(normalized_arg, "all"))
     labels = {"all":"за всё время", "day":"за день", "week":"за неделю", "month":"за месяц", "year":"за год"}
     if period == "all":
         rows = db_rows("bot_users", limit=10, order="messages", chat_id=message.chat.id)
@@ -908,11 +955,20 @@ async def top_cmd(message: Message) -> None:
         if db is None:
             await message.answer("⚠️ Для топа по периодам нужна подключённая Supabase и таблица bot_activity_events.")
             return
-        delta = {"day":timedelta(days=1), "week":timedelta(days=7), "month":timedelta(days=30), "year":timedelta(days=365)}[period]
+        # Calendar periods in Moscow time: today, this week (Mon-Sun), month, year.
+        now_local = moscow_now()
+        if period == "day":
+            period_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            period_start = (now_local - timedelta(days=now_local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "month":
+            period_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            period_start = now_local.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         try:
             events = (db.table("bot_activity_events").select("user_id,username,first_name")
                       .eq("chat_id", message.chat.id)
-                      .gte("created_at", (datetime.now(timezone.utc)-delta).isoformat())
+                      .gte("created_at", period_start.astimezone(timezone.utc).isoformat())
                       .order("created_at", desc=True).limit(10000).execute().data or [])
             grouped = {}
             for event in events:
@@ -1642,6 +1698,7 @@ async def close_chat_cmd(message: Message) -> None:
                     "can_send_voice_notes": True, "can_send_polls": True,
                     "can_send_other_messages": True, "can_add_web_page_previews": True,
                 }
+        progress = await message.answer("🔒 Закрываю чат…")
         await bot.set_chat_permissions(
             message.chat.id,
             permissions=ChatPermissions(
@@ -1660,7 +1717,10 @@ async def close_chat_cmd(message: Message) -> None:
         settings["chat_locked_by_bot"] = True
         save_chat_settings(message.chat.id, settings)
         audit(message.chat.id, message.from_user.id, "chat_close")
-        await message.answer("🔒 Чат закрыт. Обычные участники временно не могут отправлять сообщения. Открыть: <code>+чат</code>.")
+        try:
+            await progress.edit_text("🔒 Чат закрыт. Обычные участники временно не могут отправлять сообщения. Открыть: <code>+чат</code>.")
+        except Exception:
+            await message.answer("🔒 Чат закрыт. Открыть: <code>+чат</code>.")
     except Exception as exc:
         await safe_error(message, exc)
 
