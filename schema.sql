@@ -49,11 +49,17 @@ create table if not exists public.bot_marriages (
     user2_id bigint not null,
     user2_name text not null,
     status text not null default 'pending'
-        check (status in ('pending', 'married', 'divorced')),
+        check (status in ('pending', 'married', 'divorced', 'cancelled')),
     created_at timestamptz not null default now(),
     accepted_at timestamptz,
     check (user1_id <> user2_id)
 );
+
+-- Allow cancellation of a still-pending proposal; also upgrade existing installations.
+alter table public.bot_marriages drop constraint if exists bot_marriages_status_check;
+alter table public.bot_marriages
+    add constraint bot_marriages_status_check
+    check (status in ('pending', 'married', 'divorced', 'cancelled'));
 
 create table if not exists public.bot_chat_settings (
     chat_id bigint primary key,
