@@ -2042,7 +2042,7 @@ async def promote_rank_cmd(message: Message) -> None:
         await message.answer("⚠️ Не удалось сохранить повышение ранга. Проверь подключение Supabase и таблицу bot_users.")
         return
     invalidate_user_rank(message.chat.id, target[0])
-    await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
 
@@ -2104,7 +2104,7 @@ async def demote_rank_cmd(message: Message) -> None:
         await message.answer("⚠️ Не удалось сохранить понижение ранга. Проверь подключение Supabase и таблицу bot_users.")
         return
     invalidate_user_rank(message.chat.id, target[0])
-    await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬇️ <b>{escape(target[1])}</b> был понижен до роли <b>{role_name(new_rank)}</b>.")
 
 
