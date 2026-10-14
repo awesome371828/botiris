@@ -959,7 +959,7 @@ async def _activity_writer_loop() -> None:
                 _ACTIVITY_QUEUE.task_done()
 
 async def track_activity(message: Message) -> None:
-    if not message.from_user or message.from_user.is_bot or not message.text or not is_group(message):
+    if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
     item = (
         message.chat.id, message.from_user.id, message.from_user.username,
@@ -1504,10 +1504,10 @@ async def info_cmd(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\\s|$)"))
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
-    arg = re.sub(r"^(?:/top(?:@\\w+)?|[.!/]?топ)\\s*", "", raw, flags=re.I).strip().replace("ё", "е")
+    arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip().replace("ё", "е")
     chat_only = arg.startswith(("чат ", "чата ", "в чате ", "по чату "))
     if chat_only:
-        arg = re.sub(r"^(?:чат|чата|в чате|по чату)\\s*", "", arg).strip()
+        arg = re.sub(r"^(?:чат|чата|в чате|по чату)\s*", "", arg).strip()
     aliases = {
         "день":"day", "дня":"day", "дню":"day", "дне":"day", "днем":"day", "дневной":"day",
         "сегодня":"day", "сегодняшний":"day", "сегодняшняя":"day", "за сегодня":"day", "за день":"day",
@@ -1526,8 +1526,8 @@ async def top_cmd(message: Message) -> None:
         "навсегда":"all", "общий":"all", "общий топ":"all", "в целом":"all",
         "all":"all", "alltime":"all", "day":"day", "week":"week", "month":"month", "year":"year",
     }
-    compact = re.sub(r"\\s+", " ", arg).strip(" .,!?:;")
-    normalized = re.sub(r"^(?:за|топ|топ за)\\s+", "", compact).strip()
+    compact = re.sub(r"\s+", " ", arg).strip(" .,!?:;")
+    normalized = re.sub(r"^(?:за|топ|топ за)\s+", "", compact).strip()
     period = aliases.get(compact, aliases.get(normalized, "all"))
     labels = {"all":"за всё время", "day":"за сегодня", "week":"за эту неделю", "month":"за этот месяц", "year":"за этот год"}
 
@@ -1599,7 +1599,7 @@ async def top_cmd(message: Message) -> None:
     for index, row in enumerate(rows, 1):
         name = f"@{escape(str(row['username']))}" if row.get("username") else escape(str(row.get("first_name") or "Участник"))
         lines.append(f"{index}. {name} — <b>{int(row.get('messages', 0))}</b> 💬")
-    await message.answer("\\n".join(lines))
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("logs"))
@@ -1831,11 +1831,11 @@ async def rank_cmd(message: Message) -> None:
     await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\\s+ранг|promote)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\s+ранг|promote)(?:\s|$)"))
 async def promote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    remainder = re.sub(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\\s+ранг|promote)\\s*", "", (message.text or "").strip(), count=1).strip()
+    remainder = re.sub(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\s+ранг|promote)\s*", "", (message.text or "").strip(), count=1).strip()
     tokens = remainder.split()
     explicit = None
     for token in tokens:
@@ -1887,11 +1887,11 @@ async def promote_rank_cmd(message: Message) -> None:
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)(?:\s|$)"))
 async def demote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    remainder = re.sub(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)\\s*", "", (message.text or "").strip(), count=1).strip()
+    remainder = re.sub(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)\s*", "", (message.text or "").strip(), count=1).strip()
     tokens = remainder.split()
     explicit = None
     for token in tokens:
@@ -1965,7 +1965,8 @@ async def command_rank_rule_cmd(message: Message) -> None:
         "варн":"warn", "предупреждение":"warn", "предупредить":"warn", "дать варн":"warn", "выдать варн":"warn",
         "снять варн":"unwarn", "убрать варн":"unwarn", "удалить варн":"unwarn",
         "снять предупреждение":"unwarn", "убрать предупреждение":"unwarn", "анварн":"unwarn",
-        "повысить":"promote", "повысить ранг":"promote", "понизить":"demote", "понизить ранг":"demote",
+        "повысить":"promote", "повысить ранг":"promote", "повыситьранг":"promote", "повысить-ранг":"promote", "повышение":"promote", "повышай":"promote", "продвинуть":"promote", "назначить ранг":"promote",
+        "понизить":"demote", "понизить ранг":"demote", "понизитьранг":"demote", "понизить-ранг":"demote", "понижение":"demote", "понижай":"demote", "понизь":"demote",
         "очистить":"purge", "-смс":"delete", "удалить сообщения":"delete",
         "пин":"pin", "закрепить":"pin", "анпин":"unpin", "открепить":"unpin",
     }
