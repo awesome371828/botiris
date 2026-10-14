@@ -433,7 +433,8 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
     # creator and configured bot owner remain emergency overrides.
     key = moderation_command_key(message)
     try:
-        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        # get_chat_settings already has a short-lived per-chat cache; avoid a thread hop per command.
+        settings = get_chat_settings(message.chat.id)
         custom_rank = settings.get(f"modrank_{key}") if key else None
         if custom_rank is None and key:
             custom_rank = settings.get("modrank_default")
@@ -444,9 +445,9 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
     if message.from_user.id == OWNER_ID:
         return True
     try:
-        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-        is_creator = member.status == ChatMemberStatus.CREATOR
-        is_telegram_admin = member.status == ChatMemberStatus.ADMINISTRATOR
+        member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+        is_creator = bool(member and member.status == ChatMemberStatus.CREATOR)
+        is_telegram_admin = bool(member and member.status == ChatMemberStatus.ADMINISTRATOR)
     except Exception:
         is_creator = False
         is_telegram_admin = False
@@ -527,22 +528,46 @@ def parse_duration(value: str) -> timedelta | None:
     return parsed[0] if parsed else None
 
 def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | None:
-    """Parse duration phrases, including implicit one-unit forms such as 'час', 'день', 'год'."""
+    """Parse shorthand and natural Russian duration phrases; consumed counts original tokens."""
+    number_words = {
+        "один": 1, "одна": 1, "одно": 1, "одну": 1, "одного": 1, "одной": 1, "одном": 1,
+        "два": 2, "две": 2, "двух": 2, "три": 3, "трех": 3, "трёх": 3,
+        "четыре": 4, "четырех": 4, "четырёх": 4, "пять": 5, "пяти": 5,
+        "шесть": 6, "шести": 6, "семь": 7, "семи": 7, "восемь": 8, "восьми": 8,
+        "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
+    }
     total = 0
     consumed = 0
     shown: list[str] = []
     i = 0
     while i < len(tokens):
-        token = tokens[i].strip().lower().strip(",.;")
-        numeric = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
-        if numeric:
-            amount = int(numeric.group(1))
-            unit = numeric.group(2)
+        token = tokens[i].strip().lower().strip(",.;:")
+        if total == 0 and token == "в" and i + 1 < len(tokens) and tokens[i + 1].lower().strip(",.;:") == "течение":
+            consumed += 2
+            i += 2
+            continue
+        if total == 0 and token == "сроком" and i + 1 < len(tokens) and tokens[i + 1].lower().strip(",.;:") == "на":
+            consumed += 2
+            i += 2
+            continue
+        if total == 0 and token == "на":
+            consumed += 1
+            i += 1
+            continue
+        if token == "и" and total > 0:
+            consumed += 1
+            i += 1
+            continue
+        word_amount = number_words.get(token)
+        numeric = re.fullmatch(r"(\\d{1,7})\\s*([a-zа-яё]+)?", token, re.I)
+        if numeric or word_amount is not None:
+            amount = int(numeric.group(1)) if numeric else int(word_amount)
+            unit = numeric.group(2) if numeric else None
             used = 1
             if not unit:
                 if i + 1 >= len(tokens):
                     break
-                possible_unit = tokens[i + 1].lower().strip(",.;")
+                possible_unit = tokens[i + 1].lower().strip(",.;:")
                 seconds = _unit_seconds(possible_unit)
                 if seconds is None:
                     break
@@ -553,29 +578,25 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
                 if seconds is None:
                     break
         else:
-            # Iris-style shorthand: "мут час" means one hour, "мут день" one day.
             seconds = _unit_seconds(token)
             if seconds is None:
                 break
             amount = 1
             unit = token
             used = 1
-
         if amount < 1:
             return None
         total += amount * seconds
         shown.append(f"{amount} {unit}")
         consumed += used
         i += used
-
         if i >= len(tokens):
             break
-        next_token = tokens[i].strip().lower().strip(",.;")
-        if not re.match(r"^\d", next_token) and _unit_seconds(next_token) is None:
+        next_token = tokens[i].strip().lower().strip(",.;:")
+        if next_token != "и" and not re.match(r"^\\d", next_token) and next_token not in number_words and _unit_seconds(next_token) is None:
             break
-
-    # Telegram temporary restrictions must be no longer than 366 days.
-    if consumed == 0 or total <= 0 or total > 366 * 86400:
+    # Telegram treats bans at/over the 366-day boundary as permanent; cap timed bans at 365 days.
+    if consumed == 0 or total <= 0 or total > 365 * 86400:
         return None
     return timedelta(seconds=total), consumed, " ".join(shown)
 
@@ -810,7 +831,7 @@ async def help_command(message: Message) -> None:
     await message.answer(
         "<b>📚 Команды Pear CM</b>\n\n"
         "<b>Профиль и чат</b>\n"
-        "• /profile или профиль — профиль; /top или топ — активные участники\n"
+        "• /profile или профиль — профиль; топ дня/недели/вся — рейтинг текущего чата; топ все чаты — общий рейтинг\n"
         "• /admins или админы / кто админ — список админов\n"
         "• /warns или варны — мои предупреждения; /marry или брак — брак в ответ на сообщение\n\n"
         "<b>Модерация (команды можно писать по-русски или по-английски)</b>\n"
@@ -829,7 +850,7 @@ async def help_command(message: Message) -> None:
         "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n"
         "• /time или дата — текущее московское время (Europe/Moscow, UTC+3); /calc 2+2 — калькулятор; /random 1 100 — случайное число; /dice — кубик\n"
         "• /activity — активность; /quote ответом — цитата; /favorites ответом — избранное; /achievements — достижения; /suggest текст — предложение\n"
-        "• врембан 2д причина — временный бан; заметка текст ответом — заметка о пользователе; заметки ответом — список заметок\n"
+        "• врембан день / врембан 1 день / врембан месяц / врембан год / врембан 2ч причина — временный бан до 365 дней; заметка текст ответом — заметка о пользователе; заметки ответом — список заметок\n"
         "• доверенный ответом — добавить в исключения антиспама; доверенные — список; недоверенный ответом — убрать\n"
         "• причина добавить мут спам Текст — шаблоны причин; права мут 3 — минимальный ранг команды\n"
         "• приветствие Текст {name} — приветствие новичков; расписание 23:00 08:00 — автоматическое закрытие/открытие\n"
@@ -1448,7 +1469,11 @@ async def unwarn_cmd(message: Message) -> None:
     if count <= 0:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
         return
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    user, actor_rank_loaded = await asyncio.gather(
+        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
+        asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0),
+    )
+    user = user or {}
     await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
@@ -1672,8 +1697,12 @@ async def info_cmd(message: Message) -> None:
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
     arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip().replace("ё", "е")
-    chat_only = arg.startswith(("чат ", "чата ", "в чате ", "по чату "))
-    if chat_only:
+    global_scope = arg.startswith(("все чаты", "всех чатов", "по всем чатам", "глобальный", "глобально"))
+    chat_only = is_group(message) and not global_scope
+    if global_scope:
+        arg = re.sub(r"^(?:все чаты|всех чатов|по всем чатам|глобальный(?:\s+топ)?|глобально)\s*", "", arg).strip()
+    elif arg.startswith(("чат ", "чата ", "в чате ", "по чату ")):
+        chat_only = True
         arg = re.sub(r"^(?:чат|чата|в чате|по чату)\s*", "", arg).strip()
     aliases = {
         "день":"day", "дня":"day", "дню":"day", "дне":"day", "днем":"day", "дневной":"day",
@@ -1691,6 +1720,7 @@ async def top_cmd(message: Message) -> None:
         "вся":"all", "все":"all", "все время":"all", "все времена":"all", "за все время":"all",
         "топ вся":"all", "топ все":"all", "топ все время":"all", "топ все времена":"all",
         "навсегда":"all", "общий":"all", "общий топ":"all", "в целом":"all",
+        "все чаты":"all", "всех чатов":"all", "глобально":"all", "глобальный":"all",
         "all":"all", "alltime":"all", "day":"day", "week":"week", "month":"month", "year":"year",
     }
     compact = re.sub(r"\s+", " ", arg).strip(" .,!?:;")
@@ -2026,7 +2056,11 @@ async def promote_rank_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    user, actor_rank_loaded = await asyncio.gather(
+        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
+        asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0),
+    )
+    user = user or {}
     try:
         current = 5 if target[0] == OWNER_ID else max(0, min(5, int(user.get("rank", 0) or 0)))
     except (TypeError, ValueError):
@@ -2044,7 +2078,7 @@ async def promote_rank_cmd(message: Message) -> None:
     if new_rank == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else int(actor_rank_loaded or 0)
     if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
         await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
         return
@@ -2109,7 +2143,7 @@ async def demote_rank_cmd(message: Message) -> None:
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else int(actor_rank_loaded or 0)
     if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
         await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
         return
@@ -2816,13 +2850,13 @@ def _validate_imported_settings(raw: Any) -> dict[str, Any] | None:
         result[key] = value
     return result
 
-@router.message(Command("tempban", "врембан"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:врембан|временный бан|tempban)(?:\s|$)"))
+@router.message(Command("tempban", "врембан", "времан"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:врембан|времан|временный бан|tempban)(?:\s|$)"))
 async def temporary_ban_cmd(message: Message) -> None:
     if not await check_mod(message, min_rank=3):
         return
     raw = (message.text or "").strip()
-    rest = re.sub(r"(?i)^\s*(?:/tempban(?:@\w+)?|/врембан|врембан|временный бан|tempban)\s*", "", raw).strip()
+    rest = re.sub(r"(?i)^\s*(?:/tempban(?:@\w+)?|/врембан(?:@\w+)?|/времан(?:@\w+)?|врембан|времан|временный бан(?:\s+на)?|tempban)\s*", "", raw).strip()
     tokens = rest.split()
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user = message.reply_to_message.from_user
@@ -2833,7 +2867,10 @@ async def temporary_ban_cmd(message: Message) -> None:
         duration_tokens = tokens
     else:
         if not tokens:
-            await message.answer("Формат: ответьте на участника <code>врембан 2д причина</code> или напишите <code>врембан @username 2д причина</code>.")
+            await message.answer("Формат: ответьте на участника <code>врембан 1 день причина</code> или укажите <code>врембан @username 1 день причина</code>.")
+            return
+        if parse_duration_prefix(tokens) is not None:
+            await message.answer("Сначала ответьте на сообщение участника или укажите цель: <code>врембан @username 1 день причина</code>.")
             return
         target = await resolve_target(message, tokens[:1])
         if not target:
@@ -2842,7 +2879,7 @@ async def temporary_ban_cmd(message: Message) -> None:
         duration_tokens = tokens[1:]
     parsed = parse_duration_prefix(duration_tokens)
     if not parsed:
-        await message.answer("Укажите срок временного бана: <code>врембан 2ч причина</code>, <code>врембан 3д причина</code> или <code>врембан 1н причина</code>.")
+        await message.answer("Укажите срок: <code>врембан 1 день</code>, <code>врембан день</code>, <code>врембан 1 месяц</code>, <code>врембан год</code> или <code>врембан 2ч причина</code>. Срок временного бана — не больше 365 дней. Ответьте на сообщение цели или укажите @username/ID.")
         return
     duration, consumed, duration_label = parsed
     reason = _reason_from_preset(message.chat.id, "ban", " ".join(duration_tokens[consumed:]).strip() or "не указана")
