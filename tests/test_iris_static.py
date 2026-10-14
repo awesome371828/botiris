@@ -217,6 +217,17 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         ):
             self.assertIn(fragment, self.source)
 
+    def test_moderation_aliases_cover_common_inflections(self):
+        for fragment in (
+            r"заглуш(?:ить|и|ь|ьте|ите)?",
+            r"заблок(?:ировать|ируй|ируйте)?",
+            r"выдвор(?:ить|и|ите)",
+            "предупреждай",
+            r"снять|сними|снимите|снимайте",
+            r"снять|сними|снимите|убрать.*бан",
+        ):
+            self.assertIn(fragment, self.source)
+
     def test_warning_removal_requires_audit_ledger_write(self):
         unwarn_start = self.source.index("async def unwarn_cmd")
         unwarn_end = self.source.index("@router.message(Command(\"clearwarns\")", unwarn_start)
