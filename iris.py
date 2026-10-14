@@ -758,7 +758,14 @@ async def mute_cmd(message: Message) -> None:
         await message.answer("⛔ Нельзя замутить владельца бота.")
         return
 
-    duration_tokens = raw_args if message.reply_to_message else raw_args[1:]
+    # Reply form: «мут час даун». Without reply: «мут @user час даун» / «мут 123456789 67 часов флуд».
+    # Do not treat a duration word such as «час» as a username/target.
+    if message.reply_to_message:
+        duration_tokens = raw_args
+    else:
+        duration_tokens = raw_args[1:] if raw_args and (
+            raw_args[0].startswith("@") or raw_args[0].isdigit()
+        ) else []
     duration, duration_label, reason = split_duration_reason(duration_tokens)
     permanent_words = {"навсегда", "бессрочно", "навечно", "перманентно"}
     if duration is None:
