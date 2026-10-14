@@ -29,7 +29,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
     BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
-    ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
 )
 from supabase import Client, create_client
 
@@ -44,6 +44,7 @@ SUPABASE_KEY = (
 )
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-3"
 
 def moscow_now() -> datetime:
     """Current aware Moscow time (MSK, UTC+3), updated from system time."""
@@ -123,7 +124,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🏅 Чаты: топ дня"), KeyboardButton(text="🏆 Супер топ чатов")],
             [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
             [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
-            [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url="https://awesome371828.github.io/botiris/"))],
+            [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url=MINI_APP_URL))],
             [KeyboardButton(text="⚠️ Мои варны"), KeyboardButton(text="🛡 Кто админ")],
         ],
         resize_keyboard=True,
@@ -2297,7 +2298,7 @@ async def main() -> None:
         BotCommand(command="closereport", description="Закрыть жалобу"),
         BotCommand(command="closeappeal", description="Закрыть апелляцию"),
     ]
-    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    # Set a versioned Mini App URL so Telegram WebView does not keep showing a stale cached page.\n    try:\n        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Открыть Pear CM", web_app=WebAppInfo(url=MINI_APP_URL)))\n        log.info("Telegram Mini App menu button configured: %s", MINI_APP_URL)\n    except Exception:\n        log.exception("Не удалось обновить кнопку Mini App в меню Telegram")\n    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
     await bot.set_my_commands(private_commands + owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     await bot.delete_webhook(drop_pending_updates=False)
