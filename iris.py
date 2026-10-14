@@ -121,9 +121,21 @@ router.message.middleware(CommandRateLimitMiddleware())
 _RECENT_MESSAGE_IDS: dict[int, deque[int]] = defaultdict(lambda: deque(maxlen=5000))
 
 async def _remember_message_id(handler, event: Message, data):
+    started = time.monotonic()
     if isinstance(event, Message):
         _RECENT_MESSAGE_IDS[event.chat.id].append(event.message_id)
-    return await handler(event, data)
+    try:
+        return await handler(event, data)
+    finally:
+        elapsed = time.monotonic() - started
+        _COMMAND_LATENCIES.append((elapsed, type(event).__name__))
+        if elapsed >= 2.0:
+            log.warning("Slow update handler: %.3fs chat=%s message=%s", elapsed,
+                        getattr(getattr(event, "chat", None), "id", "?"),
+                        getattr(event, "message_id", "?"))
+        if len(_RECENT_MESSAGE_IDS) > 1000:
+            for old_chat in list(_RECENT_MESSAGE_IDS.keys())[:200]:
+                _RECENT_MESSAGE_IDS.pop(old_chat, None)
 
 router.message.outer_middleware(_remember_message_id)
 
@@ -143,6 +155,8 @@ FILTER_DEFAULTS = {
     "warn_10_action": "ban", "warn_10_time": "навсегда",
 }
 _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
+_CHAT_SETTINGS_CACHE_TIME: dict[int, float] = {}
+_CHAT_SETTINGS_CACHE_TTL = 5.0
 _FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 _SPAM_LAST: dict[tuple[int, int], tuple[str, float]] = {}
 _SPAM_HISTORY: dict[tuple[int, int], deque[tuple[float, str, int]]] = defaultdict(lambda: deque(maxlen=30))
@@ -269,6 +283,8 @@ def set_warns(chat_id: int, user_id: int, amount: int) -> int:
     new_count = max(0, int(user.get("warns", 0)) + amount)
     db_upsert("bot_users", {**user, "user_id": user_id, "chat_id": chat_id, "warns": new_count}, "user_id,chat_id")
     return new_count
+
+_WARN_RECENT: dict[tuple[int, int, int], float] = {}
 
 def active_warn_count(chat_id: int, user_id: int) -> int:
     """Count warnings from the last seven days; a clear/unwarn event adjusts the active ledger."""
@@ -481,6 +497,10 @@ async def bot_can_restrict(message: Message) -> bool:
     except Exception:
         return False
 
+_ERROR_NOTICE_LAST: dict[tuple[int, str], float] = {}
+_COMMAND_LATENCIES: deque[tuple[float, str]] = deque(maxlen=500)
+_ERROR_NOTICE_TTL = 30.0
+
 async def safe_error(message: Message, exc: Exception) -> None:
     detail = str(exc or "").strip()
     lowered = detail.lower()
@@ -497,6 +517,16 @@ async def safe_error(message: Message, exc: Exception) -> None:
     else:
         user_text = f"⚠️ Техническая ошибка <code>{type(exc).__name__}</code>. Подробности записаны в журнал."
     log.warning("Moderation action failed (%s): %s", type(exc).__name__, detail[:500])
+    now = time.monotonic()
+    notice_key = (message.chat.id, f"{type(exc).__name__}:{detail[:180]}")
+    last_notice = _ERROR_NOTICE_LAST.get(notice_key, 0.0)
+    if now - last_notice < _ERROR_NOTICE_TTL:
+        return
+    _ERROR_NOTICE_LAST[notice_key] = now
+    if len(_ERROR_NOTICE_LAST) > 2000:
+        for key, stamp in list(_ERROR_NOTICE_LAST.items()):
+            if now - stamp > _ERROR_NOTICE_TTL * 4:
+                _ERROR_NOTICE_LAST.pop(key, None)
     try:
         await message.answer(user_text)
     except Exception:
@@ -710,11 +740,9 @@ async def welcome_members(message: Message) -> None:
     for user in message.new_chat_members:
         if user.is_bot:
             if settings.get("antibot"):
-                try:
-                    await bot.ban_chat_member(message.chat.id, user.id)
-                    audit(message.chat.id, 0, "antibot_ban", user.id, "бот добавлен при включённом антиботе")
-                except Exception:
-                    log.exception("Could not remove bot blocked by antibot")
+                audit(message.chat.id, 0, "antibot_detected", user.id,
+                      "monitor_only; bot joined; no automatic ban or deletion")
+                log.info("Bot joined chat=%s user=%s; antibot is monitor-only", message.chat.id, user.id)
             continue
         ensure_user(user.id, message.chat.id, user.username, user.full_name)
         await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
@@ -726,40 +754,75 @@ async def welcome_members(message: Message) -> None:
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
 _ACTIVITY_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
 
-def _persist_activity_sync(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
-    user = ensure_user(user_id, chat_id, username, first_name)
+def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, str]]) -> None:
+    if not items:
+        return
+    grouped: dict[tuple[int, int], list[tuple[int, int, str | None, str, str]]] = defaultdict(list)
+    for item in items:
+        grouped[(item[0], item[1])].append(item)
     now = datetime.now(timezone.utc).isoformat()
-    db_upsert("bot_users", {
-        "user_id": user_id, "chat_id": chat_id,
-        "username": username, "first_name": first_name or "Пользователь",
-        "warns": int(user.get("warns", 0)), "rank": int(user.get("rank", 0)),
-        "messages": int(user.get("messages", 0)) + 1,
-        "last_seen": now,
-    }, "user_id,chat_id")
-    db_insert("bot_activity_events", {
-        "chat_id": chat_id, "user_id": user_id,
-        "username": username, "first_name": first_name or "Пользователь",
-        "created_at": now,
-    })
+    events: list[dict[str, Any]] = []
+    for (chat_id, user_id), records in grouped.items():
+        _chat, _user, username, first_name, _created = records[-1]
+        user = ensure_user(user_id, chat_id, username, first_name)
+        db_upsert("bot_users", {
+            "user_id": user_id, "chat_id": chat_id,
+            "username": username, "first_name": first_name or "Пользователь",
+            "warns": int(user.get("warns", 0)), "rank": int(user.get("rank", 0)),
+            "messages": int(user.get("messages", 0)) + len(records),
+            "last_seen": now,
+        }, "user_id,chat_id")
+        for _chat, _user, event_username, event_first_name, created_at in records:
+            events.append({
+                "chat_id": chat_id, "user_id": user_id,
+                "username": event_username, "first_name": event_first_name or "Пользователь",
+                "created_at": created_at,
+            })
+    if db is not None and events:
+        try:
+            db.table("bot_activity_events").insert(events).execute()
+        except Exception:
+            log.exception("Batched activity-event insert failed for %s events", len(events))
 
-async def _persist_activity_limited(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
-    try:
-        # Serialize updates for the same member so concurrent messages don't
-        # overwrite each other's message counter; different members still run concurrently.
-        lock = _ACTIVITY_LOCKS.setdefault((chat_id, user_id), asyncio.Lock())
-        async with lock:
+_ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str]] = asyncio.Queue(maxsize=5000)
+_ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
+
+async def _activity_writer_loop() -> None:
+    while True:
+        first = await _ACTIVITY_QUEUE.get()
+        batch = [first]
+        deadline = time.monotonic() + 0.75
+        while len(batch) < 100:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                batch.append(await asyncio.wait_for(_ACTIVITY_QUEUE.get(), timeout=remaining))
+            except asyncio.TimeoutError:
+                break
+        try:
             async with _ACTIVITY_WRITE_SEMAPHORE:
-                await asyncio.to_thread(_persist_activity_sync, chat_id, user_id, username, first_name)
-    except Exception:
-        log.exception("Background activity persistence failed")
+                await asyncio.to_thread(_persist_activity_batch_sync, batch)
+        except Exception:
+            log.exception("Activity batch persistence failed")
+        finally:
+            for _ in batch:
+                _ACTIVITY_QUEUE.task_done()
 
 async def track_activity(message: Message) -> None:
     if not message.from_user or message.from_user.is_bot or not message.text or not is_group(message):
         return
-    asyncio.create_task(_persist_activity_limited(
+    item = (
         message.chat.id, message.from_user.id, message.from_user.username,
-        message.from_user.full_name,
-    ))
+        message.from_user.full_name, datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        _ACTIVITY_QUEUE.put_nowait(item)
+    except asyncio.QueueFull:
+        log.error("Activity queue is full; dropping one activity event chat=%s user=%s",
+                  message.chat.id, message.from_user.id)
+
+
 
 # ── Moderation: shared command implementation ─────────────────────────────────
 async def moderation_target(message: Message, command: str) -> tuple[int, str] | None:
@@ -848,7 +911,8 @@ async def mute_cmd(message: Message) -> None:
             )
             return
     else:
-        until = datetime.now(timezone.utc) + duration
+        issued_at = moscow_now()
+        until = issued_at + duration
 
     reason = escape(reason or "не указана")
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
@@ -889,7 +953,9 @@ async def mute_cmd(message: Message) -> None:
             when = format_moscow_time(until)
             await message.answer(
                 f"🔇 {mention(target[0], target[1])} замучен на <b>{escape(duration_label or 'указанный срок')}</b> "
-                f"по причине: <b>{reason}</b>. До {when}.\n👮 Модератор: {actor}."
+                f"по причине: <b>{reason}</b>.\n"
+                f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
+                f"⏳ Истекает: {when}\n👮 Модератор: {actor}."
             )
         else:
             await message.answer(
@@ -993,8 +1059,20 @@ async def warn_cmd(message: Message) -> None:
     if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя выдать предупреждение владельцу бота.")
         return
+    actor_id = message.from_user.id if message.from_user else 0
+    warn_key = (message.chat.id, actor_id, target[0])
+    now_mono = time.monotonic()
+    previous_warn = _WARN_RECENT.get(warn_key, 0.0)
+    if now_mono - previous_warn < 3.0:
+        await message.answer("ℹ️ Похожая команда варна уже обработана. Подожди несколько секунд, чтобы не выдать предупреждение дважды.")
+        return
+    _WARN_RECENT[warn_key] = now_mono
+    if len(_WARN_RECENT) > 5000:
+        for key, stamp in list(_WARN_RECENT.items()):
+            if now_mono - stamp > 60:
+                _WARN_RECENT.pop(key, None)
     reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
-    # Expire warnings older than seven days before adding the new one.
+    # Each warning expires after seven days.
     before = active_warn_count(message.chat.id, target[0])
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {
@@ -1012,7 +1090,7 @@ async def warn_cmd(message: Message) -> None:
     )
     # Three active warnings trigger a ban. This is intentionally a single threshold
     # to avoid multiple penalties firing for the same warning.
-    if count >= 3:
+    if before < 3 <= count:
         try:
             target_member = await bot.get_chat_member(message.chat.id, target[0])
             if target_member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
@@ -1440,20 +1518,31 @@ async def divorce_cmd(message: Message) -> None:
 # ── Integrated moderation stages from moderation.py ──────────────────────────
 # Stage A: durable per-chat filter settings and human-readable time/reason parsing.
 def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, Any]:
-    if not force_refresh and chat_id in _CHAT_SETTINGS_CACHE:
-        return _CHAT_SETTINGS_CACHE[chat_id]
+    now = time.monotonic()
+    cached = _CHAT_SETTINGS_CACHE.get(chat_id)
+    cached_at = _CHAT_SETTINGS_CACHE_TIME.get(chat_id, 0.0)
+    if not force_refresh and cached is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
+        return dict(cached)
     settings = dict(FILTER_DEFAULTS)
     row = db_one("bot_chat_settings", chat_id=chat_id)
     if row and isinstance(row.get("settings"), dict):
         settings.update(row["settings"])
-    _CHAT_SETTINGS_CACHE[chat_id] = settings
-    return settings
+    _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+    _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
+    if len(_CHAT_SETTINGS_CACHE) > 2000:
+        cutoff = now - _CHAT_SETTINGS_CACHE_TTL * 4
+        for cached_chat, stamp in list(_CHAT_SETTINGS_CACHE_TIME.items()):
+            if stamp < cutoff:
+                _CHAT_SETTINGS_CACHE.pop(cached_chat, None)
+                _CHAT_SETTINGS_CACHE_TIME.pop(cached_chat, None)
+    return dict(settings)
 
 def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
     # Update the in-memory state immediately; persist in a worker thread so a
     # slow Supabase response cannot stall commands or other chat updates.
     snapshot = dict(settings)
     _CHAT_SETTINGS_CACHE[chat_id] = snapshot
+    _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
     payload = {
         "chat_id": chat_id, "settings": snapshot,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1511,6 +1600,32 @@ async def rank_cmd(message: Message) -> None:
     if rank < 0 or rank > 5:
         await message.answer("Ранг должен быть от 0 до 5.")
         return
+    if message.from_user and target[0] == message.from_user.id:
+        await message.answer("⛔ Нельзя менять собственный ранг.")
+        return
+    try:
+        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+    except Exception:
+        await message.answer("⛔ Не удалось проверить ваши права в Telegram.")
+        return
+    is_chat_creator = actor_member.status == ChatMemberStatus.CREATOR or (message.from_user and message.from_user.id == OWNER_ID)
+    target_existing = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    try:
+        target_existing_rank = max(0, min(5, int(target_existing.get("rank", 0) or 0)))
+    except (TypeError, ValueError):
+        target_existing_rank = 0
+    actor_existing = db_one("bot_users", user_id=message.from_user.id, chat_id=message.chat.id) or {}
+    try:
+        actor_existing_rank = max(0, min(5, int(actor_existing.get("rank", 0) or 0)))
+    except (TypeError, ValueError):
+        actor_existing_rank = 0
+    effective_actor_rank = 5 if is_chat_creator else max(3, actor_existing_rank)
+    if not is_chat_creator and rank >= effective_actor_rank:
+        await message.answer("⛔ Вы можете назначать только ранг ниже своего. Ранг 5 может назначать только создатель чата или владелец Pear CM.")
+        return
+    if not is_chat_creator and target_existing_rank >= effective_actor_rank and target_existing_rank > 0:
+        await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
+        return
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
@@ -1541,45 +1656,34 @@ async def set_trigger_cmd(message: Message) -> None:
     await message.answer(f"✅ Триггер {threshold} варнов обновлён: {action}.")
 
 async def auto_moderation_filters(message: Message) -> None:
-    """Conservative opt-in moderation: never delete a message unless an enabled rule matches."""
+    """Monitor-only automatic moderation. This handler NEVER deletes or restricts messages."""
     if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
     await track_activity(message)
-
-    # Only explicitly globally banned users are deleted here; maintenance mode never deletes.
-    if message.from_user.id != OWNER_ID:
-        is_command = bool(re.match(r"^\s*(?:/|[!.])", message.text or ""))
-        if not is_command and str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower() == "on":
-            return
-        if not is_command and await asyncio.to_thread(_is_globally_banned, message.from_user.id):
-            try:
-                await message.delete()
-                audit(message.chat.id, OWNER_ID, "globalban_delete", message.from_user.id, "global ban")
-            except Exception:
-                log.warning("Could not delete globally banned user's message chat=%s user=%s", message.chat.id, message.from_user.id)
-            return
-
     text_value = message.text or message.caption or ""
-    # Never run content filters on commands or administrative commands.
-    if text_value and re.match(r"^\s*(?:[/!.+-]|мут(?:\s|$)|анмут(?:\s|$)|размут(?:\s|$)|бан(?:\s|$)|разбан(?:\s|$)|кик(?:\s|$)|варн(?:\s|$)|анварн(?:\s|$)|снятьварн(?:\s|$))", text_value, re.I):
+    if not text_value or re.match(r"^\s*(?:[/!.+-])", text_value):
         return
-    if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
+    if message.from_user.id == OWNER_ID:
+        return
+    try:
+        if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
+            return
+    except Exception:
         return
 
     settings = get_chat_settings(message.chat.id)
-    reason = None
     now = time.monotonic()
     key = (message.chat.id, message.from_user.id)
     normalized = re.sub(r"[^\w\s]", " ", text_value.lower(), flags=re.UNICODE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
+    reason = None
 
-    # Smart anti-spam is opt-in. Short conversational replies are excluded to prevent false positives.
-    if settings.get("antispam") and len(normalized) >= 12 and not message.new_chat_members:
+    if settings.get("antispam") and len(normalized) >= 12:
         history = _SPAM_HISTORY[key]
         while history and now - history[0][0] > 25:
             history.popleft()
         similar_count = 1
-        for stamp, old_text, _old_id in history:
+        for _stamp, old_text, _old_id in history:
             if old_text == normalized:
                 similar_count += 1
             elif len(normalized) >= 24 and len(old_text) >= 24:
@@ -1590,9 +1694,8 @@ async def auto_moderation_filters(message: Message) -> None:
                     pass
         history.append((now, normalized[:1000], message.message_id))
         if similar_count >= 3:
-            reason = "повторяющийся/почти одинаковый спам (3 похожих сообщения за 25 секунд)"
+            reason = f"повторяющиеся/похожие сообщения: {similar_count} за 25 секунд"
 
-    # Flood detection only triggers at a conservative threshold and only if enabled.
     if settings.get("antiflood") and not reason:
         times = _FLOOD_TIMES[key]
         times.append(now)
@@ -1601,66 +1704,41 @@ async def auto_moderation_filters(message: Message) -> None:
             times.popleft()
         limit = max(8, min(30, int(settings.get("flood_limit", 8))))
         if len(times) >= limit:
-            reason = f"флуд ({len(times)} сообщений за {window} секунд)"
+            reason = f"возможный флуд: {len(times)} сообщений за {window} секунд"
             times.clear()
 
-    # Other filters are each opt-in and only act on a direct, explicit match.
     if not reason and text_value:
         if settings.get("antiinvite") and INVITE_RE.search(text_value):
             reason = "пригласительная ссылка"
         elif settings.get("antilink") and URL_RE.search(text_value):
-            reason = "ссылка (фильтр антиссылок)"
+            reason = "ссылка"
         elif settings.get("antifishing") and FISHING_RE.search(text_value):
-            reason = "подозрительная/фишинговая ссылка"
+            reason = "подозрительная ссылка"
         elif settings.get("antimat") and any(word in text_value.lower() for word in BAD_WORDS):
-            reason = "нецензурная лексика"
+            reason = "слова из фильтра антимата"
         elif settings.get("antireklama") and any(word in text_value.lower() for word in AD_WORDS):
-            reason = "реклама (совпадение с ключевым словом)"
+            reason = "совпадение с фильтром рекламы"
         elif settings.get("antikripta") and any(word in text_value.lower() for word in ("bitcoin", "btc", "ethereum", "usdt", "крипта", "binance", "bybit", "кошелёк", "wallet")):
-            reason = "криптореклама"
+            reason = "совпадение с фильтром крипторекламы"
         elif settings.get("antiall") and re.search(r"@(all|everyone|here)\b", text_value, re.I):
             reason = "массовое упоминание"
         elif settings.get("anticaps"):
             letters = [c for c in text_value if c.isalpha()]
             if len(letters) >= 20 and sum(c.isupper() for c in letters) / len(letters) * 100 >= int(settings.get("caps_percent", 70)):
                 reason = "чрезмерный капс"
-    if not reason:
-        if settings.get("antibot") and message.new_chat_members and any(u.is_bot for u in message.new_chat_members):
-            reason = "добавление бота запрещено"
-        elif settings.get("antisticker") and message.sticker:
-            reason = "стикеры запрещены"
-        elif settings.get("antigif") and message.animation:
-            reason = "GIF запрещены"
-        elif settings.get("antiphoto") and message.photo:
-            reason = "фотографии запрещены"
-        elif settings.get("antivideo") and (message.video or message.video_note):
-            reason = "видео запрещены"
-        elif settings.get("antivoice") and (message.voice or message.audio):
-            reason = "голосовые/аудио запрещены"
-        elif settings.get("antidocument") and message.document:
-            reason = "документы запрещены"
 
     if not reason:
         return
-
-    # Deletion is the only automatic action. No automatic mute is applied for a filter hit:
-    # this avoids turning a single false positive into a punitive cascade.
-    try:
-        await message.delete()
-    except TelegramBadRequest as exc:
-        log.info("Filtered message could not be deleted chat=%s message=%s: %s", message.chat.id, message.message_id, str(exc)[:200])
+    notice_key = (message.chat.id, message.from_user.id)
+    last_notice = _SPAM_LAST.get(notice_key)
+    if last_notice and now - last_notice[1] < 30:
         return
-    except TelegramForbiddenError:
-        log.warning("Filter matched but bot lacks delete permission chat=%s", message.chat.id)
-        return
-    audit(message.chat.id, 0, "filter_delete", message.from_user.id, f"{reason}; message_id={message.message_id}")
-    try:
-        await message.answer(
-            f"🛡 Сообщение участника {mention(message.from_user.id, message.from_user.full_name)} удалено фильтром. "
-            f"Причина: <b>{escape(reason)}</b>. Автоматический мут не применялся."
-        )
-    except Exception:
-        log.debug("Could not send filter notice chat=%s", message.chat.id)
+    _SPAM_LAST[notice_key] = (reason, now)
+    audit(message.chat.id, 0, "spam_detected", message.from_user.id,
+          f"monitor_only; reason={reason}; message_id={message.message_id}")
+    log.info("Monitor-only spam signal chat=%s user=%s reason=%s message=%s",
+             message.chat.id, message.from_user.id, reason, message.message_id)
+    # No message.delete(), delete_message(), ban_chat_member(), or restrict_chat_member().
 
 # Important: the old track_activity catch-all handler was registered before
 # moderation and consumed ordinary group updates. Register it last so command
@@ -1956,8 +2034,9 @@ async def check_rights_cmd(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 async def apply_raid_protection(message: Message) -> None:
+    """Detect a possible raid, but never automatically restrict or delete anyone."""
     settings = get_chat_settings(message.chat.id)
-    if not settings.get("antiraid"):
+    if not settings.get("antiraid") or not message.new_chat_members:
         return
     now = time.monotonic()
     joins = _RAID_JOINS[message.chat.id]
@@ -1968,31 +2047,18 @@ async def apply_raid_protection(message: Message) -> None:
     threshold = max(3, min(50, int(settings.get("raid_threshold", 8))))
     if len(joins) < threshold:
         return
-    minutes = max(1, min(30, int(settings.get("raid_restrict_minutes", 2))))
-    restricted = 0
-    for user in message.new_chat_members:
-        if user.is_bot:
-            continue
-        try:
-            if await is_admin(bot, message.chat.id, user.id):
-                continue
-            await bot.restrict_chat_member(
-                chat_id=message.chat.id, user_id=user.id,
-                permissions=ChatPermissions(
-                    can_send_messages=False, can_send_audios=False, can_send_documents=False,
-                    can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
-                    can_send_voice_notes=False, can_send_polls=False,
-                    can_send_other_messages=False, can_add_web_page_previews=False,
-                ),
-                until_date=datetime.now(timezone.utc) + timedelta(minutes=minutes),
-            )
-            restricted += 1
-            audit(message.chat.id, 0, "raid_restrict", user.id, f"threshold={threshold}; window={window}s; minutes={minutes}")
-        except Exception:
-            log.exception("Raid restriction failed")
+    audit(message.chat.id, 0, "possible_raid_detected", None,
+          f"monitor_only; joins={len(joins)}; threshold={threshold}; window={window}s")
+    log.warning("Possible raid detected chat=%s joins=%s window=%s; no automatic restrictions applied",
+                message.chat.id, len(joins), window)
     joins.clear()
-    if restricted:
-        await message.answer(f"🛡 Обнаружен возможный рейд: временно ограничено новых участников: <b>{restricted}</b> на {minutes} мин. Проверьте настройки и права бота.")
+    try:
+        await message.answer(
+            f"🛡 Обнаружена возможная волна вступлений ({threshold}+ за {window} сек.). "
+            "Автоматические ограничения не применялись; проверьте участников вручную."
+        )
+    except Exception:
+        pass
 
 
 
@@ -2639,9 +2705,15 @@ async def main() -> None:
     await bot.set_my_commands(private_commands + owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     await bot.delete_webhook(drop_pending_updates=False)
     log.info("Bot started")
+    activity_writer = asyncio.create_task(_activity_writer_loop(), name="pear-activity-writer")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        activity_writer.cancel()
+        try:
+            await activity_writer
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 if __name__ == "__main__":
