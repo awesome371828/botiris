@@ -2167,7 +2167,7 @@ async def top_cmd(message: Message) -> None:
 
 
 @router.message(F.text.regexp(r"(?i)^\\s*\\+ник(?:\\s|$)"))
-@router.message(F.text.regexp(r"(?i)^\\s*/nick(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*/nick(?:\s|$)"))
 async def set_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Никнеймы можно задавать внутри группы.")
@@ -2175,7 +2175,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = (message.text or "").strip()
-    match = re.match(r"(?is)^(?:\\+ник|/nick)(?:@\\w+)?(?:\\s+(.+))?$", raw)
+    match = re.match(r"(?is)^(?:\+ник|/nick)(?:@\w+)?(?:\s+(.+))?$", raw)
     nickname = (match.group(1) or "").strip() if match else ""
     target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
     if not target_user or target_user.is_bot:
@@ -2205,7 +2205,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
         return
     await message.answer(f"✅ Ник участника изменён на <b>{escape(nickname)}</b>. Он будет показываться в статистике и профиле чата.")
 
-@router.message(F.text.regexp(r"(?i)^\\s*(?:-ник|/unnick)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:-ник|/unnick)(?:\s|$)"))
 async def clear_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Никнеймы можно убирать внутри группы.")
