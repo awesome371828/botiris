@@ -53,6 +53,8 @@ The welcome handler already greets new non-bot members by default. The Telegram 
 ## Iris-style activity statistics and moderator list
 
 - `топ вся`, `топ день` / `топ сутки`, `топ неделя`, `топ месяц`, `топ год` show chat-specific activity with clickable profile names and the total message count.
+- `+ник АВЕСОМ` sets your display nickname for this chat; reply to a participant with `+ник Новый ник` to rename them as an administrator. `-ник` removes your own nickname; reply with `-ник` to clear another member's nickname as an administrator. Statistics show the display nickname/name as a clickable profile link, not the `@username`.
+- The supplied 14 Oct 2026 Iris snapshot is used as the all-time baseline only in the matching XVII chat; Pear CM counts observed after the snapshot are added on top, with known counters from the same moment offset to avoid double-counting. Period statistics still show messages actually tracked for each period.
 - `стата вся`, `стата неделя`, etc. are aliases; `топ 30 месяц` selects the number of rows (1–100).
 - `кто админ` groups Pear CM ranks into star-headed sections and links each name to the Telegram profile.
 - The fast period-statistics path uses `bot_activity_daily`; run the updated `schema.sql` in Supabase to enable atomic daily aggregation. If the table is not present, the bot falls back to the raw activity-event log.
