@@ -1195,28 +1195,44 @@ def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, st
             log.exception("Daily activity aggregate update failed for %s grouped records", len(daily))
 
 _ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str]] = asyncio.Queue(maxsize=5000)
+# Temporary bounded overflow absorbs bursts while the database writer catches up.
+_ACTIVITY_OVERFLOW_MAX = 20000
+_ACTIVITY_OVERFLOW: deque[tuple[int, int, str | None, str, str]] = deque()
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
 
 async def _activity_writer_loop() -> None:
     while True:
         first = await _ACTIVITY_QUEUE.get()
         batch = [first]
+        queued_count = 1
         deadline = time.monotonic() + 0.75
         while len(batch) < 100:
+            while _ACTIVITY_OVERFLOW and len(batch) < 100:
+                batch.append(_ACTIVITY_OVERFLOW.popleft())
+            if len(batch) >= 100:
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             try:
-                batch.append(await asyncio.wait_for(_ACTIVITY_QUEUE.get(), timeout=remaining))
+                batch.append(await asyncio.wait_for(_ACTIVITY_QUEUE.get(), timeout=min(remaining, 0.15)))
+                queued_count += 1
             except asyncio.TimeoutError:
-                break
+                if not _ACTIVITY_OVERFLOW:
+                    break
         try:
             async with _ACTIVITY_WRITE_SEMAPHORE:
                 await asyncio.to_thread(_persist_activity_batch_sync, batch)
         except Exception:
-            log.exception("Activity batch persistence failed")
+            log.exception("Activity batch persistence failed (size=%s)", len(batch))
+            room = _ACTIVITY_OVERFLOW_MAX - len(_ACTIVITY_OVERFLOW)
+            if room > 0:
+                _ACTIVITY_OVERFLOW.extend(batch[:room])
+            if room < len(batch):
+                log.critical("Activity overflow buffer full; %s events could not be retained", len(batch) - max(room, 0))
         finally:
-            for _ in batch:
+            # Overflow entries were never added to asyncio.Queue and must not call task_done().
+            for _ in range(queued_count):
                 _ACTIVITY_QUEUE.task_done()
 
 async def track_activity(message: Message) -> None:
@@ -1238,8 +1254,13 @@ async def track_activity(message: Message) -> None:
     try:
         _ACTIVITY_QUEUE.put_nowait(item)
     except asyncio.QueueFull:
-        log.error("Activity queue is full; dropping one activity event chat=%s user=%s",
-                  message.chat.id, message.from_user.id)
+        if len(_ACTIVITY_OVERFLOW) < _ACTIVITY_OVERFLOW_MAX:
+            _ACTIVITY_OVERFLOW.append(item)
+            log.warning("Activity queue is full; buffered event chat=%s user=%s overflow=%s",
+                        message.chat.id, message.from_user.id, len(_ACTIVITY_OVERFLOW))
+        else:
+            log.critical("Activity queue and overflow buffer are full; event lost chat=%s user=%s",
+                         message.chat.id, message.from_user.id)
 
 
 
