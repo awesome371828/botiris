@@ -50,13 +50,11 @@ def acquire_single_instance_lock() -> None:
         return
     lock_path = os.getenv("BOT_LOCK_PATH", "/tmp/pear_cm_polling.lock")
     handle = open(lock_path, "w", encoding="utf-8")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        handle.close()
-        log.critical("Another Pear CM process already holds %s; refusing duplicate Telegram polling", lock_path)
-        raise SystemExit(23)
+    # Wait for the current local instance to exit rather than repeatedly restarting
+    # and hammering getUpdates. flock releases automatically when the process dies.
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     _PROCESS_LOCK_HANDLE = handle  # Keep the descriptor open for the entire process lifetime.
+    log.info("Single-instance polling lock acquired: %s", lock_path)
 
 
 # ── Configuration ────────────────────────────────────────────────────────────
