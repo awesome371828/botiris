@@ -1215,7 +1215,10 @@ def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, st
 
     for (chat_id, user_id), records in grouped.items():
         latest = records[-1]
-        current = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
+        # Use a strict read here: db_one intentionally converts read failures to None,
+        # but treating a database outage as a new user could reset rank/warnings.
+        current_rows = db.table("bot_users").select("*").eq("user_id", user_id).eq("chat_id", chat_id).limit(1).execute().data or []
+        current = current_rows[0] if current_rows else {}
         saved = db_upsert("bot_users", {
             "user_id": user_id, "chat_id": chat_id,
             "username": latest.get("username"),
