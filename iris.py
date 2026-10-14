@@ -375,17 +375,40 @@ def invalidate_user_rank(chat_id: int, user_id: int) -> None:
     _USER_RANK_CACHE.pop((chat_id, user_id), None)
 
 async def require_admin(message: Message, min_rank: int = 1) -> bool:
-    min_rank = required_rank_for(message, min_rank)
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
         return False
-    if await is_admin(bot, message.chat.id, message.from_user.id):
+    # .дк must actually restrict a command even for Telegram admins; the chat
+    # creator and configured bot owner remain emergency overrides.
+    key = moderation_command_key(message)
+    try:
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        custom_rank = settings.get(f"modrank_{key}") if key else None
+        if custom_rank is not None:
+            min_rank = max(1, min(5, int(custom_rank)))
+    except (TypeError, ValueError):
+        custom_rank = None
+    if message.from_user.id == OWNER_ID:
         return True
-    rank = user_rank(message.chat.id, message.from_user.id)
+    try:
+        member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        is_creator = member.status == ChatMemberStatus.CREATOR
+        is_telegram_admin = member.status == ChatMemberStatus.ADMINISTRATOR
+    except Exception:
+        is_creator = False
+        is_telegram_admin = False
+    rank = await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id)
+    if custom_rank is not None:
+        if is_creator or rank >= min_rank:
+            return True
+        role = role_name(min_rank)
+        await message.answer(f"⛔ Для этой команды нужен ранг не ниже {min_rank} — {role}.")
+        return False
+    if is_creator or is_telegram_admin:
+        return True
     if rank >= min_rank:
         return True
-    role = {1: "младшего модератора", 2: "старшего модератора", 3: "младшего администратора", 4: "старшего администратора", 5: "создателя"}.get(min_rank, "модератора")
-    await message.answer(f"⛔ Для этой команды нужен ранг не ниже {min_rank} ({role}) или права администратора Telegram.")
+    await message.answer(f"⛔ Для этой команды нужен ранг не ниже {min_rank} — {role_name(min_rank)} или права администратора Telegram.")
     return False
 
 async def require_real_admin(message: Message) -> bool:
@@ -520,10 +543,13 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
     for raw_value in args:
         raw = raw_value.strip().strip(",;:")
         if raw.isdigit():
+            # Tiny numbers are much more likely to be rank/duration arguments than user IDs.
+            if len(raw) < 7:
+                continue
             return int(raw), f"ID {raw}"
         if raw.startswith("@") and len(raw) > 1:
             username = raw[1:].lower()
-            rows = db_rows("bot_users", limit=1000, chat_id=message.chat.id)
+            rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
             for row in rows:
                 if (row.get("username") or "").lower().lstrip("@") == username:
                     return int(row["user_id"]), row.get("first_name") or raw
@@ -1867,27 +1893,38 @@ async def command_rank_rule_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     parts = (message.text or "").strip().split()
-    if len(parts) != 3:
-        await message.answer("Формат: <code>.дк мут 4</code> — для команды нужен ранг 4. Допустимые ранги: 1–5.")
-        return
-    key = {"мут":"mute", "размут":"unmute", "анмут":"unmute", "бан":"ban", "разбан":"unban",
-           "кик":"kick", "варн":"warn", "анварн":"unwarn", "снятьварн":"unwarn",
-           "повысить":"promote", "понизить":"demote", "очистить":"purge", "-смс":"delete",
-           "пин":"pin", "анпин":"unpin"}.get(parts[1].lower(), parts[1].lower())
-    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
-        await message.answer("Неизвестная команда. Пример: <code>.дк мут 4</code>.")
+    if len(parts) < 3:
+        await message.answer("Формат: <code>.дк мут 4</code> или <code>.дк снять варн 3</code>. Допустимые ранги: 1–5.")
         return
     try:
-        required = int(parts[2])
+        required = int(parts[-1])
     except ValueError:
         required = 0
     if not 1 <= required <= 5:
         await message.answer("Ранг должен быть от 1 до 5.")
         return
+    command_phrase = " ".join(parts[1:-1]).lower()
+    aliases = {
+        "мут":"mute", "замут":"mute", "замутить":"mute", "замуть":"mute", "дать мут":"mute", "выдать мут":"mute",
+        "размут":"unmute", "анмут":"unmute", "унмут":"unmute", "снять мут":"unmute", "снять муту":"unmute",
+        "убрать мут":"unmute", "убрать муту":"unmute", "снятьмут":"unmute",
+        "бан":"ban", "забанить":"ban", "дать бан":"ban", "выдать бан":"ban",
+        "разбан":"unban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick", "исключить":"kick",
+        "варн":"warn", "предупреждение":"warn", "предупредить":"warn", "дать варн":"warn", "выдать варн":"warn",
+        "снять варн":"unwarn", "убрать варн":"unwarn", "удалить варн":"unwarn",
+        "снять предупреждение":"unwarn", "убрать предупреждение":"unwarn", "анварн":"unwarn",
+        "повысить":"promote", "повысить ранг":"promote", "понизить":"demote", "понизить ранг":"demote",
+        "очистить":"purge", "-смс":"delete", "удалить сообщения":"delete",
+        "пин":"pin", "закрепить":"pin", "анпин":"unpin", "открепить":"unpin",
+    }
+    key = aliases.get(command_phrase, command_phrase)
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
+        await message.answer("Неизвестная команда. Примеры: <code>.дк мут 4</code>, <code>.дк снять варн 3</code>.")
+        return
     settings = get_chat_settings(message.chat.id)
     settings[f"modrank_{key}"] = required
     save_chat_settings(message.chat.id, settings)
-    await message.answer(f"🔐 Для команды <b>{parts[1]}</b> теперь нужен ранг <b>{required} — {role_name(required)}</b>.")
+    await message.answer(f"🔐 Для команды <b>{escape(command_phrase)}</b> теперь нужен ранг <b>{required} — {role_name(required)}</b>.")
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:настройки фильтров|фильтры|filters)(?:\s|$)"))
 async def filters_status_cmd(message: Message) -> None:
