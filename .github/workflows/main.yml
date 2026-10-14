@@ -50,6 +50,9 @@ jobs:
             code=$?
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
               echo "Three hours reached; restarting bot process."
+            elif [ "$code" -eq 23 ]; then
+              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever."
+              exit 23
             else
               echo "Bot exited with code $code; retrying in 10 seconds."
             fi
