@@ -39,6 +39,17 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         }
         self.assertTrue(required.issubset(self.function_names), required - self.function_names)
 
+    def test_anti_spam_penalties_are_opt_in_and_fail_closed(self):
+        self.assertIn('"filter_action": "monitor"', self.source)
+        self.assertIn('aliases = {', self.source[self.source.index("async def filter_action_cmd"):self.source.index("async def apply_configured_filter_action")])
+        helper_start = self.source.index("async def apply_configured_filter_action")
+        helper_end = self.source.index("async def auto_moderation_filters", helper_start)
+        helper = self.source[helper_start:helper_end]
+        self.assertIn('action not in {"delete", "mute"}', helper)
+        self.assertIn("if member is None:", helper)
+        self.assertIn("ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR", helper)
+        self.assertIn("filteraction", self.source)
+
     def test_monitor_only_filter_does_not_apply_automatic_penalties(self):
         function = next(
             node for node in ast.walk(self.tree)
