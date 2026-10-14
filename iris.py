@@ -1761,6 +1761,52 @@ async def info_cmd(message: Message) -> None:
         f"Сообщений: <b>{int(user.get('messages', 0))}</b>"
     )
 
+# Snapshot from the user's Iris leaderboard (14 Oct 2026, chat XVII).
+# The observed Pear CM counters at that moment are subtracted, so only newer messages
+# are added on top of Iris' historical totals.
+_IRIS_BASELINE_TOTAL = 215531
+_PEAR_TOTAL_AT_BASELINE = 2452
+_IRIS_BASELINE_USERS = {
+    "tgvkq": ("XVII хирейнз", 38412),
+    "attakill": ("мади ювелир", 16443),
+    "kobwq": ("кобяк патапим", 15557),
+    "osadaq": ("алоени", 15280),
+    "roseov": ("росеов расколов", 10571),
+    "rypyi": ("awesome", 6562),
+    "matteoxaxa": ("mattoslav", 6462),
+    "opekcx": ("fyrtonovskyy", 5257),
+    "proletarov": ("алеша", 4874),
+    "ocvsq": ("Young", 3990),
+    "bleeg": ("фифти сент", 3619),
+    "oxcqw": ("сабвейка", 3579),
+    "tgiwq": ("килька хирейнз", 3373),
+    "moxvd": ("визи хирейнз  NomerokAppBot", 3201),
+    "shqume": ("Shqume", 2878),
+    "qxhza": ("Pepel//Archangelov", 2826),
+    "qwzqi": ("Кузя", 2360),
+    "heroxec": ("overlord", 2153),
+    "unfargettable": ("What Crime", 2039),
+    "smolderbody": ("spleen", 1947),
+    "shefkb": ("шеф", 1893),
+    "ispumpkin": ("Царек", 1843),
+    "qvmmq": ("insomniac", 1823),
+    "pidaxi": ("кирилл", 1364),
+    "texwu": ("XVII малой", 1357),
+    "alcapone_work": ("XVII ALCapone eskizz", 1321),
+    "whyflipper": ("кирч", 1321),
+    "skaming1337": ("God", 1281),
+    "wolterenko": ("Егоркин-Ю", 1263),
+    "oxuest": ("oxuest", 1233),
+}
+# Pear CM all-time counts visible in the same snapshot; used as a one-time offset.
+_PEAR_USER_COUNTS_AT_BASELINE = {
+    "tgvkq": 770, "rypyi": 518, "roseov": 308, "kobwq": 169, "oxcqw": 144,
+    "bleeg": 120, "osadaq": 110, "attakill": 101, "qxhza": 66, "fxguf": 56,
+    "vbnk": 25, "ispumpkin": 12, "qseeis": 9, "ocvsq": 7, "cerry1n": 7,
+    "whnix": 6, "mercifley": 5, "wqsir": 4, "pidaxi": 4, "m1santhr0pic": 3,
+    "tgiwq": 3, "qwzqi": 1, "oemqx": 1, "femxl": 1,
+}
+
 @router.message(Command("top", "stats", "stat"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:топ|стата|статистика)(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
@@ -1926,6 +1972,51 @@ async def top_cmd(message: Message) -> None:
                     item["username"] = row["username"]
                 if row.get("first_name"):
                     item["first_name"] = row["first_name"]
+
+            # Activate the imported Iris baseline only in the intended chat, identified
+            # by several known members. This avoids changing every other group.
+            if chat_only:
+                seen_base_users = {
+                    str(item.get("username") or "").lstrip("@").casefold()
+                    for item in grouped.values()
+                    if str(item.get("username") or "").lstrip("@").casefold() in _IRIS_BASELINE_USERS
+                }
+                if len(seen_base_users) >= 5:
+                    current_by_username = {
+                        str(item.get("username") or "").lstrip("@").casefold(): item
+                        for item in grouped.values() if item.get("username")
+                    }
+                    seeded: dict[str, dict] = {}
+                    consumed_user_ids: set[int] = set()
+                    for uname, (base_name, base_count) in _IRIS_BASELINE_USERS.items():
+                        current = current_by_username.get(uname, {})
+                        uid = int(current.get("user_id") or 0)
+                        observed = int(current.get("messages") or 0)
+                        offset = int(_PEAR_USER_COUNTS_AT_BASELINE.get(uname, 0))
+                        delta = max(0, observed - offset)
+                        seeded[uname] = {
+                            "user_id": uid,
+                            "username": uname,
+                            "first_name": current.get("first_name") or base_name,
+                            "messages": int(base_count) + delta,
+                        }
+                        if uid:
+                            consumed_user_ids.add(uid)
+                    for uid, current in grouped.items():
+                        uname = str(current.get("username") or "").lstrip("@").casefold()
+                        if uname in _IRIS_BASELINE_USERS:
+                            continue
+                        observed = int(current.get("messages") or 0)
+                        offset = int(_PEAR_USER_COUNTS_AT_BASELINE.get(uname, 0))
+                        delta = max(0, observed - offset)
+                        if delta > 0:
+                            seeded[uname or f"id:{uid}"] = {
+                                **current, "messages": delta,
+                            }
+                    grouped_rows = list(seeded.values())
+                    total_messages = _IRIS_BASELINE_TOTAL + max(0, total_messages - _PEAR_TOTAL_AT_BASELINE)
+                    return sorted(grouped_rows, key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
+
             return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
 
         now_local = moscow_now()
@@ -2022,13 +2113,33 @@ async def top_cmd(message: Message) -> None:
         await message.answer(f"📊 Пока нет данных для статистики {labels[period]}. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
         return
 
-    # Plain-text leaderboard names: no clickable Telegram profile links.
+    # Display names (not usernames) are clickable profile links, like Iris.
+    profile_names: dict[int, str] = {}
+    if db is not None and chat_only:
+        try:
+            profiles = await asyncio.to_thread(
+                lambda: db.table("bot_member_profiles").select("user_id,display_name")
+                .eq("chat_id", message.chat.id).range(0, 999).execute().data or []
+            )
+            profile_names = {
+                int(p.get("user_id") or 0): str(p.get("display_name") or "").strip()
+                for p in profiles if str(p.get("display_name") or "").strip()
+            }
+        except Exception:
+            # Existing stats remain available if the optional nickname/profile table is unavailable.
+            profile_names = {}
     lines = [f"📊 <b>Статистика по общительным пользователям {labels[period]}</b>", ""]
     for index, row in enumerate(rows, 1):
+        uid = int(row.get("user_id") or 0)
         username = str(row.get("username") or "").lstrip("@")
-        display_name = str(row.get("first_name") or "Участник")
-        # Show @username as ordinary text; fall back to the display name.
-        display = escape(f"@{username}" if username else display_name)
+        display_name = profile_names.get(uid) or str(row.get("first_name") or "Участник")
+        safe_name = escape(display_name)
+        if uid > 0:
+            display = mention(uid, display_name)
+        elif username:
+            display = f'<a href="https://t.me/{escape(username, quote=True)}">{safe_name}</a>'
+        else:
+            display = safe_name
         if period == "month":
             badge = "🔥🔥🔥 " if index <= 5 else ("💥💥 " if index <= 11 else ("⭐️ " if index <= 22 else "⚡️ "))
         elif period == "week":
@@ -2053,6 +2164,72 @@ async def top_cmd(message: Message) -> None:
         await message.answer(chunk)
 
 
+
+
+@router.message(F.text.regexp(r"(?i)^\\s*\\+ник(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\\s*/nick(?:\\s|$)"))
+async def set_chat_nickname_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Никнеймы можно задавать внутри группы.")
+        return
+    if not message.from_user:
+        return
+    raw = (message.text or "").strip()
+    match = re.match(r"(?is)^(?:\\+ник|/nick)(?:@\\w+)?(?:\\s+(.+))?$", raw)
+    nickname = (match.group(1) or "").strip() if match else ""
+    target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
+    if not target_user or target_user.is_bot:
+        await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
+        return
+    if target_user.id != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
+        await message.answer("Чужой ник может менять только администратор. Для своего ника напиши <code>+ник ТВОЙ НИК</code>.")
+        return
+    if not nickname:
+        await message.answer("Укажи ник: <code>+ник АВЕСОМ</code>. Чтобы убрать его — <code>-ник</code>.")
+        return
+    if len(nickname) > 64:
+        await message.answer("Ник слишком длинный: максимум 64 символа.")
+        return
+    if nickname.startswith("@"):
+        await message.answer("Укажи отображаемый ник, а не @username. Например: <code>+ник АВЕСОМ</code>.")
+        return
+    current = await asyncio.to_thread(
+        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_user.id
+    ) or {}
+    saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", {
+        **current, "chat_id": message.chat.id, "user_id": target_user.id,
+        "display_name": nickname, "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, "chat_id,user_id")
+    if not saved:
+        await message.answer("Не удалось сохранить ник. Проверь Supabase и выполни актуальный schema.sql.")
+        return
+    await message.answer(f"✅ Ник участника изменён на <b>{escape(nickname)}</b>. Он будет показываться в статистике и профиле чата.")
+
+@router.message(F.text.regexp(r"(?i)^\\s*(?:-ник|/unnick)(?:\\s|$)"))
+async def clear_chat_nickname_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Никнеймы можно убирать внутри группы.")
+        return
+    if not message.from_user:
+        return
+    target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
+    if not target_user or target_user.is_bot:
+        await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
+        return
+    if target_user.id != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
+        await message.answer("Чужой ник может убрать только администратор.")
+        return
+    current = await asyncio.to_thread(
+        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_user.id
+    ) or {}
+    if not str(current.get("display_name") or "").strip():
+        await message.answer("У участника нет установленного ника.")
+        return
+    saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", {
+        **current, "chat_id": message.chat.id, "user_id": target_user.id,
+        "display_name": "", "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, "chat_id,user_id")
+    await message.answer("♻️ Ник сброшен. Теперь в статистике будет отображаться имя из Telegram." if saved else "Не удалось убрать ник. Проверь Supabase.")
 
 @router.message(Command("logs"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?логи(?:\s|$)"))
