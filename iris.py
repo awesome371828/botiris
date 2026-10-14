@@ -1673,6 +1673,9 @@ async def delete_message_cmd(message: Message) -> None:
     match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
     if match and match.group(1):
         requested = int(match.group(1))
+        if requested < 1:
+            await message.answer("Укажи число от 1 до 100: <code>-смс 10</code>.")
+            return
         if requested > 100:
             try:
                 await message.delete()
