@@ -241,6 +241,16 @@ def _db_read_with_retry(table: str, operation: str, build_query):
             return build_query()
         except Exception as exc:
             if attempt < 2 and _is_transient_db_error(exc):
+                # Never sleep/retry synchronously on the asyncio event-loop thread.
+                try:
+                    asyncio.get_running_loop()
+                    on_event_loop = True
+                except RuntimeError:
+                    on_event_loop = False
+                if on_event_loop:
+                    log.warning("Temporary Supabase %s failure for %s on event loop; skipping blocking retry: %s",
+                                operation, table, exc)
+                    return None
                 delay = 0.25 * (2 ** attempt)
                 log.warning("Temporary Supabase %s failure for %s (attempt %s/3); retrying in %.2fs: %s",
                             operation, table, attempt + 1, delay, exc)
