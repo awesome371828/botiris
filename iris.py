@@ -247,6 +247,41 @@ def db_upsert(table: str, payload: dict, on_conflict: str) -> dict | None:
         log.exception("Supabase upsert failed: %s", table)
         return None
 
+# Audit writes must exist for every moderation command. Keep non-critical audit calls
+# off the event loop; commands that need confirmation can await audit_wait().
+def _audit_payload(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
+                   details: str | None = None) -> dict[str, Any]:
+    return {
+        "chat_id": int(chat_id),
+        "actor_id": int(actor_id or 0),
+        "action": str(action)[:100],
+        "target_id": int(target_id) if target_id is not None else None,
+        "details": str(details)[:2000] if details is not None else None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+def audit(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
+          details: str | None = None) -> None:
+    payload = _audit_payload(chat_id, actor_id, action, target_id, details)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        db_insert("bot_audit", payload)
+        return
+    # Audit logging must not add a Supabase round-trip to unrelated commands.
+    loop.create_task(asyncio.to_thread(db_insert, "bot_audit", payload))
+
+def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
+               details: str | None = None) -> bool:
+    """Synchronous persistence primitive used by audit_wait_async; retained for worker threads."""
+    return bool(db_insert("bot_audit", _audit_payload(chat_id, actor_id, action, target_id, details)))
+
+async def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
+                     details: str | None = None) -> bool:
+    """Persist an audit event without blocking Telegram update processing."""
+    payload = _audit_payload(chat_id, actor_id, action, target_id, details)
+    return bool(await asyncio.to_thread(db_insert, "bot_audit", payload))
+
 def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: str) -> dict:
     current = db_one("bot_users", user_id=user_id, chat_id=chat_id)
     if current:
@@ -1244,14 +1279,24 @@ async def warn_cmd(message: Message) -> None:
                 _WARN_RECENT.pop(key, None)
     reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
     # Each warning expires after seven days.
-    before = await asyncio.to_thread(active_warn_count, message.chat.id, target[0])
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    await asyncio.to_thread(db_upsert, "bot_users", {
-        **user, "user_id": target[0], "chat_id": message.chat.id,
-        "warns": before + 1, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
-    }, "user_id,chat_id")
-    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
-                      f"warns={before + 1}; reason={reason}; expires_in_days=7")
+    # Fetch the current warning ledger and user row concurrently; neither depends on the other.
+    before, user = await asyncio.gather(
+        asyncio.to_thread(active_warn_count, message.chat.id, target[0]),
+        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
+    )
+    user = user or {}
+    saved, audit_saved = await asyncio.gather(
+        asyncio.to_thread(db_upsert, "bot_users", {
+            **user, "user_id": target[0], "chat_id": message.chat.id,
+            "warns": before + 1, "rank": int(user.get("rank") or 0),
+            "messages": int(user.get("messages") or 0),
+        }, "user_id,chat_id"),
+        audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
+                   f"warns={before + 1}; reason={reason}; expires_in_days=7"),
+    )
+    if not saved:
+        await message.answer("⚠️ Варн не сохранён: Supabase не подтвердил запись в bot_users. Проверь журнал и подключение базы.")
+        return
     count = before + 1
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     await message.answer(
