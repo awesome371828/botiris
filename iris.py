@@ -26,7 +26,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramConflictError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
@@ -173,9 +173,14 @@ async def _remember_message_id(handler, event: Message, data):
         elapsed = time.monotonic() - started
         _COMMAND_LATENCIES.append((elapsed, type(event).__name__))
         if elapsed >= 2.0:
-            log.warning("Slow update handler: %.3fs chat=%s message=%s", elapsed,
-                        getattr(getattr(event, "chat", None), "id", "?"),
-                        getattr(event, "message_id", "?"))
+            raw_text = (getattr(event, "text", None) or getattr(event, "caption", None) or "").replace("\n", " ")[:100]
+            log.warning(
+                "Slow update handler: %.3fs type=%s chat=%s user=%s message=%s text=%r",
+                elapsed, type(event).__name__,
+                getattr(getattr(event, "chat", None), "id", "?"),
+                getattr(getattr(event, "from_user", None), "id", "?"),
+                getattr(event, "message_id", "?"), raw_text,
+            )
         if len(_RECENT_MESSAGE_IDS) > 1000:
             for old_chat in list(_RECENT_MESSAGE_IDS.keys())[:200]:
                 _RECENT_MESSAGE_IDS.pop(old_chat, None)
@@ -4744,6 +4749,12 @@ async def main() -> None:
     schedule_worker = asyncio.create_task(_schedule_worker(), name="pear-chat-scheduler")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except TelegramConflictError:
+        log.critical(
+            "TelegramConflictError: another process is polling getUpdates for this token. "
+            "Stop every other bot instance / workflow using this token before restarting."
+        )
+        raise SystemExit(23)
     finally:
         # Do not discard queued counters immediately during normal restarts.
         try:
