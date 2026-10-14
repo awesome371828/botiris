@@ -1091,18 +1091,20 @@ async def admins(message: Message) -> None:
         owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
         ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
+        telegram_admin_ids: set[int] = set()
+        telegram_admin_lines: list[tuple[str, int, str | None]] = []
         if isinstance(telegram_admins_result, BaseException):
-            log.info("Could not fetch Telegram chat creator for chat %s: %s", message.chat.id, telegram_admins_result)
+            log.info("Could not fetch Telegram administrators for chat %s: %s", message.chat.id, telegram_admins_result)
         else:
             for member in telegram_admins_result:
-                if member.status != ChatMemberStatus.CREATOR:
-                    continue
                 u = member.user
+                telegram_admin_ids.add(u.id)
                 username = u.username
                 display = u.full_name or (f"@{username}" if username else f"ID {u.id}")
-                if username:
-                    display = f"@{username} ({display})"
-                ranks[u.id] = (5, display, username)
+                label = "создатель" if member.status == ChatMemberStatus.CREATOR else "администратор"
+                internal_rank = ranks.get(u.id, (0, "", None))[0]
+                suffix = f" · ранг Pear CM {internal_rank}" if internal_rank > 0 else ""
+                telegram_admin_lines.append((f"{display} · {label}{suffix}", u.id, username))
 
         rank_titles = {
             5: "⭐⭐⭐⭐⭐ Цари",
@@ -1112,25 +1114,32 @@ async def admins(message: Message) -> None:
             1: "⭐ Модераторы",
         }
         grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
+        # Telegram administrators are listed once in their real role section.
+        # Internal-only Pear CM ranks remain below.
         for uid, entry in ranks.items():
-            grouped[entry[0]].append((uid, entry[1], entry[2]))
-        lines = ["🛡 <b>Модераторы чата</b>", ""]
+            if uid not in telegram_admin_ids:
+                grouped[entry[0]].append((uid, entry[1], entry[2]))
+        lines = ["🛡 <b>Администраторы и модераторы</b>", ""]
+        if telegram_admin_lines:
+            lines.append("<b>👑 Администраторы Telegram</b>")
+            for name, uid, username in sorted(telegram_admin_lines, key=lambda item: item[0].casefold()):
+                display = escape(str(name or "Участник"))
+                link = f"https://t.me/{username}" if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else f"tg://user?id={uid}"
+                lines.append(f"• <a href=\"{link}\">{display}</a>")
+            lines.append("")
         for rank in (5, 4, 3, 2, 1):
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
             if not members:
                 continue
-            lines.append(f"<b>{rank_titles[rank]}</b>")
+            lines.append(f"<b>{rank_titles[rank]} · Pear CM</b>")
             icon = "🎾" if rank == 3 else "🏐"
             for uid, name, username in members:
                 display = escape(str(name or "Участник"))
-                if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-                    link = f"https://t.me/{username}"
-                else:
-                    link = f"tg://user?id={uid}"
+                link = f"https://t.me/{username}" if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else f"tg://user?id={uid}"
                 lines.append(f"{icon} <a href=\"{link}\">{display}</a>")
             lines.append("")
         if len(lines) <= 2:
-            lines = ["🛡 <b>Модераторы чата</b>", "Пока никто не назначен модератором Pear CM."]
+            lines = ["🛡 <b>Администраторы и модераторы</b>", "Пока нет администраторов Telegram или модераторов Pear CM."]
         await message.answer("\n".join(lines).strip())
     except Exception:
         log.exception("Could not build Pear CM internal admin list")
