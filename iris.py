@@ -2271,8 +2271,8 @@ async def logs_cmd(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 # ── Simple marriage feature ───────────────────────────────────────────────────
-@router.message(Command("marry"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?брак(?:\s|$)"))
+@router.message(Command("marry", "proposemarriage", "wed"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|браки|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)(?:\s|$)"))
 async def marry_cmd(message: Message) -> None:
     if not message.from_user or not is_group(message):
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
@@ -2321,7 +2321,8 @@ async def accept_marry_cmd(message: Message) -> None:
             return
     await message.answer(f"💍 Поздравляем! {mention(proposer.id, proposer.full_name)} и {mention(message.from_user.id, message.from_user.full_name)} теперь в браке!")
 
-@router.message(Command("marriage"))
+@router.message(Command("marriage", "mymarriage", "myrelations", "relationships"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:мой брак|моя свадьба|мои отношения|мои отн|мои отнош|мои браки|брак мой|отношения|отн)(?:\s|$)"))
 async def marriage_status_cmd(message: Message) -> None:
     if not message.from_user:
         return
@@ -2330,9 +2331,23 @@ async def marriage_status_cmd(message: Message) -> None:
         if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
             await message.answer(f"💍 Брак: <b>{row.get('user1_name', 'Участник')}</b> ❤️ <b>{row.get('user2_name', 'Участник')}</b>")
             return
-    await message.answer("💔 Вы пока не состоите в браке в этой группе.")
+    pending = [
+        r for r in rows
+        if r.get("status") == "pending"
+        and message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))
+    ]
+    if pending:
+        lines = ["💌 <b>Ваши предложения брака</b>"]
+        for row in pending[:10]:
+            proposer_name = escape(str(row.get("user1_name") or "Участник"))
+            partner_name = escape(str(row.get("user2_name") or "Участник"))
+            lines.append(f"• {proposer_name} ❤️ {partner_name}")
+        await message.answer("\n".join(lines))
+        return
+    await message.answer("💔 Вы пока не состоите в браке в этой группе. Чтобы предложить брак, ответьте на сообщение участника командой «брак» или «пожениться».")
 
-@router.message(Command("divorce"))
+@router.message(Command("divorce", "breakup"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:развод|развестись|разведись|разрываем брак|расторгнуть брак|расстаться)(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:развод|развестись)(?:\s|$)"))
 async def divorce_cmd(message: Message) -> None:
     if not message.from_user:
@@ -4930,7 +4945,7 @@ async def clan_cmd(message: Message) -> None:
 
 
 @router.message(Command("choose"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:выбери участника|случайный участник|рандом участника|рандом участник|жребий|да или нет|шипперинг)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:выбери участника|случайный участник|рандом участника|рандом участник|жребий|да или нет|шипперинг|шипперим|шиперим|шиперинг|шипперить|шиперить|зашипперить|зашиперить|кого шипперим|кого шиперим|рандом шиппер|рандом шипер|шипперни|шиперни|шипперь|шиперь)(?:\s|$)"))
 async def random_community_cmd(message: Message) -> None:
     raw = _feature_normalize(message.text or "")
     if raw.startswith("/choose"):
@@ -4948,7 +4963,12 @@ async def random_community_cmd(message: Message) -> None:
         if uid > 0 and uid != (message.from_user.id if message.from_user else 0):
             unique[uid] = row
     members = list(unique.values())
-    if raw == "шипперинг":
+    shipper_aliases = {
+        "шипперинг", "шипперим", "шиперим", "шиперинг", "шипперить", "шиперить",
+        "зашипперить", "зашиперить", "кого шипперим", "кого шиперим",
+        "рандом шиппер", "рандом шипер", "шипперни", "шиперни", "шипперь", "шиперь",
+    }
+    if raw in shipper_aliases:
         if len(members) < 2:
             await message.answer("Для шипперинга пока недостаточно участников, которых бот знает.")
             return
