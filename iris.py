@@ -4008,6 +4008,8 @@ async def main() -> None:
         BotCommand(command="economy", description="Виртуальная экономика"),
         BotCommand(command="clan", description="Кланы чата"),
         BotCommand(command="profileform", description="Анкета участника"),
+        BotCommand(command="awards", description="Мои награды"),
+        BotCommand(command="gather", description="Общий сбор участников"),
         BotCommand(command="exportsettings", description="Экспорт настроек"),
         BotCommand(command="importsettings", description="Импорт настроек"),
     ]
@@ -4412,8 +4414,8 @@ async def economy_cmd(message: Message) -> None:
         await message.answer("🛍 Покупка оформлена!" if saved else "Не удалось оформить покупку.")
         return
     if norm.startswith(("передать ","перевести ")):
-        m = re.search(r"(?i)^(?:передать|перевести)\s+(.+?)\s+(\d+)\s*$", raw)
-        target = await _feature_target(message, m.group(1) if m else None)
+        m = re.search(r"(?i)^(?:передать|перевести)\s+(?:(.+?)\s+)?(\d+)\s*$", raw)
+        target = await _feature_target(message, (m.group(1) or "").strip() or None) if m else None
         amount = int(m.group(2)) if m else 0
         if not target:
             await message.answer("Ответь на сообщение получателя: <code>передать 50</code> или укажи username.")
@@ -4478,6 +4480,44 @@ async def clan_cmd(message: Message) -> None:
         saved = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"member","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
         await message.answer(f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if saved else "Не удалось вступить в клан.")
         return
+    if action in {"распустить","удалить"}:
+        member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        if not member or member.get("role") != "leader":
+            await message.answer("Распустить клан может только его лидер.")
+            return
+        clan_name = str(member.get("clan_name") or "")
+        try:
+            await asyncio.to_thread(lambda: db.table("bot_clan_members").delete().eq("chat_id",chat_id).eq("clan_name",clan_name).execute())
+            await asyncio.to_thread(lambda: db.table("bot_clans").delete().eq("chat_id",chat_id).eq("name",clan_name).execute())
+            await message.answer(f"🏚 Клан <b>{escape(clan_name)}</b> распущен.")
+        except Exception:
+            log.exception("Could not dissolve clan")
+            await message.answer("Не удалось распустить клан.")
+        return
+    if action in {"передать","передать лидерство","лидер"}:
+        member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        target = await _feature_target(message)
+        if not member or member.get("role") != "leader":
+            await message.answer("Передать лидерство может только лидер клана.")
+            return
+        if not target:
+            await message.answer("Ответь на сообщение нового лидера командой <code>клан передать</code>.")
+            return
+        new_uid = int(target.get("user_id") or 0)
+        if new_uid == uid:
+            await message.answer("Ты уже лидер этого клана.")
+            return
+        new_member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=new_uid)
+        if not new_member or new_member.get("clan_name") != member.get("clan_name"):
+            await message.answer("Новый лидер должен состоять в твоём клане.")
+            return
+        clan_name = str(member.get("clan_name") or "")
+        now = datetime.now(timezone.utc).isoformat()
+        ok1 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**member,"role":"member","joined_at":member.get("joined_at") or now}, "chat_id,user_id")
+        ok2 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**new_member,"role":"leader","joined_at":new_member.get("joined_at") or now}, "chat_id,user_id")
+        ok3 = await asyncio.to_thread(lambda: db.table("bot_clans").update({"leader_id":new_uid}).eq("chat_id",chat_id).eq("name",clan_name).execute() if db is not None else None)
+        await message.answer("👑 Лидерство передано." if ok1 and ok2 and ok3 else "Не удалось полностью передать лидерство. Проверь записи клана.")
+        return
     if action in {"выйти","покинуть","leave"}:
         member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
         if not member:
@@ -4508,9 +4548,9 @@ async def clan_cmd(message: Message) -> None:
         await message.answer("\n".join(lines))
         return
     if action in {"помощь","help"}:
-        await message.answer("<b>🏰 Команды кланов</b>\n<code>клан создать Название</code>\n<code>клан вступить Название</code>\n<code>клан выйти</code>\n<code>клан инфо</code>\n<code>клан участники Название</code>")
+        await message.answer("<b>🏰 Команды кланов</b>\n<code>клан создать Название</code>\n<code>клан вступить Название</code>\n<code>клан выйти</code>\n<code>клан распустить</code> (лидер)\n<code>клан передать</code> ответом на участника\n<code>клан инфо</code>\n<code>клан участники Название</code>")
         return
-    await message.answer("Команды: <code>клан создать Название</code>, <code>клан вступить Название</code>, <code>клан выйти</code>, <code>клан инфо</code>, <code>клан участники</code>, <code>клан помощь</code>.")
+    await message.answer("Команды: <code>клан создать Название</code>, <code>клан вступить Название</code>, <code>клан выйти</code>, <code>клан распустить</code>, <code>клан передать</code>, <code>клан инфо</code>, <code>клан участники</code>, <code>клан помощь</code>.")
 
 # A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
 @router.message(Command("gather"))
