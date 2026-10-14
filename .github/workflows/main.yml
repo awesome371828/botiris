@@ -5,16 +5,19 @@ on:
   push:
     branches: [main]
   schedule:
-    # Start a fresh Actions job roughly every 6 hours (UTC).
-    - cron: "17 */6 * * *"
+    - cron: "17 */6 * * *" # UTC; GitHub may delay scheduled jobs
 
 permissions:
   contents: read
 
+# GitHub-hosted runners are temporary; this does not guarantee uninterrupted 24/7 uptime.
+concurrency:
+  group: pear-cm-bot
+  cancel-in-progress: false
+
 jobs:
   run-bot:
     runs-on: ubuntu-24.04
-    # GitHub-hosted jobs have a hard time limit; leave a little room before the next scheduled run.
     timeout-minutes: 350
     steps:
       - name: Checkout repository
@@ -31,27 +34,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Validate Python syntax
-        run: python -m py_compile iris.py
+      - name: Validate syntax
+        run: |
+          python -m py_compile iris.py
+          python -m py_compile moderation_full.py
 
-      - name: Run bot and restart it every 3 hours
+      - name: Run bot with process restart every 3 hours
+        shell: bash
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          BOT_OWNER_ID: "6652898792"
-        shell: bash
+          BOT_OWNER_ID: ${{ vars.BOT_OWNER_ID || '6652898792' }}
         run: |
-          set -u
+          set +e
           while true; do
-            echo "Starting bot at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            # Run for at most 3 hours, then stop and start a fresh process.
-            timeout --signal=TERM --kill-after=30s 3h python -u iris.py
-            exit_code=$?
-            if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
-              echo "Three-hour process window ended; restarting bot."
+            echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            timeout --signal=TERM --kill-after=20s 3h python -u iris.py
+            code=$?
+            if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+              echo "Three hours reached; restarting bot process."
             else
-              echo "Bot exited with code ${exit_code}; retrying in 10 seconds."
+              echo "Bot exited with code $code; retrying in 10 seconds."
             fi
             sleep 10
           done
