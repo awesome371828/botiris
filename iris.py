@@ -2166,7 +2166,7 @@ async def top_cmd(message: Message) -> None:
 
 
 
-@router.message(F.text.regexp(r"(?i)^\\s*\\+ник(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*\+ник(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*/nick(?:\s|$)"))
 async def set_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
