@@ -1165,74 +1165,19 @@ async def welcome_members(message: Message) -> None:
 # never wait for Supabase writes.
 
 def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, str, int]]) -> None:
-    """Persist only new Telegram messages; message_id makes retries idempotent."""
+    """Atomically persist events and counters; the RPC is idempotent by chat/message ID."""
     if not items:
         return
     if db is None:
         raise RuntimeError("Supabase is not configured; activity batch remains queued")
-
     events = [{
-        "chat_id": int(chat_id), "user_id": int(user_id), "message_id": int(message_id),
-        "username": username, "first_name": first_name or "Пользователь",
-        "created_at": created_at,
+        "chat_id": int(chat_id), "user_id": int(user_id), "username": username,
+        "first_name": first_name or "Пользователь", "created_at": created_at,
+        "message_id": int(message_id),
     } for chat_id, user_id, username, first_name, created_at, message_id in items]
-
-    # Unique (chat_id, message_id) plus ignore_duplicates prevents retries from counting
-    # the same Telegram message twice after a timeout or a partially completed write.
-    result = db.table("bot_activity_events").upsert(
-        events, on_conflict="chat_id,message_id", ignore_duplicates=True
-    ).select("*").execute()
-    inserted = result.data or []
-    if not inserted:
-        return
-
-    now = datetime.now(timezone.utc).isoformat()
-    grouped: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
-    daily: dict[tuple[int, int, str], dict[str, Any]] = {}
-    for event in inserted:
-        chat_id = int(event["chat_id"])
-        user_id = int(event["user_id"])
-        grouped[(chat_id, user_id)].append(event)
-        created_at = str(event.get("created_at") or now)
-        try:
-            stamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            if stamp.tzinfo is None:
-                stamp = stamp.replace(tzinfo=timezone.utc)
-            day = stamp.astimezone(MOSCOW_TZ).date().isoformat()
-        except Exception:
-            day = moscow_now().date().isoformat()
-        key = (chat_id, user_id, day)
-        aggregate = daily.setdefault(key, {
-            "chat_id": chat_id, "user_id": user_id, "day": day,
-            "messages": 0, "username": event.get("username"),
-            "first_name": event.get("first_name") or "Пользователь",
-        })
-        aggregate["messages"] += 1
-        if event.get("username"):
-            aggregate["username"] = event["username"]
-        if event.get("first_name"):
-            aggregate["first_name"] = event["first_name"]
-
-    for (chat_id, user_id), records in grouped.items():
-        latest = records[-1]
-        # Use a strict read here: db_one intentionally converts read failures to None,
-        # but treating a database outage as a new user could reset rank/warnings.
-        current_rows = db.table("bot_users").select("*").eq("user_id", user_id).eq("chat_id", chat_id).limit(1).execute().data or []
-        current = current_rows[0] if current_rows else {}
-        saved = db_upsert("bot_users", {
-            "user_id": user_id, "chat_id": chat_id,
-            "username": latest.get("username"),
-            "first_name": latest.get("first_name") or "Пользователь",
-            "warns": int(current.get("warns", 0) or 0),
-            "rank": max(0, min(5, int(current.get("rank", 0) or 0))),
-            "messages": int(current.get("messages", 0) or 0) + len(records),
-            "last_seen": now,
-        }, "user_id,chat_id")
-        if not saved:
-            raise RuntimeError(f"Could not update bot_users counter chat={chat_id} user={user_id}")
-
-    # The RPC is atomic. Retrying the event upsert will not insert the same message again.
-    db.rpc("increment_bot_activity_daily_batch", {"p_items": list(daily.values())}).execute()
+    # A single Postgres transaction inserts unseen messages and updates daily/user counters.
+    # If the network times out after commit, retrying the RPC won't count the messages twice.
+    db.rpc("record_bot_activity_batch", {"p_items": events}).execute()
 
 _ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str, int]] = asyncio.Queue(maxsize=5000)
 # Temporary bounded overflow absorbs bursts while the database writer catches up.
