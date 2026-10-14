@@ -3216,7 +3216,7 @@ async def _schedule_worker() -> None:
                     for mode, key, lock in (("close", "schedule_close", True), ("open", "schedule_open", False)):
                         if str(settings.get(key) or "") != hhmm or settings.get(f"_schedule_{mode}_date") == date_key:
                             continue
-                        changed = await _apply_scheduled_chat_lock(chat_id, dict(settings), lock)
+                        changed = await _apply_scheduled_chat_lock(chat_id, settings, lock)
                         settings[f"_schedule_{mode}_date"] = date_key
                         if changed:
                             try:
