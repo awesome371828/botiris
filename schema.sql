@@ -161,6 +161,41 @@ create index if not exists bot_users_chat_last_seen_idx
 create index if not exists bot_marriages_chat_status_created_idx
     on public.bot_marriages (chat_id, status, created_at desc);
 
+-- Enforce one pending/active marriage per user even when two proposals arrive concurrently.
+create or replace function public.prevent_overlapping_bot_marriages()
+returns trigger
+language plpgsql
+set search_path = public
+as $
+begin
+    if new.status in ('pending', 'married') then
+        perform pg_advisory_xact_lock(new.chat_id);
+        if exists (
+            select 1
+            from public.bot_marriages m
+            where m.chat_id = new.chat_id
+              and m.id <> coalesce(new.id, 0)
+              and m.status in ('pending', 'married')
+              and (
+                  m.user1_id in (new.user1_id, new.user2_id)
+                  or m.user2_id in (new.user1_id, new.user2_id)
+              )
+        ) then
+            raise exception 'User already has a pending or active marriage in this chat'
+                using errcode = '23505';
+        end if;
+    end if;
+    return new;
+end;
+$;
+
+drop trigger if exists bot_marriages_no_overlap on public.bot_marriages;
+create trigger bot_marriages_no_overlap
+before insert or update of chat_id, user1_id, user2_id, status
+on public.bot_marriages
+for each row execute function public.prevent_overlapping_bot_marriages();
+
+
 create index if not exists bot_audit_chat_created_idx
     on public.bot_audit (chat_id, created_at desc);
 create index if not exists bot_audit_created_idx
