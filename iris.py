@@ -350,14 +350,34 @@ def is_group(message: Message) -> bool:
 async def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
 
+_CHAT_MEMBER_CACHE: dict[tuple[int, int], tuple[Any | None, float]] = {}
+_CHAT_MEMBER_CACHE_TTL = 8.0
+
+async def get_chat_member_cached(bot: Bot, chat_id: int, user_id: int) -> Any | None:
+    """Avoid duplicate Telegram getChatMember round-trips for the same command."""
+    key = (chat_id, user_id)
+    now = time.monotonic()
+    cached = _CHAT_MEMBER_CACHE.get(key)
+    if cached and now - cached[1] < _CHAT_MEMBER_CACHE_TTL:
+        return cached[0]
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        _CHAT_MEMBER_CACHE[key] = (None, now)
+        return None
+    _CHAT_MEMBER_CACHE[key] = (member, now)
+    if len(_CHAT_MEMBER_CACHE) > 5000:
+        cutoff = now - _CHAT_MEMBER_CACHE_TTL * 3
+        for old_key, (_, stamp) in list(_CHAT_MEMBER_CACHE.items()):
+            if stamp < cutoff:
+                _CHAT_MEMBER_CACHE.pop(old_key, None)
+    return member
+
 async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-        return member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
-    except (TelegramBadRequest, TelegramForbiddenError):
-        return False
+    member = await get_chat_member_cached(bot, chat_id, user_id)
+    return bool(member and member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR))
 
 async def await_bot_rights_hint(chat_id: int) -> str:
     """Report actual bot permissions instead of always claiming it is not an admin."""
@@ -567,24 +587,68 @@ def split_duration_reason(tokens: list[str]) -> tuple[timedelta | None, str | No
     reason = " ".join(tokens[consumed:]).strip(" ,.;:-") or None
     return duration, label, reason
 
+_RECENT_CHAT_USERS: dict[tuple[int, int], tuple[str | None, str, float]] = {}
+_RECENT_CHAT_USERS_TTL = 6 * 60 * 60
+
 async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] | None:
+    def display_name(user_id: int, username: str | None, first_name: str | None, fallback: str) -> str:
+        if username:
+            return f"@{username.lstrip('@')}"
+        return first_name or fallback or f"ID {user_id}"
+
     if message.reply_to_message and message.reply_to_message.from_user:
         u = message.reply_to_message.from_user
         if not u.is_bot:
-            return u.id, u.full_name
+            return u.id, display_name(u.id, u.username, u.full_name, str(u.id))
+
+    # Accept a reply, ID, @username, plain username, or exact displayed name.
+    # Numeric rank/duration arguments are ignored rather than mistaken for user IDs.
     for raw_value in args:
         raw = raw_value.strip().strip(",;:")
-        if raw.isdigit():
-            # Tiny numbers are much more likely to be rank/duration arguments than user IDs.
-            if len(raw) < 7:
-                continue
-            return int(raw), f"ID {raw}"
-        if raw.startswith("@") and len(raw) > 1:
-            username = raw[1:].lower()
-            rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
-            for row in rows:
-                if (row.get("username") or "").lower().lstrip("@") == username:
-                    return int(row["user_id"]), row.get("first_name") or raw
+        raw = re.sub(r"^(?:id\s*[:=]?\s*)", "", raw, flags=re.I)
+        if raw.isdigit() and len(raw) >= 7:
+            uid = int(raw)
+            row = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id)
+            if row:
+                return uid, display_name(uid, row.get("username"), row.get("first_name"), raw)
+            return uid, f"ID {uid}"
+
+    candidates = []
+    for raw_value in args:
+        raw = raw_value.strip().strip(",;:")
+        if not raw or raw.isdigit():
+            continue
+        raw = re.sub(r"^(?:https?://)?t\.me/", "", raw, flags=re.I)
+        candidates.append(raw.lstrip("@").casefold())
+    if not candidates:
+        return None
+
+    now = time.monotonic()
+    for (chat_id, uid), (username, first_name, stamp) in list(_RECENT_CHAT_USERS.items()):
+        if now - stamp > _RECENT_CHAT_USERS_TTL:
+            _RECENT_CHAT_USERS.pop((chat_id, uid), None)
+            continue
+        if chat_id != message.chat.id:
+            continue
+        user_name = (username or "").lstrip("@").casefold()
+        first = (first_name or "").casefold()
+        if any(candidate == user_name or candidate == first for candidate in candidates):
+            return uid, display_name(uid, username, first_name, candidates[0])
+
+    rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
+    for row in rows:
+        try:
+            uid = int(row.get("user_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if uid <= 0:
+            continue
+        username = str(row.get("username") or "")
+        first_name = str(row.get("first_name") or "")
+        user_name = username.lstrip("@").casefold()
+        first = first_name.casefold()
+        if any(candidate == user_name or candidate == first for candidate in candidates):
+            return uid, display_name(uid, username, first_name, candidates[0])
     return None
 
 def args_after_command(message: Message) -> list[str]:
@@ -894,9 +958,9 @@ async def marriage_menu(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:админы|кто админ)(?:\s|$)"))
 async def admins(message: Message) -> None:
     try:
-        # Only show Pear CM internal roles; do not list everyone who is a Telegram admin.
+        # Keep internal Pear CM roles, but always include the actual Telegram chat creator.
         ranked_users = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
-        ranks: dict[int, tuple[int, str]] = {}
+        ranks: dict[int, tuple[int, str, str | None]] = {}
         for row in ranked_users:
             try:
                 uid = int(row.get("user_id", 0))
@@ -904,19 +968,37 @@ async def admins(message: Message) -> None:
             except (TypeError, ValueError):
                 continue
             if uid > 0 and rank > 0:
-                name = str(row.get("first_name") or row.get("username") or f"ID {uid}")
-                ranks[uid] = (rank, name)
+                username = str(row.get("username") or "").lstrip("@") or None
+                name = str(row.get("first_name") or (f"@{username}" if username else f"ID {uid}"))
+                ranks[uid] = (rank, name, username)
+
         owner_row = next((r for r in ranked_users if int(r.get("user_id", 0) or 0) == OWNER_ID), {})
-        owner_name = str(owner_row.get("first_name") or owner_row.get("username") or ranks.get(OWNER_ID, (5, "Владелец Pear CM"))[1])
-        # Never display the configured bot owner below rank 5, even if an old DB row says otherwise.
-        ranks[OWNER_ID] = (5, owner_name)
+        owner_username = str(owner_row.get("username") or "").lstrip("@") or None
+        owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
+        ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
+
+        try:
+            telegram_admins = await bot.get_chat_administrators(message.chat.id)
+            for member in telegram_admins:
+                if member.status != ChatMemberStatus.CREATOR:
+                    continue
+                u = member.user
+                username = u.username
+                display = u.full_name or (f"@{username}" if username else f"ID {u.id}")
+                if username:
+                    display = f"@{username} ({display})"
+                ranks[u.id] = (5, display, username)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            log.info("Could not fetch Telegram chat creator for chat %s", message.chat.id)
+
         lines = ["🛡 <b>Администраторы Pear CM</b>"]
-        for uid, (rank, name) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
-            # Plain escaped names avoid mentions/pings and decorative user prefixes.
+        for uid, (rank, name, username) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
+            if username and not name.startswith("@"):
+                name = f"@{username} ({name})"
             lines.append(f"• <b>{escape(name)}</b> — <b>{role_name(rank)}</b> · ранг {rank}")
         if len(lines) == 1:
             lines.append("Пока никто не назначен администраторами Pear CM.")
-        await message.answer("\n".join(lines))
+        await message.answer("\\n".join(lines))
     except Exception:
         log.exception("Could not build Pear CM internal admin list")
         await message.answer("Не удалось получить список администраторов Pear CM. Попробуйте ещё раз.")
@@ -998,6 +1080,15 @@ async def _activity_writer_loop() -> None:
 async def track_activity(message: Message) -> None:
     if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
+    stamp = time.monotonic()
+    _RECENT_CHAT_USERS[(message.chat.id, message.from_user.id)] = (
+        message.from_user.username, message.from_user.full_name, stamp,
+    )
+    if len(_RECENT_CHAT_USERS) > 10000:
+        cutoff = stamp - _RECENT_CHAT_USERS_TTL
+        for old_key, (_, _, old_stamp) in list(_RECENT_CHAT_USERS.items()):
+            if old_stamp < cutoff:
+                _RECENT_CHAT_USERS.pop(old_key, None)
     item = (
         message.chat.id, message.from_user.id, message.from_user.username,
         message.from_user.full_name, datetime.now(timezone.utc).isoformat(),
@@ -1025,8 +1116,10 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     if message.from_user and target[0] != message.from_user.id:
         actor_is_admin = await is_admin(bot, message.chat.id, message.from_user.id)
         if not actor_is_admin:
-            actor_rank = user_rank(message.chat.id, message.from_user.id)
-            target_rank = user_rank(message.chat.id, target[0])
+            actor_rank, target_rank = await asyncio.gather(
+                asyncio.to_thread(user_rank, message.chat.id, message.from_user.id),
+                asyncio.to_thread(user_rank, message.chat.id, target[0]),
+            )
             if target_rank >= actor_rank and target_rank > 0:
                 await message.answer("⛔ Нельзя модерировать участника с равным или более высоким внутренним рангом.")
                 return None
@@ -1829,7 +1922,7 @@ async def rank_cmd(message: Message) -> None:
     if len(parts) == 1:
         if not message.from_user:
             return
-        current_rank = user_rank(message.chat.id, message.from_user.id)
+        current_rank = await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id)
         await message.answer(f"🏅 Ваш ранг: <b>{current_rank}</b> — <b>{role_name(current_rank)}</b>.")
         return
     if not await require_real_admin(message):
@@ -1912,10 +2005,7 @@ async def promote_rank_cmd(message: Message) -> None:
         await message.answer("ℹ️ Достигнут максимальный ранг: Создатель.")
         return
     actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
-    try:
-        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id) if message.from_user else None
-    except Exception:
-        actor_member = None
+    actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id) if message.from_user else None
     actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
     if new_rank == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
@@ -1971,10 +2061,7 @@ async def demote_rank_cmd(message: Message) -> None:
         await message.answer("ℹ️ Уже минимальный ранг: Участник.")
         return
     actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
-    try:
-        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id) if message.from_user else None
-    except Exception:
-        actor_member = None
+    actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id) if message.from_user else None
     actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
