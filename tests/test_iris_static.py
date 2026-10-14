@@ -125,6 +125,11 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("bot_users_chat_last_seen_idx", schema)
         self.assertIn("bot_marriages_chat_status_created_idx", schema)
 
+    def test_chat_lock_restores_saved_telegram_permissions(self):
+        self.assertIn("current_permissions = getattr(chat_info, \"permissions\", None)", self.source)
+        self.assertIn("current_permissions.model_dump(exclude_none=True)", self.source)
+        self.assertIn('settings["chat_permissions_before_lock"]', self.source)
+
     def test_delete_command_is_bounded(self):
         self.assertIn("requested > 100", self.source)
         self.assertIn("За один раз можно удалить максимум", self.source)
