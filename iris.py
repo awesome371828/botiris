@@ -4158,7 +4158,13 @@ async def _owner_only(message: Message) -> bool:
     return False
 
 async def _owner_or_operator(message: Message) -> bool:
-    if message.from_user and (message.from_user.id == OWNER_ID or _operator_active(message.from_user.id)):
+    if not message.from_user:
+        await message.answer("⛔ Нужен доступ овнера или активного оператора.")
+        return False
+    if message.from_user.id == OWNER_ID:
+        return True
+    # Supabase lookup must not stall the asyncio update loop.
+    if await asyncio.to_thread(_operator_active, message.from_user.id):
         return True
     await message.answer("⛔ Нужен доступ овнера или активного оператора.")
     return False
@@ -4182,14 +4188,17 @@ async def owner_status(message: Message) -> None:
         telegram_state = f"ошибка: {type(exc).__name__}"
     uptime = max(0, int(time.monotonic() - _PROCESS_STARTED))
     h, r = divmod(uptime, 3600); m, s = divmod(r, 60)
-    users = db_rows("bot_users", limit=1000)
+    users, maintenance = await asyncio.gather(
+        asyncio.to_thread(db_rows, "bot_users", limit=1000),
+        asyncio.to_thread(_global_setting, "maintenance", "off"),
+    )
     await message.answer(
         "<b>📡 Статус Pear CM</b>\n"
         f"Telegram API: <code>{telegram_state}</code>\n"
         f"Процесс: <b>работает</b> · uptime <code>{h}ч {m}м {s}с</code>\n"
         f"База: <b>{'настроена' if db is not None else 'не настроена'}</b>\n"
         f"Записей пользователей в выборке: <b>{len(users)}</b>\n"
-        f"Техобслуживание: <b>{'включено' if str(_global_setting('maintenance','off')).lower() == 'on' else 'выключено'}</b>\n"
+        f"Техобслуживание: <b>{'включено' if str(maintenance).lower() == 'on' else 'выключено'}</b>\n"
         f"Московское время: <code>{format_moscow_time(moscow_now())}</code>"
     )
 
