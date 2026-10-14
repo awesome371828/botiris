@@ -559,18 +559,19 @@ def args_after_command(message: Message) -> list[str]:
     text_value = (message.text or "").strip()
     if not text_value:
         return []
-    # Treat multi-word Russian aliases as one command, then parse only its arguments.
+    # Remove /command@botname before parsing arguments.
+    text_value = re.sub(r"^/[A-Za-z_]\w*(?:@\w+)?\s*", "", text_value, count=1)
+    # Multi-word commands first, including declensions of «предупреждение» and «мут».
     aliases = (
-        r"^(?:снять|убрать|удалить)\s+(?:варн|предупреждение|мут)\s*",
-        r"^(?:дать|выдать)\s+(?:мут|варн|бан|кик|предупреждение)\s*",
+        r"^(?:снять|убрать|удалить)\s+(?:варн|предупреждени(?:е|я|ю|ем|и)|мут(?:а|у|ом|е)?)\s*",
+        r"^(?:дать|выдать)\s+(?:мут|варн|бан|кик|предупреждени(?:е|я|ю|ем|и))\s*",
     )
     for pattern in aliases:
         stripped = re.sub(pattern, "", text_value, flags=re.I)
         if stripped != text_value:
             return stripped.split()
-    text_value = re.sub(r"^[/!.][\w]+(?:@\w+)?\s*", "", text_value, count=1)
     text_value = re.sub(
-        r"^[.!/]?(?:мут|замутить|замуть|замут|размут|анмут|унмут|бан|забанить|кик|кикнуть|выгнать|варн|предупредить|предупреждение|анварн|снятьварн|убратьварн|разбан|повысить|понизить)\s*",
+        r"^[.!/]?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замутить|замуть|замут|размут(?:ить|а|у)?|анмут(?:ить)?|унмут|бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забанить|забань|разбан(?:ить|а|у)?|разбань|кик(?:нуть|ни|а|у|ом|е|и|ов|ами)?|исключить|исключи|выгнать|выгони|варн(?:ить|а|у|ом|е|ы|ов|ами)?|предупредить|предупреждени(?:е|я|ю|ем|и)|анварн|снятьварн|убратьварн|повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|понизить(?:ранг|-ранг)?|понижение|понижай|понизь|очистить|чистка|пин(?:ить|а|у|ом|е)?|закрепить|анпин|открепить)\s*",
         "", text_value, count=1, flags=re.I
     )
     return text_value.split()
@@ -1019,8 +1020,8 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
     return True
 
 @router.message(Command("mute"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут|замутить|замуть|замут)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замутить|замуть|замут)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замутить|замуть|замут)(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1124,7 +1125,7 @@ async def mute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unmute"))
-@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать)\s+(?:мут|муту)|[.!/]?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить))(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать)\s+(?:мут|мута|муту|мутом|муте)|[.!/]?(?:размут(?:ить|а|у)?|анмут(?:ить)?|унмут|снятьмут|снятьмуту|убратьмут|анмутить))(?:\s|$)"))
 async def unmute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1147,7 +1148,7 @@ async def unmute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("ban"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:бан|забанить|забань)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забанить|забань)(?:\s|$)"))
 async def ban_cmd(message: Message) -> None:
     if not await check_mod(message, min_rank=3):
         return
@@ -1164,7 +1165,7 @@ async def ban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unban"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?разбан(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?разбан(?:ить|а|у|ь)?(?:\s|$)"))
 async def unban_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1184,7 +1185,7 @@ async def unban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("kick"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:кик|кикнуть|исключить|выгнать)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:кик(?:нуть|ни|а|у|ом|е|и|ов|ами)?|исключить|исключи|выгнать|выгони|выгоните)(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
     if not await check_mod(message, min_rank=3):
         return
@@ -1202,7 +1203,7 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:варн|предупредить|предупреждение)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ами)?|предупредить|предупреждени(?:е|я|ю|ем|и))(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await check_mod(message, require_restrict=False):
         return
@@ -1270,7 +1271,7 @@ async def warn_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать|удалить)\s+(?:варн|предупреждение)|[.!/]?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение))(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать|удалить)\s+(?:варн|варна|варну|варном|предупреждени(?:е|я|ю|ем|и))|[.!/]?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение))(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message, min_rank=2):
         return
