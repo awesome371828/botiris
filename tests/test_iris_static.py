@@ -138,6 +138,11 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("create or replace function public.record_bot_activity_batch", schema)
         self.assertIn("on conflict (chat_id, message_id) do nothing", schema)
 
+    def test_global_ban_is_enforced_before_message_handlers(self):
+        self.assertIn("await asyncio.to_thread(_is_globally_banned, event.from_user.id)", self.source)
+        self.assertIn("Доступ к функциям Pear CM для этого аккаунта ограничен", self.source)
+        self.assertIn("await asyncio.to_thread(_is_globally_banned, callback.from_user.id)", self.source)
+
     def test_admin_listing_includes_real_telegram_admins(self):
         self.assertIn("telegram_admin_ids.add(u.id)", self.source)
         self.assertIn("Администраторы Telegram", self.source)
