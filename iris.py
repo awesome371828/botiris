@@ -366,6 +366,7 @@ def user_rank(chat_id: int, user_id: int) -> int:
         return 0
 
 async def require_admin(message: Message, min_rank: int = 1) -> bool:
+    min_rank = required_rank_for(message, min_rank)
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
         return False
@@ -539,7 +540,7 @@ def role_name(rank: int) -> str:
 
 def moderation_command_key(message: Message) -> str | None:
     text_value = re.sub(r"^[.!/]+", "", (message.text or "").strip().lower())
-    text_value = re.sub(r"@\\w+", "", text_value)
+    text_value = re.sub(r"@\w+", "", text_value)
     words = text_value.split()
     if not words:
         return None
@@ -1037,7 +1038,7 @@ async def mute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unmute"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать)\s+)?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать)\s+(?:мут|муту)|(?:снять|убрать)\s+)?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить)(?:\s|$)"))
 async def unmute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1183,7 +1184,7 @@ async def warn_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать|удалить)\s+)?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать|удалить)\s+(?:варн|предупреждение)|(?:снять|убрать|удалить)\s+)?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение)(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message, min_rank=2):
         return
