@@ -1759,10 +1759,21 @@ async def promote_rank_cmd(message: Message) -> None:
     if not target:
         await message.answer("Ответьте на сообщение участника и напишите <code>повысить</code> либо укажите <code>@username</code>.")
         return
+    if message.from_user and target[0] == message.from_user.id:
+        await message.answer("⛔ Нельзя повышать собственный ранг.")
+        return
     current = user_rank(message.chat.id, target[0])
     if current >= 5:
         await message.answer("ℹ️ Уже максимальный ранг: Создатель.")
         return
+    if current == 4:
+        try:
+            actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        except Exception:
+            actor_member = None
+        if not (message.from_user and message.from_user.id == OWNER_ID) and (not actor_member or actor_member.status != ChatMemberStatus.CREATOR):
+            await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
+            return
     new_rank = current + 1
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
@@ -1779,10 +1790,21 @@ async def demote_rank_cmd(message: Message) -> None:
     if not target:
         await message.answer("Ответьте на сообщение участника и напишите <code>понизить</code> либо укажите <code>@username</code>.")
         return
+    if message.from_user and target[0] == message.from_user.id:
+        await message.answer("⛔ Нельзя понижать собственный ранг.")
+        return
     current = user_rank(message.chat.id, target[0])
     if current <= 0:
         await message.answer("ℹ️ Уже минимальный ранг: Участник.")
         return
+    if current == 5:
+        try:
+            actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
+        except Exception:
+            actor_member = None
+        if not (message.from_user and message.from_user.id == OWNER_ID) and (not actor_member or actor_member.status != ChatMemberStatus.CREATOR):
+            await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
+            return
     new_rank = current - 1
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
