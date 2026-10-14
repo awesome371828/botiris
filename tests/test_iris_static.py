@@ -120,6 +120,8 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("bot_activity_daily_chat_day_idx", schema)
         self.assertIn("bot_audit_chat_target_created_idx", schema)
         self.assertIn("bot_marriages_chat_idx", schema)
+        self.assertIn("bot_users_chat_last_seen_idx", schema)
+        self.assertIn("bot_marriages_chat_status_created_idx", schema)
 
     def test_delete_command_is_bounded(self):
         self.assertIn("requested > 100", self.source)
