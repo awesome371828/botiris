@@ -185,6 +185,8 @@ class PearCMStaticRegressionTests(unittest.TestCase):
     def test_delete_command_is_bounded(self):
         self.assertIn("requested < 1", self.source)
         self.assertIn("requested > 100", self.source)
+        self.assertIn("previous_count = max(0, count - 1)", self.source)
+        self.assertIn("deleted_total = individually_deleted + int(command_deleted)", self.source)
         self.assertIn("Delete individually", self.source)
         self.assertIn("Удалено сообщений:", self.source)
         self.assertIn("За один раз можно удалить максимум", self.source)
