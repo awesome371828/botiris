@@ -27,7 +27,8 @@ from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
-    BotCommand, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
+    BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
     ReplyKeyboardMarkup, ReplyKeyboardRemove,
 )
 from supabase import Client, create_client
@@ -726,39 +727,82 @@ async def clearwarns_cmd(message: Message) -> None:
 async def delete_message_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
+
     raw = (message.text or "").strip()
     match = re.fullmatch(r"(?i)-смс(?:\s+(\d+))?", raw)
-    # With a count, delete up to that many recent messages before this command.
-    # Without a count, retain classic reply-to-delete behavior.
+
+    # -смс N удаляет N последних сообщений ДО команды. Саму команду удаляем отдельно.
+    # Telegram не предоставляет историю сообщений боту, поэтому проверяем предыдущие
+    # message_id и пропускаем удалённые/недоступные сообщения, пока не наберём N.
     if match and match.group(1):
-        count = max(1, min(100, int(match.group(1))))
+        try:
+            requested = int(match.group(1))
+        except ValueError:
+            requested = 10
+        count = max(1, min(100, requested))
         deleted = 0
-        first_id = max(1, message.message_id - count)
-        for mid in range(message.message_id - 1, first_id - 1, -1):
+        forbidden = False
+        scanned = 0
+        scan_limit = min(2000, max(100, count * 20))
+        mid = message.message_id - 1
+
+        while mid >= 1 and deleted < count and scanned < scan_limit:
+            scanned += 1
             try:
-                await bot.delete_message(message.chat.id, mid)
+                await bot.delete_message(chat_id=message.chat.id, message_id=mid)
                 deleted += 1
             except TelegramForbiddenError:
+                forbidden = True
                 break
             except TelegramBadRequest:
-                continue
+                # ID может относиться к уже удалённому или недоступному сообщению.
+                pass
             except Exception:
-                continue
+                log.exception("Ошибка удаления сообщения %s в чате %s", mid, message.chat.id)
+            mid -= 1
+
         try:
             await message.delete()
+        except TelegramForbiddenError:
+            forbidden = True
+        except Exception:
+            log.debug("Не удалось удалить команду -смс", exc_info=True)
+
+        audit(
+            message.chat.id, message.from_user.id, "purge_recent",
+            details=f"requested={count};deleted={deleted};scanned={scanned};forbidden={forbidden}",
+        )
+        if forbidden:
+            response = await message.answer(
+                "⛔ Не хватает прав на удаление сообщений. Назначьте бота администратором "
+                "и включите право «Удаление сообщений»."
+            )
+        else:
+            response = await message.answer(
+                f"🧹 Удалено предыдущих сообщений: <b>{deleted}</b> из {count}."
+                + (" Не все сообщения доступны для удаления." if deleted < count else "")
+            )
+        await asyncio.sleep(4)
+        try:
+            await response.delete()
         except Exception:
             pass
-        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted}")
-        await message.answer(f"🧹 Удалено сообщений: <b>{deleted}</b> (запрошено {count}, максимум 100).")
         return
+
     target_message = message.reply_to_message
     if not target_message:
-        await message.answer("Ответьте на сообщение командой <code>/del</code> или используйте <code>-смс 10</code> (до 100 последних сообщений).")
+        await message.answer(
+            "Ответьте на сообщение командой <code>/del</code> или напишите "
+            "<code>-смс 10</code>, чтобы удалить 10 последних сообщений."
+        )
         return
     try:
         await target_message.delete()
         await message.delete()
-        audit(message.chat.id, message.from_user.id, "delete", target_message.from_user.id if target_message.from_user else None)
+        audit(
+            message.chat.id, message.from_user.id, "delete",
+            target_message.from_user.id if target_message.from_user else None,
+        )
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -2044,9 +2088,59 @@ async def global_error_handler(event) -> bool:
     return True
 
 async def main() -> None:
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Открыть меню"),
-        BotCommand(command="owner", description="Панель овнера (только владелец)"),
+    # Меню команд разделено по контекстам: в группах — только управление чатом,
+    # обычным пользователям в личке — пользовательские функции, овнерские команды —
+    # только в личном чате владельца бота.
+    group_commands = [
+        BotCommand(command="start", description="Запустить бота"),
+        BotCommand(command="help", description="Справка по командам чата"),
+        BotCommand(command="admins", description="Администраторы чата"),
+        BotCommand(command="warns", description="Мои предупреждения"),
+        BotCommand(command="top", description="Топ участников"),
+        BotCommand(command="mute", description="Мут участника (ответом)"),
+        BotCommand(command="unmute", description="Снять мут (ответом)"),
+        BotCommand(command="ban", description="Забанить (ответом)"),
+        BotCommand(command="kick", description="Исключить (ответом)"),
+        BotCommand(command="warn", description="Предупреждение (ответом)"),
+        BotCommand(command="pin", description="Закрепить сообщение (ответом)"),
+        BotCommand(command="del", description="Удалить сообщение (ответом)"),
+        BotCommand(command="purge", description="Очистить сообщения (ответом)"),
+        BotCommand(command="openchat", description="Открыть чат"),
+        BotCommand(command="closechat", description="Закрыть чат"),
+        BotCommand(command="antiflood", description="Настроить антифлуд"),
+        BotCommand(command="antispam", description="Настроить антиспам"),
+        BotCommand(command="antiraid", description="Настроить антирейд"),
+        BotCommand(command="checkrights", description="Проверить права бота"),
+        BotCommand(command="history", description="История наказаний"),
+        BotCommand(command="report", description="Отправить жалобу"),
+        BotCommand(command="appeal", description="Апелляция"),
+        BotCommand(command="calc", description="Калькулятор"),
+        BotCommand(command="random", description="Случайное число"),
+        BotCommand(command="dice", description="Бросить кубик"),
+    ]
+    private_commands = [
+        BotCommand(command="start", description="Открыть меню бота"),
+        BotCommand(command="help", description="Справка"),
+        BotCommand(command="profile", description="Мой профиль"),
+        BotCommand(command="warns", description="Мои предупреждения"),
+        BotCommand(command="top", description="Топ участников"),
+        BotCommand(command="calc", description="Калькулятор"),
+        BotCommand(command="random", description="Случайное число"),
+        BotCommand(command="dice", description="Бросить кубик"),
+        BotCommand(command="date", description="Дата и московское время"),
+        BotCommand(command="activity", description="Активность"),
+        BotCommand(command="suggest", description="Предложить идею"),
+        BotCommand(command="quote", description="Цитата из ответа"),
+        BotCommand(command="favorites", description="Сохранить в избранное"),
+        BotCommand(command="achievements", description="Достижения"),
+        BotCommand(command="language", description="Язык интерфейса"),
+        BotCommand(command="notifications", description="Уведомления"),
+        BotCommand(command="online", description="Недавно активные"),
+        BotCommand(command="report", description="Отправить жалобу"),
+        BotCommand(command="appeal", description="Апелляция"),
+    ]
+    owner_commands = [
+        BotCommand(command="owner", description="Панель овнера"),
         BotCommand(command="status", description="Статус процесса"),
         BotCommand(command="ping", description="Проверка Telegram и БД"),
         BotCommand(command="diag", description="Диагностика конфигурации"),
@@ -2062,50 +2156,15 @@ async def main() -> None:
         BotCommand(command="globalunban", description="Снять глобальный запрет"),
         BotCommand(command="exportstats", description="Экспорт статистики JSON"),
         BotCommand(command="permissions", description="Проверить права бота"),
-        BotCommand(command="calc", description="Калькулятор"),
-        BotCommand(command="random", description="Случайное число"),
-        BotCommand(command="dice", description="Бросить кубик"),
-        BotCommand(command="date", description="Дата и московское время"),
-        BotCommand(command="activity", description="Активность чата"),
-        BotCommand(command="suggest", description="Предложить идею"),
-        BotCommand(command="quote", description="Цитата из ответа"),
-        BotCommand(command="favorites", description="Сохранить в избранное"),
-        BotCommand(command="achievements", description="Достижения"),
-        BotCommand(command="language", description="Язык интерфейса"),
-        BotCommand(command="notifications", description="Настройки уведомлений"),
-        BotCommand(command="online", description="Недавно активные участники"),
-        BotCommand(command="history", description="История наказаний"),
-        BotCommand(command="auditlog", description="Аудит по модератору и времени"),
-        BotCommand(command="report", description="Отправить жалобу"),
-        BotCommand(command="reports", description="Очередь жалоб (админы)"),
-        BotCommand(command="appeal", description="Апелляция на наказание"),
-        BotCommand(command="appeals", description="Очередь апелляций (админы)"),
+        BotCommand(command="auditlog", description="Аудит действий"),
+        BotCommand(command="reports", description="Очередь жалоб"),
+        BotCommand(command="appeals", description="Очередь апелляций"),
         BotCommand(command="closereport", description="Закрыть жалобу"),
         BotCommand(command="closeappeal", description="Закрыть апелляцию"),
-        BotCommand(command="antiflood", description="Настроить антифлуд"),
-        BotCommand(command="antispam", description="Настроить антиспам"),
-        BotCommand(command="antiraid", description="Настроить защиту от рейдов"),
-        BotCommand(command="checkrights", description="Проверить права бота и модератора"),
-        BotCommand(command="openchat", description="Открыть чат"),
-        BotCommand(command="closechat", description="Закрыть чат"),
-
-        BotCommand(command="help", description="Справка и команды"),
-        BotCommand(command="profile", description="Мой профиль"),
-        BotCommand(command="admins", description="Администраторы чата"),
-        BotCommand(command="warns", description="Мои предупреждения"),
-        BotCommand(command="time", description="Текущее московское время"),
-        BotCommand(command="top", description="Топ участников"),
-        BotCommand(command="mute", description="Мут: срок и причина (ответ)"),
-        BotCommand(command="rank", description="Ранг модератора"),
-        BotCommand(command="settrigger", description="Настроить триггеры варнов"),
-        BotCommand(command="unmute", description="Снять мут (ответ)"),
-        BotCommand(command="ban", description="Забанить (ответ)"),
-        BotCommand(command="kick", description="Исключить (ответ)"),
-        BotCommand(command="warn", description="Выдать предупреждение (ответ)"),
-        BotCommand(command="pin", description="Закрепить сообщение (ответ)"),
-        BotCommand(command="del", description="Удалить сообщение (ответ)"),
-        BotCommand(command="marry", description="Предложить брак (ответ)"),
-    ])
+    ]
+    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
+    await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     await bot.delete_webhook(drop_pending_updates=False)
     log.info("Bot started")
     try:
