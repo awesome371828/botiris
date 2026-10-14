@@ -869,9 +869,10 @@ async def admins(message: Message) -> None:
             if uid > 0 and rank > 0:
                 name = str(row.get("first_name") or row.get("username") or f"ID {uid}")
                 ranks[uid] = (rank, name)
-        if OWNER_ID not in ranks:
-            owner_row = next((r for r in ranked_users if int(r.get("user_id", 0) or 0) == OWNER_ID), {})
-            ranks[OWNER_ID] = (5, str(owner_row.get("first_name") or owner_row.get("username") or "Владелец Pear CM"))
+        owner_row = next((r for r in ranked_users if int(r.get("user_id", 0) or 0) == OWNER_ID), {})
+        owner_name = str(owner_row.get("first_name") or owner_row.get("username") or ranks.get(OWNER_ID, (5, "Владелец Pear CM"))[1])
+        # Never display the configured bot owner below rank 5, even if an old DB row says otherwise.
+        ranks[OWNER_ID] = (5, owner_name)
         lines = ["🛡 <b>Администраторы Pear CM</b>"]
         for uid, (rank, name) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
             # Plain escaped names avoid mentions/pings and decorative user prefixes.
@@ -1795,6 +1796,7 @@ async def rank_cmd(message: Message) -> None:
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": rank}, "user_id,chat_id")
+    invalidate_user_rank(message.chat.id, target[0])
     audit(message.chat.id, message.from_user.id, "set_rank", target[0], f"rank={rank}")
     await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
 
