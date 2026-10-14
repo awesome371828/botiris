@@ -2278,50 +2278,153 @@ async def marry_cmd(message: Message) -> None:
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
         return
     if not message.reply_to_message or not message.reply_to_message.from_user:
-        await message.answer("Ответьте на сообщение человека командой <code>/marry</code>.")
+        await message.answer("Ответьте на сообщение человека командой «брак».")
         return
     partner = message.reply_to_message.from_user
     if partner.id == message.from_user.id or partner.is_bot:
         await message.answer("С этим пользователем нельзя заключить брак.")
         return
-    existing, reverse = await asyncio.gather(
-        asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=message.from_user.id),
-        asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=partner.id),
-    )
-    if existing or reverse:
-        await message.answer("💍 Один из вас уже состоит в браке в этой группе.")
-        return
-    db_insert("bot_marriages", {
+    rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, None, chat_id=message.chat.id)
+    for row in rows:
+        if row.get("status") not in {"married", "pending"}:
+            continue
+        ids = {int(row.get("user1_id") or 0), int(row.get("user2_id") or 0)}
+        if message.from_user.id in ids or partner.id in ids:
+            if row.get("status") == "married":
+                spouse_id = int(row.get("user2_id") or 0) if int(row.get("user1_id") or 0) in ids else int(row.get("user1_id") or 0)
+                spouse_name = str(row.get("user2_name") or "пользователь") if spouse_id == int(row.get("user2_id") or 0) else str(row.get("user1_name") or "пользователь")
+                if message.from_user.id in ids:
+                    await message.answer(f"📝 Вы уже состоите в браке с {mention(spouse_id, spouse_name)}. Сначала разведитесь командой «развод».")
+                else:
+                    await message.answer(f"📝 К сожалению, {escape(partner.full_name)} уже состоит в браке. Сначала ему нужно развестись.")
+                return
+            if int(row.get("user1_id") or 0) == message.from_user.id and int(row.get("user2_id") or 0) == partner.id:
+                await message.answer("💌 Предложение этому пользователю уже отправлено — дождитесь ответа.")
+                return
+            await message.answer("💍 У одного из вас уже есть ожидающее предложение брака. Сначала примите или отклоните его.")
+            return
+    inserted = await asyncio.to_thread(db_insert, "bot_marriages", {
         "chat_id": message.chat.id, "user1_id": message.from_user.id,
         "user1_name": message.from_user.full_name, "user2_id": partner.id,
         "user2_name": partner.full_name, "status": "pending",
     })
+    if not inserted or not inserted.get("id"):
+        await message.answer("Не удалось создать предложение. Проверь подключение Supabase и таблицу bot_marriages.")
+        return
+    marriage_id = int(inserted["id"])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💍 Принять брак", callback_data=f"marriage:accept:{marriage_id}"),
+         InlineKeyboardButton(text="💔 Отклонить брак", callback_data=f"marriage:decline:{marriage_id}")]
+    ])
     await message.answer(
-        f"💍 {mention(message.from_user.id, message.from_user.full_name)} предлагает брак "
-        f"{mention(partner.id, partner.full_name)}!\n"
-        f"Партнёр может ответить командой <code>/acceptmarry</code> в ответ на это сообщение."
+        f"💍 {mention(partner.id, partner.full_name)}, вам пришло предложение о браке!\n\n"
+        f"💖 {mention(message.from_user.id, message.from_user.full_name)} предлагает вам стать супругами.\n"
+        "Нажмите одну из кнопок ниже, чтобы принять или отклонить предложение.",
+        reply_markup=keyboard,
     )
 
-@router.message(Command("acceptmarry"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:принять брак|согласен на брак|согласна на брак|да согласен|да согласна|принимаю предложение)(?:\s|$)"))
-async def accept_marry_cmd(message: Message) -> None:
-    if not message.from_user or not message.reply_to_message or not message.reply_to_message.from_user:
-        await message.answer("Ответьте на сообщение с предложением брака командой /acceptmarry.")
+@router.callback_query(F.data.startswith("marriage:"))
+async def marriage_proposal_callback(callback: CallbackQuery) -> None:
+    if not callback.from_user or not callback.data:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
         return
-    proposer = message.reply_to_message.from_user
-    row = await asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=proposer.id)
-    if not row or int(row.get("user2_id", 0)) != message.from_user.id or row.get("status") != "pending":
-        await message.answer("Активное предложение этому пользователю не найдено.")
+    parts = callback.data.split(":")
+    if len(parts) != 3 or parts[1] not in {"accept", "decline"}:
+        await callback.answer("Некорректное действие.", show_alert=True)
         return
-    if db is not None:
-        try:
-            db.table("bot_marriages").update({"status": "married", "accepted_at": datetime.now(timezone.utc).isoformat()}).eq("id", row["id"]).execute()
-        except Exception:
-            log.exception("Could not accept marriage")
-            await message.answer("Не удалось сохранить брак в базе данных.")
+    try:
+        marriage_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Некорректное предложение.", show_alert=True)
+        return
+    row = await asyncio.to_thread(db_one, "bot_marriages", id=marriage_id)
+    if not row or row.get("status") != "pending":
+        await callback.answer("Это предложение уже неактивно.", show_alert=True)
+        return
+    if int(row.get("chat_id") or 0) != (callback.message.chat.id if callback.message else int(row.get("chat_id") or 0)):
+        await callback.answer("Предложение из другого чата.", show_alert=True)
+        return
+    if int(row.get("user2_id") or 0) != callback.from_user.id:
+        await callback.answer("Эти кнопки предназначены только тому, кому предложили брак.", show_alert=True)
+        return
+    new_status = "married" if parts[1] == "accept" else "divorced"
+    try:
+        result = await asyncio.to_thread(
+            lambda: db.table("bot_marriages").update({
+                "status": new_status,
+                "accepted_at": datetime.now(timezone.utc).isoformat() if new_status == "married" else None,
+            }).eq("id", marriage_id).eq("status", "pending").execute()
+        )
+        if not result.data:
+            await callback.answer("Предложение уже обработано.", show_alert=True)
             return
-    await message.answer(f"💍 Поздравляем! {mention(proposer.id, proposer.full_name)} и {mention(message.from_user.id, message.from_user.full_name)} теперь в браке!")
+    except Exception:
+        log.exception("Could not process marriage proposal callback")
+        await callback.answer("Не удалось сохранить ответ. Попробуйте ещё раз.", show_alert=True)
+        return
+    proposer_id = int(row.get("user1_id") or 0)
+    proposer_name = str(row.get("user1_name") or "Участник")
+    partner_name = str(row.get("user2_name") or callback.from_user.full_name)
+    if parts[1] == "accept":
+        text = f"💍 {mention(proposer_id, proposer_name)} и {mention(callback.from_user.id, partner_name)} теперь состоят в браке! Поздравляем!"
+        await callback.answer("Брак принят! 💍")
+    else:
+        text = f"💔 {mention(callback.from_user.id, partner_name)} отклонил(а) предложение о браке от {mention(proposer_id, proposer_name)}."
+        await callback.answer("Предложение отклонено.")
+    if callback.message:
+        try:
+            await callback.message.edit_text(text)
+        except TelegramBadRequest:
+            await callback.message.answer(text)
 
+@router.message(Command("acceptmarry"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак да|принять брак|согласен на брак|согласна на брак|да согласен|да согласна|принимаю предложение)(?:\s|$)"))
+async def accept_marry_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    pending = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id, user2_id=message.from_user.id, status="pending")
+    if not pending:
+        await message.answer("Активное предложение вам не найдено.")
+        return
+    row = pending[0]
+    if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+        if int(row.get("user1_id") or 0) != message.reply_to_message.from_user.id:
+            await message.answer("Ответьте на сообщение того, кто предложил вам брак, или используйте кнопку в предложении.")
+            return
+    await _finish_marriage_by_command(message, row, True)
+
+@router.message(Command("declinemarry"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак нет|отклонить брак|не согласен на брак|не согласна на брак)(?:\s|$)"))
+async def decline_marry_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    pending = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id, user2_id=message.from_user.id, status="pending")
+    if not pending:
+        await message.answer("Активное предложение вам не найдено.")
+        return
+    await _finish_marriage_by_command(message, pending[0], False)
+
+async def _finish_marriage_by_command(message: Message, row: dict, accept: bool) -> None:
+    try:
+        status = "married" if accept else "divorced"
+        result = await asyncio.to_thread(lambda: db.table("bot_marriages").update({
+            "status": status,
+            "accepted_at": datetime.now(timezone.utc).isoformat() if accept else None,
+        }).eq("id", row["id"]).eq("status", "pending").execute())
+        if not result.data:
+            await message.answer("Это предложение уже обработано.")
+            return
+    except Exception:
+        log.exception("Could not finish marriage from command")
+        await message.answer("Не удалось сохранить ответ в базе данных.")
+        return
+    proposer_id = int(row.get("user1_id") or 0)
+    proposer_name = str(row.get("user1_name") or "Участник")
+    partner_name = str(row.get("user2_name") or message.from_user.full_name)
+    if accept:
+        await message.answer(f"💍 {mention(proposer_id, proposer_name)} и {mention(message.from_user.id, partner_name)} теперь состоят в браке! Поздравляем!")
+    else:
+        await message.answer(f"💔 {mention(message.from_user.id, partner_name)} отклонил(а) предложение о браке от {mention(proposer_id, proposer_name)}.")
 @router.message(Command("marriage", "mymarriage", "myrelations", "relationships"))
 @router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:мой брак|моя свадьба|мои отношения|мои отн|мои отнош|мои браки|брак мой|отношения|отн)(?:\s|$)"))
 async def marriage_status_cmd(message: Message) -> None:
