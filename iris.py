@@ -1647,7 +1647,8 @@ async def rank_cmd(message: Message) -> None:
     if len(parts) == 1:
         if not message.from_user:
             return
-        await message.answer(f"🏅 Ваш ранг: <b>{user_rank(message.chat.id, message.from_user.id)}</b> (0 — участник, 1 — модератор, 5 — создатель).")
+        current_rank = user_rank(message.chat.id, message.from_user.id)
+        await message.answer(f"🏅 Ваш ранг: <b>{current_rank}</b> — <b>{role_name(current_rank)}</b>.")
         return
     if not await require_real_admin(message):
         return
@@ -1691,7 +1692,75 @@ async def rank_cmd(message: Message) -> None:
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": rank}, "user_id,chat_id")
     audit(message.chat.id, message.from_user.id, "set_rank", target[0], f"rank={rank}")
-    await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank}</b>.")
+    await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
+
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить|повыситьранг|promote)(?:\s|$)"))
+async def promote_rank_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    target = await resolve_target(message, args_after_command(message))
+    if not target:
+        await message.answer("Ответьте на сообщение участника и напишите <code>повысить</code> либо укажите <code>@username</code>.")
+        return
+    current = user_rank(message.chat.id, target[0])
+    if current >= 5:
+        await message.answer("ℹ️ Уже максимальный ранг: Создатель.")
+        return
+    new_rank = current + 1
+    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
+        "username": user.get("username"), "first_name": user.get("first_name") or target[1],
+        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
+    await message.answer(f"⬆️ {mention(target[0], target[1])}: <b>{current} — {role_name(current)}</b> → <b>{new_rank} — {role_name(new_rank)}</b>.")
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить|понизитьранг|demote)(?:\s|$)"))
+async def demote_rank_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    target = await resolve_target(message, args_after_command(message))
+    if not target:
+        await message.answer("Ответьте на сообщение участника и напишите <code>понизить</code> либо укажите <code>@username</code>.")
+        return
+    current = user_rank(message.chat.id, target[0])
+    if current <= 0:
+        await message.answer("ℹ️ Уже минимальный ранг: Участник.")
+        return
+    new_rank = current - 1
+    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
+        "username": user.get("username"), "first_name": user.get("first_name") or target[1],
+        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
+    await message.answer(f"⬇️ {mention(target[0], target[1])}: <b>{current} — {role_name(current)}</b> → <b>{new_rank} — {role_name(new_rank)}</b>.")
+
+@router.message(F.text.regexp(r"(?i)^\.дк\s+"))
+async def command_rank_rule_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    parts = (message.text or "").strip().split()
+    if len(parts) != 3:
+        await message.answer("Формат: <code>.дк мут 4</code> — для команды нужен ранг 4. Допустимые ранги: 1–5.")
+        return
+    key = {"мут":"mute", "размут":"unmute", "анмут":"unmute", "бан":"ban", "разбан":"unban",
+           "кик":"kick", "варн":"warn", "анварн":"unwarn", "снятьварн":"unwarn",
+           "повысить":"promote", "понизить":"demote", "очистить":"purge", "-смс":"delete",
+           "пин":"pin", "анпин":"unpin"}.get(parts[1].lower(), parts[1].lower())
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
+        await message.answer("Неизвестная команда. Пример: <code>.дк мут 4</code>.")
+        return
+    try:
+        required = int(parts[2])
+    except ValueError:
+        required = 0
+    if not 1 <= required <= 5:
+        await message.answer("Ранг должен быть от 1 до 5.")
+        return
+    settings = get_chat_settings(message.chat.id)
+    settings[f"modrank_{key}"] = required
+    save_chat_settings(message.chat.id, settings)
+    await message.answer(f"🔐 Для команды <b>{parts[1]}</b> теперь нужен ранг <b>{required} — {role_name(required)}</b>.")
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:настройки фильтров|фильтры|filters)(?:\s|$)"))
 async def filters_status_cmd(message: Message) -> None:
