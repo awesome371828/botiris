@@ -24,7 +24,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
@@ -806,11 +806,16 @@ async def delete_message_cmd(message: Message) -> None:
             except TelegramForbiddenError:
                 forbidden = True
                 break
+            except TelegramRetryAfter as exc:
+                # Если Telegram ограничит частоту запросов, ждём указанный срок и
+                # повторяем тот же ID, а не считаем его обработанным.
+                await asyncio.sleep(float(exc.retry_after) + 0.1)
+                continue
             except TelegramBadRequest as exc:
                 # Пропускаем отсутствующие/служебные сообщения и сообщения старше 48 часов.
                 log.debug("Cannot delete chat=%s message=%s: %s", message.chat.id, mid, exc)
             except Exception:
-                log.exception("Failed to delete message_id=%s chat_id=%s", message.chat.id, mid)
+                log.exception("Failed to delete message_id=%s chat_id=%s", mid, message.chat.id)
             mid -= 1
             scanned += 1
         try:
