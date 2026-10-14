@@ -828,7 +828,13 @@ async def help_command(message: Message) -> None:
         "• +антиссылка / -антиссылка — управление фильтрами (и другие +анти…/-анти…)\n"
         "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n"
         "• /time или дата — текущее московское время (Europe/Moscow, UTC+3); /calc 2+2 — калькулятор; /random 1 100 — случайное число; /dice — кубик\n"
-        "• /activity — активность; /quote ответом — цитата; /favorites ответом — избранное; /achievements — достижения; /suggest текст — предложение\n\n"
+        "• /activity — активность; /quote ответом — цитата; /favorites ответом — избранное; /achievements — достижения; /suggest текст — предложение\n"
+        "• врембан 2д причина — временный бан; заметка текст ответом — заметка о пользователе; заметки ответом — список заметок\n"
+        "• доверенный ответом — добавить в исключения антиспама; доверенные — список; недоверенный ответом — убрать\n"
+        "• причина добавить мут спам Текст — шаблоны причин; права мут 3 — минимальный ранг команды\n"
+        "• приветствие Текст {name} — приветствие новичков; расписание 23:00 08:00 — автоматическое закрытие/открытие\n"
+        "• экспорт настроек / импорт настроек — перенос настроек; статистика модераторов неделя — отчёт модерации\n"
+        "• история наказаний ответом — история пользователя; диагностика — состояние и задержки обработчиков (для овнера/операторов)\n\n"
         "<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
@@ -3789,6 +3795,16 @@ async def main() -> None:
         BotCommand(command="del", description="Удалить сообщения"),
         BotCommand(command="openchat", description="Открыть чат"),
         BotCommand(command="closechat", description="Закрыть чат"),
+        BotCommand(command="tempban", description="Временный бан"),
+        BotCommand(command="history", description="История наказаний"),
+        BotCommand(command="note", description="Заметка о пользователе"),
+        BotCommand(command="trusted", description="Доверенные участники"),
+        BotCommand(command="reasons", description="Шаблоны причин"),
+        BotCommand(command="modrights", description="Пороги рангов команд"),
+        BotCommand(command="schedule", description="Расписание чата"),
+        BotCommand(command="modstats", description="Статистика модераторов"),
+        BotCommand(command="exportsettings", description="Экспорт настроек"),
+        BotCommand(command="importsettings", description="Импорт настроек"),
     ]
     private_commands = [
         BotCommand(command="start", description="Открыть меню бота"),
