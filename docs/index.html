@@ -3,158 +3,186 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#080b14">
+<meta name="theme-color" content="#0b0d15">
 <meta name="color-scheme" content="dark">
-<title>Pear CM — пространство управления</title>
-<meta name="description" content="Pear CM — инструменты для управления Telegram-чатом в одном красивом приложении.">
+<title>Pear CM — твой чат, твои правила</title>
+<meta name="description" content="Pear CM — команды модерации, быстрый поиск и инструменты для Telegram-групп.">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#080b14;--surface:rgba(255,255,255,.055);--surface2:rgba(255,255,255,.085);--stroke:rgba(255,255,255,.105);--text:#f5f7ff;--muted:#929bb3;--mint:#9bffda;--cyan:#80e7ff;--violet:#a9a0ff;--shadow:0 18px 45px rgba(0,0,0,.3);--radius:24px;--tg-bg:var(--bg)}
+:root{color-scheme:dark;--bg:#0b0d15;--panel:#141722;--panel2:#191d2b;--line:#ffffff12;--text:#f5f6fc;--muted:#9199ad;--mint:#a6f7d8;--blue:#a6b4ff;--purple:#c4a8ff;--safe:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{scroll-behavior:smooth;background:var(--bg)}
-body{margin:0;min-height:100vh;min-height:100dvh;overflow-x:hidden;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(ellipse at 15% -10%,rgba(85,99,255,.23),transparent 43%),radial-gradient(ellipse at 100% 18%,rgba(40,222,190,.12),transparent 35%),radial-gradient(ellipse at 50% 90%,rgba(105,83,255,.10),transparent 45%),var(--bg);background-attachment:scroll}
-button,input{font:inherit}button{color:inherit}
-a{color:inherit;text-decoration:none}
-button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:4px}
-.ambient{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:-1;contain:strict}
-.orb{position:absolute;width:240px;height:240px;border-radius:50%;filter:blur(52px);opacity:.15;animation:drift 22s ease-in-out infinite alternate}
-.orb.one{background:#665dff;top:7%;left:-130px}.orb.two{background:#42e5c2;right:-150px;top:44%;animation-delay:-6s}
-@keyframes drift{to{transform:translate3d(24px,-30px,0) scale(1.12)}}
-main{max-width:620px;margin:0 auto;padding:calc(17px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom))}
-.header{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 22px}
-.brand{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:850;letter-spacing:-.45px}
-.logo{width:46px;height:46px;display:grid;place-items:center;border-radius:17px;position:relative;isolation:isolate;color:#081a1a;font-size:23px;background:linear-gradient(145deg,#d6fff0 0%,#8fffd6 36%,#64c8df 100%);box-shadow:inset 0 2px 1px #fff9,inset 0 -4px 9px #257c8b3b,0 8px 0 #244f5b,0 13px 25px #3fe5c42e;transform:translateY(-2px)}
-.logo:after{content:"";position:absolute;inset:2px;border-radius:15px;border:1px solid #ffffff70}
-.brand small{display:block;color:var(--muted);font-size:11px;font-weight:550;letter-spacing:.2px}
-.status{display:flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid #9bffda25;background:linear-gradient(145deg,#9bffda12,#ffffff04);border-radius:99px;color:#b7ffe6;font-size:10px;font-weight:800;letter-spacing:1px;box-shadow:inset 0 1px #ffffff08}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
-.hero{position:relative;isolation:isolate;overflow:hidden;border:1px solid #ffffff18;border-radius:30px;padding:25px 22px 22px;background:linear-gradient(145deg,rgba(255,255,255,.105),rgba(255,255,255,.025) 48%,rgba(133,143,255,.07));box-shadow:inset 0 1px 0 #ffffff20,inset 0 -1px 0 #ffffff06,0 20px 50px #0004;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-.hero:before{content:"";position:absolute;z-index:-1;width:220px;height:220px;right:-80px;top:-110px;border-radius:50%;background:radial-gradient(circle,#9bffda2a,transparent 68%);pointer-events:none}
-.hero:after{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(115deg,transparent 15%,#ffffff08 33%,transparent 52%);pointer-events:none}
-.eyebrow{display:inline-flex;align-items:center;gap:8px;color:#c6d0e7;font-size:10px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase;margin-bottom:15px}
-.spark{color:var(--mint);font-size:15px;text-shadow:0 0 18px #9bffda88}
-h1{font-size:clamp(32px,8vw,45px);line-height:1.03;letter-spacing:-1.9px;margin:0 0 14px;font-weight:900}
-.gradient{background:linear-gradient(100deg,#b8ffe6 5%,#8ce8ff 53%,#b7adff 100%);background-clip:text;-webkit-background-clip:text;color:transparent}
-.lead{font-size:14px;line-height:1.65;color:#aab4cc;max-width:410px;margin:0}
-.hero-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px}
-.mini-stat{display:flex;align-items:center;gap:9px;color:#aeb9ce;font-size:11px}
-.stat-icon{width:29px;height:29px;border:1px solid #ffffff12;border-radius:10px;display:grid;place-items:center;background:#ffffff08}
-.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:19px}
-.btn{position:relative;isolation:isolate;appearance:none;min-height:49px;border:1px solid transparent;border-radius:16px;padding:13px 12px;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;text-align:center;font-size:13px;font-weight:800;letter-spacing:-.1px;transition:transform .18s cubic-bezier(.2,.8,.2,1),filter .18s,box-shadow .18s;user-select:none;touch-action:manipulation}
-.btn:before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(180deg,#ffffff40,transparent 48%);opacity:.7;z-index:-1}
-.btn:after{content:"";position:absolute;left:10%;right:10%;bottom:-5px;height:8px;border-radius:50%;filter:blur(7px);opacity:.3;z-index:-2;transition:opacity .2s}
-.btn:active{transform:translateY(3px) scale(.985);filter:brightness(.96)}
-.btn:active:after{opacity:.1}
-.primary{color:#09221d;background:linear-gradient(155deg,#c5ffe9 0%,#89f8d4 48%,#63d9d3 100%);border-color:#d4fff0a8;box-shadow:inset 0 1px 0 #fff,inset 0 -3px 0 #288d87,0 5px 0 #246e6b,0 10px 22px #4de7c72c}
-.primary:after{background:#70f7d0}
-.secondary{background:linear-gradient(155deg,#ffffff16,#ffffff05);border-color:#ffffff20;color:#f2f5ff;box-shadow:inset 0 1px 0 #ffffff22,inset 0 -3px 0 #0002,0 5px 0 #171c2c,0 10px 22px #0003}
-.secondary:after{background:#8b9dff}
-.btn:hover{filter:brightness(1.07)}@media(hover:hover){.btn:hover{transform:translateY(-2px)}}
-.section-head{display:flex;align-items:end;justify-content:space-between;gap:10px;margin:29px 3px 13px}
-.section-head h2{margin:0;font-size:19px;font-weight:850;letter-spacing:-.6px}
-.section-head .sub{font-size:11px;color:var(--muted);text-align:right}
-.feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
-.feature{position:relative;overflow:hidden;min-height:140px;padding:16px;border-radius:22px;border:1px solid #ffffff13;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.022));box-shadow:inset 0 1px 0 #ffffff0c,0 10px 24px #0002;transition:transform .22s,border-color .22s,background .22s}
-.feature:after{content:"";position:absolute;right:-25px;top:-30px;width:85px;height:85px;border-radius:50%;background:var(--glow,#9bffda);opacity:.10;filter:blur(24px);pointer-events:none}
-.feature:active{transform:scale(.985)}
-.feature-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.feature-icon{width:42px;height:42px;border-radius:15px;display:grid;place-items:center;font-size:21px;background:linear-gradient(145deg,#ffffff1a,#ffffff04);border:1px solid #ffffff1a;box-shadow:inset 0 1px #ffffff25,inset 0 -3px #0002,0 4px 0 #171b2b,0 7px 12px #0003;transform:translateY(-2px)}
-.feature-num{font-size:10px;color:#66728c;font-weight:800;letter-spacing:1px}
-.feature h3{margin:0 0 5px;font-size:14px;font-weight:850;letter-spacing:-.2px}
-.feature p{margin:0;font-size:11px;line-height:1.55;color:#939eb7}
-.panel{padding:14px;border:1px solid #ffffff15;border-radius:24px;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.025));box-shadow:inset 0 1px 0 #ffffff0c,0 14px 32px #0002;backdrop-filter:blur(12px)}
-.search-wrap{position:relative;margin-bottom:12px}
-.search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px;opacity:.7;pointer-events:none}
-.search{display:block;width:100%;height:48px;padding:0 14px 0 41px;border:1px solid #ffffff12;border-radius:15px;background:linear-gradient(145deg,#05081299,#ffffff05);color:var(--text);outline:none;font-size:13px;box-shadow:inset 0 3px 8px #0002,inset 0 1px #0002;transition:border-color .2s,box-shadow .2s}
-.search::placeholder{color:#78839b}.search:focus{border-color:#9bffda66;box-shadow:inset 0 2px 8px #0002,0 0 0 3px #9bffda0d}
-.chips{display:flex;gap:7px;overflow-x:auto;padding:2px 1px 10px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
-.chip{flex:0 0 auto;border:1px solid #ffffff13;border-radius:11px;padding:8px 11px;background:linear-gradient(145deg,#ffffff0b,#ffffff03);color:#aab4ca;font-size:11px;font-weight:750;box-shadow:inset 0 1px #ffffff09,0 2px 0 #0002;cursor:pointer;transition:all .18s}
-.chip:active{transform:translateY(1px)}
-.chip.active{color:#c6ffeb;border-color:#9bffda45;background:linear-gradient(145deg,#9bffda1e,#9bffda08);box-shadow:inset 0 1px #9bffda1a,0 0 18px #9bffda09}
-.command{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:13px 3px;border-bottom:1px solid #ffffff0e;animation:appear .25s ease both}
-.command:last-child{border-bottom:0}.command-info{min-width:0}.command code{display:inline-block;color:#a8ffe0;font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace;background:#9bffda0c;border:1px solid #9bffda16;border-radius:8px;padding:4px 7px;overflow-wrap:anywhere}
-.command p{margin:6px 0 0;font-size:11px;line-height:1.5;color:#929db4}
-.copy{flex:0 0 33px;width:33px;height:33px;border:1px solid #ffffff14;border-radius:11px;background:linear-gradient(145deg,#ffffff12,#ffffff03);box-shadow:inset 0 1px #ffffff15,0 3px 0 #171b2a;display:grid;place-items:center;font-size:13px;cursor:pointer;transition:transform .15s,color .15s}
-.copy:active{transform:translateY(2px);box-shadow:inset 0 1px #ffffff12,0 1px 0 #171b2a}.empty{padding:22px 6px;text-align:center;color:var(--muted);font-size:12px}
-.vpn{position:relative;overflow:hidden;margin-top:18px;padding:19px;border:1px solid #a7a0ff30;border-radius:25px;background:linear-gradient(135deg,rgba(128,114,255,.15),rgba(104,219,222,.07) 65%,rgba(255,255,255,.025));box-shadow:inset 0 1px #ffffff15,0 16px 36px #0002;backdrop-filter:blur(10px)}
-.vpn:after{content:"✦";position:absolute;right:17px;top:14px;font-size:40px;color:#b8b1ff;opacity:.12;transform:rotate(15deg);pointer-events:none}
-.vpn-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.vpn-icon{width:46px;height:46px;flex:0 0 46px;display:grid;place-items:center;border-radius:16px;font-size:23px;background:linear-gradient(145deg,#d8d3ff,#9f9aff 52%,#7a7de9);color:#1a1a3c;box-shadow:inset 0 2px 1px #fff, inset 0 -3px #5553a0,0 4px 0 #4e4b91,0 8px 17px #7e76ff30;transform:translateY(-2px)}
-.vpn h3{margin:0;font-size:16px;letter-spacing:-.35px}.vpn p{margin:0;color:#aeb6d0;font-size:12px;line-height:1.65}
-.vpn .btn{width:100%;margin-top:15px;color:#19162f;background:linear-gradient(145deg,#e3e0ff,#b9b1ff 55%,#9cafff);border-color:#efedff;box-shadow:inset 0 1px #fff,inset 0 -3px #7771c9,0 5px 0 #57539a,0 10px 22px #8b82ff20}
-.vpn .btn:after{background:#a29aff}
-.footer{padding:26px 0 2px;text-align:center;color:#66718a;font-size:10px;letter-spacing:.2px}
-.footer-mark{display:inline-flex;align-items:center;gap:6px;margin-bottom:5px;color:#8d98b1;font-weight:800}.footer-mark span{color:var(--mint)}
-.toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));z-index:20;transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:11px 16px;border:1px solid #ffffff20;border-radius:14px;background:#171e2df2;color:#f5f7ff;font-size:12px;font-weight:700;box-shadow:0 12px 35px #0007;transition:opacity .2s,transform .2s;white-space:nowrap;backdrop-filter:blur(14px)}
-.toast.show{opacity:1;transform:translate(-50%,0)}
-@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}\n.reveal{opacity:0;transform:translateY(10px);transition:opacity .45s ease,transform .45s cubic-bezier(.2,.7,.2,1)}.reveal.is-visible{opacity:1;transform:translateY(0)}
-@media(hover:hover){.feature:hover{transform:translateY(-3px);border-color:#ffffff28;background:linear-gradient(145deg,rgba(255,255,255,.095),rgba(255,255,255,.025))}}\n@media(max-width:480px){.hero{backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}.panel,.vpn{backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.orb{filter:blur(40px);opacity:.12}}\n@media(min-width:520px){main{padding-left:22px;padding-right:22px;padding-top:25px}.hero{padding:30px}.feature{min-height:150px;padding:18px}}
+html{background:var(--bg);scroll-behavior:smooth}
+body{margin:0;min-height:100dvh;background:radial-gradient(ellipse at 12% -10%,#6874ff20,transparent 38%),radial-gradient(ellipse at 100% 30%,#54d8c214,transparent 35%),var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden}
+button,input{font:inherit}button{color:inherit;cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+#app{max-width:600px;margin:0 auto;min-height:100dvh;padding:calc(15px + env(safe-area-inset-top)) 16px calc(98px + var(--safe))}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin:0 2px 25px}
+.brand{display:flex;align-items:center;gap:11px;font-weight:850;font-size:17px;letter-spacing:-.5px}
+.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:15px;background:linear-gradient(145deg,#d7fff0,#88f0d4 56%,#86cce9);color:#10221f;font-size:22px;box-shadow:0 5px 0 #315c60,0 9px 18px #64ebca22,inset 0 1px #fff}
+.brand small{display:block;color:var(--muted);font-size:11px;font-weight:550;letter-spacing:0}
+.top-pill{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #a6f7d82b;background:#a6f7d80b;border-radius:99px;color:#bfffe8;font-size:10px;font-weight:800;letter-spacing:.8px}
+.live{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px #a6f7d8}
+.page{display:none;animation:pageIn .32s cubic-bezier(.2,.7,.2,1) both}.page.active{display:block}
+@keyframes pageIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+.kicker{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:#b7c2dc;font-size:10px;font-weight:850;letter-spacing:1.8px;text-transform:uppercase}.kicker i{font-style:normal;color:var(--mint);font-size:15px}
+h1{margin:0;font-size:clamp(35px,9vw,49px);line-height:1.02;letter-spacing:-2.1px;font-weight:900}
+.grad{background:linear-gradient(100deg,#b9ffe5,#a5c9ff 56%,#c9afff);color:transparent;background-clip:text;-webkit-background-clip:text}
+.intro{margin:15px 0 0;max-width:410px;color:#a4adc2;font-size:14px;line-height:1.7}
+.hero{position:relative;overflow:hidden;padding:25px 22px 22px;border:1px solid #ffffff16;border-radius:28px;background:linear-gradient(145deg,#202638c9,#131722e8 62%,#171a29d9);box-shadow:inset 0 1px #ffffff12,0 18px 44px #0003}
+.hero:after{content:"✳";position:absolute;right:-10px;top:-35px;color:#b5ffeb0c;font-size:170px;line-height:1;transform:rotate(12deg);pointer-events:none}
+.hero>*{position:relative;z-index:1}
+.hero-actions{display:flex;gap:10px;margin-top:23px}
+.btn{min-height:46px;border:1px solid #ffffff16;border-radius:15px;padding:12px 15px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:800;transition:transform .18s,filter .18s,background .18s;box-shadow:inset 0 1px #ffffff1c,0 4px 0 #070911,0 8px 17px #0002}
+.btn:active{transform:translateY(2px) scale(.99);box-shadow:inset 0 1px #ffffff12,0 1px 0 #070911}
+.btn.primary{color:#0c211b;background:linear-gradient(145deg,#c6ffeb,#8cebd2 65%,#8bd7dd);border-color:#d7fff0}
+.btn.soft{background:linear-gradient(145deg,#ffffff10,#ffffff04);color:#f4f5ff}
+.btn.full{width:100%}
+.section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:27px 2px 13px}
+.section-title h2{margin:0;font-size:20px;letter-spacing:-.7px;font-weight:850}
+.section-title span{color:var(--muted);font-size:11px}
+.quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.quick{position:relative;min-height:124px;padding:15px;border:1px solid var(--line);border-radius:21px;background:linear-gradient(145deg,#ffffff0c,#ffffff03);text-align:left;overflow:hidden;transition:transform .2s,border-color .2s}
+.quick:active{transform:scale(.98)}.quick .ico{width:38px;height:38px;display:grid;place-items:center;border:1px solid #ffffff13;border-radius:13px;background:#ffffff09;font-size:19px;margin-bottom:12px;box-shadow:inset 0 1px #ffffff16}
+.quick strong{display:block;font-size:13px;letter-spacing:-.2px}.quick small{display:block;margin-top:4px;color:var(--muted);font-size:11px;line-height:1.5}
+.strip{display:flex;align-items:center;gap:12px;padding:15px;margin-top:13px;border:1px solid #b5a5ff25;border-radius:20px;background:linear-gradient(110deg,#9b8dff14,#65e5d10a);text-align:left;width:100%}
+.strip .strip-icon{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:14px;background:#b5a5ff14;color:#d3c8ff;font-size:20px}
+.strip strong{display:block;font-size:13px}.strip small{display:block;color:var(--muted);font-size:11px;margin-top:2px}.arrow{margin-left:auto;color:#b4ffdf;font-size:19px}
+.page-heading{margin:4px 2px 18px}.page-heading h1{font-size:34px;letter-spacing:-1.2px}.page-heading p{margin:9px 0 0;color:var(--muted);font-size:13px}
+.searchbox{position:relative;margin:18px 0 12px}.searchbox span{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8c96ac;font-size:17px}
+.search{width:100%;height:48px;border:1px solid #ffffff14;border-radius:16px;padding:0 14px 0 42px;background:#11141e;color:var(--text);outline:none;font-size:13px;box-shadow:inset 0 2px 8px #0002;transition:border-color .2s}.search:focus{border-color:#a6f7d85c}.search::placeholder{color:#7f899f}
+.filters{display:flex;gap:7px;overflow:auto;scrollbar-width:none;padding:2px 0 12px}.filters::-webkit-scrollbar{display:none}
+.filter{flex:0 0 auto;padding:8px 12px;border:1px solid #ffffff12;border-radius:12px;background:#ffffff06;color:#aab2c5;font-size:11px;font-weight:750;white-space:nowrap;transition:all .18s}
+.filter.active{background:#a6f7d815;border-color:#a6f7d849;color:#c5ffe9}
+.command-list{border:1px solid #ffffff10;border-radius:21px;background:linear-gradient(145deg,#ffffff08,#ffffff02);padding:2px 14px}
+.command{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #ffffff0d;animation:pageIn .22s ease both}.command:last-child{border-bottom:0}
+.command-main{min-width:0}.command code{display:inline-block;color:#b8ffe5;background:#a6f7d80c;border:1px solid #a6f7d81c;border-radius:8px;padding:4px 7px;font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+.command p{margin:6px 0 0;color:#939db2;font-size:11px;line-height:1.5}
+.copy{flex:0 0 34px;width:34px;height:34px;border:1px solid #ffffff14;border-radius:12px;background:#ffffff08;box-shadow:inset 0 1px #ffffff12,0 3px 0 #070911;font-size:15px;transition:transform .15s}.copy:active{transform:translateY(2px)}
+.count{color:#7f899f;font-size:10px;padding:5px 8px;border-radius:8px;background:#ffffff07}
+.empty{text-align:center;padding:25px 10px;color:var(--muted);font-size:12px}
+.tool-list{display:grid;gap:10px}.tool-card{padding:16px;border:1px solid #ffffff12;border-radius:20px;background:linear-gradient(145deg,#ffffff0a,#ffffff03)}.tool-head{display:flex;align-items:center;gap:11px;margin-bottom:7px}.tool-ico{width:39px;height:39px;display:grid;place-items:center;border-radius:13px;background:#ffffff09;border:1px solid #ffffff12;font-size:19px}.tool-card h3{margin:0;font-size:14px}.tool-card p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}.example{display:block;margin-top:11px;padding:10px 11px;border-radius:12px;background:#080b12;border:1px solid #ffffff0c;color:#b7ffe4;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}
+.vpn-card{padding:20px;border:1px solid #b9a6ff28;border-radius:24px;background:linear-gradient(145deg,#9d8bff19,#71e3d50b 70%,#ffffff03);box-shadow:inset 0 1px #ffffff12}
+.vpn-card h3{margin:0;font-size:19px;letter-spacing:-.5px}.vpn-card p{margin:8px 0 16px;color:#aab3ca;font-size:12px;line-height:1.7}.vpn-symbol{width:46px;height:46px;display:grid;place-items:center;border-radius:16px;margin-bottom:15px;background:linear-gradient(145deg,#e0d9ff,#aaa1ff 60%,#8caaff);color:#1b1b3c;font-size:22px;box-shadow:0 4px 0 #4d4b8c}
+.info-card{padding:17px;border:1px solid #ffffff12;border-radius:20px;background:#ffffff06;margin-top:11px}.info-card h3{font-size:13px;margin:0 0 6px}.info-card p{font-size:12px;color:var(--muted);line-height:1.7;margin:0}
+.bottom-nav{position:fixed;z-index:30;left:50%;bottom:0;transform:translateX(-50%);width:min(600px,100%);padding:9px 12px calc(9px + var(--safe));display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:#0e111cf0;border-top:1px solid #ffffff12;box-shadow:0 -12px 35px #0003;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+.nav-item{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:53px;padding:5px 3px;border:1px solid transparent;border-radius:15px;background:transparent;color:#7f899f;font-size:10px;font-weight:700;transition:color .2s,background .2s,transform .2s}
+.nav-item .nav-icon{font-size:19px;line-height:1.15;transition:transform .22s}.nav-item.active{color:#c2ffe9;background:linear-gradient(145deg,#a6f7d813,#a6f7d805);border-color:#a6f7d817}.nav-item.active .nav-icon{transform:translateY(-1px) scale(1.06)}.nav-item.active:before{content:"";position:absolute;top:-1px;width:17px;height:2px;border-radius:9px;background:var(--mint);box-shadow:0 0 9px #a6f7d8}
+.toast{position:fixed;z-index:50;left:50%;bottom:calc(86px + var(--safe));transform:translate(-50%,12px);opacity:0;pointer-events:none;padding:10px 15px;border:1px solid #ffffff20;border-radius:13px;background:#202535f5;color:#f7f8ff;font-size:12px;font-weight:750;box-shadow:0 10px 30px #0006;transition:opacity .2s,transform .2s;white-space:nowrap}.toast.show{opacity:1;transform:translate(-50%,0)}
+.footer{text-align:center;color:#667087;font-size:10px;margin:26px 0 4px}.footer b{color:#9ca7be}
+@media(hover:hover){.quick:hover,.tool-card:hover{border-color:#ffffff25;transform:translateY(-2px)}.btn:hover{filter:brightness(1.07);transform:translateY(-1px)}}
+@media(max-width:380px){#app{padding-left:13px;padding-right:13px}.hero{padding:22px 18px}.hero-actions{gap:8px}.btn{padding:11px 10px;font-size:11px}.quick{padding:13px;min-height:118px}.page-heading h1{font-size:31px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
-<div class="ambient" aria-hidden="true"><div class="orb one"></div><div class="orb two"></div></div>
-<main>
-<header class="header">
-  <div class="brand"><div class="logo">✳</div><div>Pear CM<small>Чат-менеджер</small></div></div>
-  <div class="status"><span class="dot"></span> MINI APP</div>
-</header>
-<section class="hero">
-  <div class="eyebrow"><span class="spark">✦</span> YOUR CHAT. YOUR RULES.</div>
-  <h1>Твой чат.<br><span class="gradient">Твои правила.</span></h1>
-  <p class="lead">Всё для управления Telegram-группой — быстро, удобно и красиво. Без лишней суеты.</p>
-  <div class="hero-bottom"><div class="mini-stat"><span class="stat-icon">✧</span><span>Инструменты в одном месте</span></div></div>
-  <div class="actions"><button class="btn primary" id="commandsJump"><span>⌕</span> Найти команду</button><button class="btn secondary" id="addBot"><span>＋</span> Добавить бота</button></div>
+<div id="app">
+<header class="topbar"><div class="brand"><div class="mark">✳</div><div>Pear CM<small>Чат-менеджер</small></div></div><div class="top-pill"><span class="live"></span> MINI APP</div></header>
+
+<section class="page active" id="page-home" data-page="home">
+  <div class="hero">
+    <div class="kicker"><i>✦</i> YOUR CHAT. YOUR RULES.</div>
+    <h1>Твой чат.<br><span class="grad">Твои правила.</span></h1>
+    <p class="intro">Управляй группой без лишней суеты. Команды, модерация и полезные инструменты — в одном месте.</p>
+    <div class="hero-actions"><button class="btn primary" data-go="commands">⌕ Найти команду</button><button class="btn soft" id="addBot">＋ Добавить бота</button></div>
+  </div>
+  <div class="section-title"><h2>Быстрый доступ</h2><span>в одно касание</span></div>
+  <div class="quick-grid">
+    <button class="quick" data-go="commands" data-category="moderation"><span class="ico">🛡</span><strong>Модерация</strong><small>Мут, бан, варны и очистка</small></button>
+    <button class="quick" data-go="commands" data-category="chat"><span class="ico">☷</span><strong>Управление чатом</strong><small>Права, закрепы и настройки</small></button>
+    <button class="quick" data-go="commands" data-category="profile"><span class="ico">◉</span><strong>Профиль и топ</strong><small>Статистика и активность</small></button>
+    <button class="quick" data-go="tools"><span class="ico">✧</span><strong>Шпаргалки</strong><small>Примеры команд и подсказки</small></button>
+  </div>
+  <button class="strip" data-go="commands"><span class="strip-icon">⌕</span><span><strong>Все команды в каталоге</strong><small>Поиск по названию и назначению</small></span><span class="arrow">→</span></button>
+  <div class="section-title"><h2>Ещё один проект</h2><span>от автора</span></div>
+  <div class="vpn-card"><div class="vpn-symbol">↗</div><h3>VPN от автора Pear CM</h3><p>Тарифы, подключение и оплата — в отдельном Telegram-боте. Открой, чтобы посмотреть условия.</p><button class="btn primary full" id="vpnButton">Открыть VPN-бота <span>↗</span></button></div>
+  <div class="footer"><b>✳ PEAR CM</b><br>Инструменты для чатов. Ничего лишнего.</div>
 </section>
-<div class="section-head"><h2>Возможности</h2><span class="sub">Всё под контролем</span></div>
-<section class="feature-grid" aria-label="Возможности Pear CM">
-  <article class="feature" style="--glow:#8bffdc"><div class="feature-top"><div class="feature-icon">🛡️</div><span class="feature-num">01</span></div><h3>Модерация</h3><p>Инструменты для порядка и контроля участников.</p></article>
-  <article class="feature" style="--glow:#8da8ff"><div class="feature-top"><div class="feature-icon">✦</div><span class="feature-num">02</span></div><h3>Чистый чат</h3><p>Быстрая очистка сообщений и меньше шума.</p></article>
-  <article class="feature" style="--glow:#ffcf91"><div class="feature-top"><div class="feature-icon">⚙️</div><span class="feature-num">03</span></div><h3>Управление</h3><p>Удобные команды для администраторов группы.</p></article>
-  <article class="feature" style="--glow:#d0a0ff"><div class="feature-top"><div class="feature-icon">◈</div><span class="feature-num">04</span></div><h3>Активность</h3><p>Полезная информация об участниках и чате.</p></article>
+
+<section class="page" id="page-commands" data-page="commands">
+  <div class="page-heading"><div class="kicker"><i>⌕</i> КОМАНДНЫЙ ЦЕНТР</div><h1>Команды<span class="grad">.</span></h1><p>Найди нужное, скопируй и отправь в чат. Для модерации часто нужно ответить на сообщение участника.</p></div>
+  <div class="searchbox"><span>⌕</span><input class="search" id="search" placeholder="Например: мут, профиль, очистка…" autocomplete="off" aria-label="Поиск по командам"></div>
+  <div class="filters" id="filters"><button class="filter active" data-filter="all">Все</button><button class="filter" data-filter="moderation">Модерация</button><button class="filter" data-filter="chat">Чат</button><button class="filter" data-filter="profile">Профиль</button><button class="filter" data-filter="utility">Инструменты</button><button class="filter" data-filter="owner">Служебные</button></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin:0 2px 10px"><span style="color:var(--muted);font-size:11px">Каталог команд Pear CM</span><span class="count" id="count">0 команд</span></div>
+  <div class="command-list" id="commandList" aria-live="polite"></div>
+  <div class="info-card"><h3>Команда не сработала?</h3><p>Проверь, что бот добавлен в группу и у него есть нужные права. Команды модерации отправляй в группе; для действий над участником используй ответ на его сообщение.</p></div>
 </section>
-<div class="section-head" id="commandsTitle"><h2>Команды</h2><span class="sub">Найди и скопируй</span></div>
-<section class="panel" id="commandPanel">
-  <div class="search-wrap"><span class="search-icon">⌕</span><input id="search" class="search" placeholder="Поиск: мут, бан, профиль…" autocomplete="off" aria-label="Поиск команд"></div>
-  <div class="chips" role="group" aria-label="Категории команд"><button class="chip active" data-filter="all">Все команды</button><button class="chip" data-filter="moderation">Модерация</button><button class="chip" data-filter="chat">Чат</button><button class="chip" data-filter="user">Профиль</button></div>
-  <div id="commandList" aria-live="polite"></div>
+
+<section class="page" id="page-tools" data-page="tools">
+  <div class="page-heading"><div class="kicker"><i>✧</i> ПОД РУКОЙ</div><h1>Инструменты<span class="grad">.</span></h1><p>Короткие примеры, чтобы не вспоминать синтаксис каждый раз.</p></div>
+  <div class="tool-list">
+    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🔇</span><h3>Ограничить участника</h3></div><p>Ответь на сообщение человека командой с длительностью и причиной.</p><code class="example">/mute 1h спам</code><button class="btn soft full" style="margin-top:10px" data-copy="/mute 1h спам">⧉ Скопировать пример</button></article>
+    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🧹</span><h3>Очистить сообщения</h3></div><p>Укажи количество последних сообщений для удаления, если команда поддерживает этот формат.</p><code class="example">-смс 100</code><button class="btn soft full" style="margin-top:10px" data-copy="-смс 100">⧉ Скопировать пример</button></article>
+    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🛡</span><h3>Проверить права</h3></div><p>Посмотри, хватает ли боту прав для модерации, удаления и закрепления.</p><code class="example">/checkrights</code><button class="btn soft full" style="margin-top:10px" data-copy="/checkrights">⧉ Скопировать пример</button></article>
+    <article class="tool-card"><div class="tool-head"><span class="tool-ico">📊</span><h3>Активность</h3></div><p>Покажи рейтинг или список недавно замеченных участников группы.</p><code class="example">/top · /activity · /online</code><button class="btn soft full" style="margin-top:10px" data-copy="/top">⧉ Скопировать /top</button></article>
+  </div>
+  <div class="info-card"><h3>Небольшая подсказка</h3><p>Длительность можно задавать по-русски или по-английски: <b>10м</b>, <b>1ч</b>, <b>2д</b>, <b>30m</b>, <b>1h</b>. Точный формат зависит от конкретной команды.</p></div>
 </section>
-<section class="vpn">
-  <div class="vpn-head"><div class="vpn-icon">↗</div><div><div class="eyebrow" style="margin:0 0 4px;color:#c3bcff;letter-spacing:1px">ANOTHER PROJECT</div><h3>Попробуй мой VPN</h3></div></div>
-  <p>Тарифы, подключение и оплата доступны в отдельном Telegram-боте.</p>
-  <button class="btn" id="vpnButton">Открыть VPN-бота <span>↗</span></button>
+
+<section class="page" id="page-about" data-page="about">
+  <div class="page-heading"><div class="kicker"><i>✳</i> PEAR CM</div><h1>Просто.<br><span class="grad">Удобно.</span></h1><p>Компактное пространство для управления Telegram-группами.</p></div>
+  <div class="info-card"><h3>Как начать</h3><p>1. Добавь Pear CM в свою группу.<br>2. Выдай боту необходимые права администратора.<br>3. Открой вкладку «Команды» или отправь /help.</p><button class="btn primary full" style="margin-top:14px" id="addBot2">＋ Добавить Pear CM в группу</button></div>
+  <div class="info-card"><h3>Почему некоторые команды недоступны?</h3><p>Часть функций работает только в группах и только для администраторов. Действия вроде мута, бана, удаления и закрепления зависят от разрешений, выданных боту в Telegram.</p></div>
+  <div class="info-card"><h3>Обратная связь</h3><p>Идею или предложение можно отправить через команду <b>/suggest</b> в боте. Справка по функциям доступна через <b>/help</b>.</p></div>
+  <div class="vpn-card" style="margin-top:13px"><div class="vpn-symbol">↗</div><h3>VPN-проект автора</h3><p>Посмотри тарифы и условия подключения в отдельном боте.</p><button class="btn primary full" id="vpnButton2">Открыть VPN-бота ↗</button></div>
+  <div class="footer"><b>✳ PEAR CM</b><br>Сделано для удобства, без лишнего шума.</div>
 </section>
-<footer class="footer"><div class="footer-mark"><span>✳</span> PEAR CM</div><br>Инструменты для чатов. Ничего лишнего.</footer>
-</main>
+</div>
+
+<nav class="bottom-nav" aria-label="Навигация приложения">
+  <button class="nav-item active" data-tab="home"><span class="nav-icon">⌂</span><span>Главная</span></button>
+  <button class="nav-item" data-tab="commands"><span class="nav-icon">⌕</span><span>Команды</span></button>
+  <button class="nav-item" data-tab="tools"><span class="nav-icon">✧</span><span>Инструменты</span></button>
+  <button class="nav-item" data-tab="about"><span class="nav-icon">◉</span><span>О боте</span></button>
+</nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 const tg=window.Telegram&&window.Telegram.WebApp;
-try{if(tg){tg.ready();tg.expand();if(tg.setHeaderColor)tg.setHeaderColor('#080b14');if(tg.setBackgroundColor)tg.setBackgroundColor('#080b14');if(tg.disableVerticalSwipes)tg.disableVerticalSwipes();}}catch(e){}
-const commands=[
-{c:'-смс 100',d:'Удалить последние сообщения (до 100 за раз).',k:'moderation'},
-{c:'-чат / +чат',d:'Закрыть или снова открыть чат для сообщений.',k:'chat'},
-{c:'/mute',d:'Ограничить участнику возможность писать.',k:'moderation'},
-{c:'/unmute',d:'Снять ограничение на отправку сообщений.',k:'moderation'},
-{c:'/ban',d:'Заблокировать участника в группе.',k:'moderation'},
-{c:'/kick',d:'Исключить участника из группы.',k:'moderation'},
-{c:'/warn',d:'Выдать участнику предупреждение.',k:'moderation'},
-{c:'/admins',d:'Посмотреть список администраторов чата.',k:'chat'},
-{c:'/help',d:'Открыть список возможностей и команд.',k:'chat'},
-{c:'/profile',d:'Посмотреть профиль и активность.',k:'user'},
-{c:'/top',d:'Открыть рейтинг активных участников.',k:'user'},
-{c:'/warns',d:'Проверить свои предупреждения.',k:'user'}
+try{if(tg){tg.ready();tg.expand();tg.setHeaderColor&&tg.setHeaderColor('#0b0d15');tg.setBackgroundColor&&tg.setBackgroundColor('#0b0d15');tg.disableVerticalSwipes&&tg.disableVerticalSwipes()}}catch(e){}
+const catalog=[
+['/help','Справка по функциям и командам','chat'],['/commands','Список команд Pear CM','chat'],
+['/admins','Показать администраторов группы','chat'],['/checkrights','Проверить права бота в группе','chat'],
+['/openchat','Открыть чат для сообщений','chat'],['/closechat','Закрыть чат для сообщений','chat'],
+['/info','Информация о чате или участнике','chat'],['/pin','Закрепить сообщение (ответом)','chat'],['/unpin','Открепить сообщение','chat'],
+['/mute','Ограничить участника (ответом)','moderation'],['/unmute','Снять ограничение (ответом)','moderation'],
+['/ban','Заблокировать участника (ответом)','moderation'],['/unban','Снять бан (ответом)','moderation'],
+['/kick','Исключить участника (ответом)','moderation'],['/warn','Выдать предупреждение (ответом)','moderation'],
+['/unwarn','Снять предупреждение (ответом)','moderation'],['/clearwarns','Очистить предупреждения участника','moderation'],
+['/del','Удалить сообщение (ответом)','moderation'],['/purge','Очистить несколько сообщений','moderation'],
+['/antiflood','Настройки защиты от флуда','moderation'],['/antispam','Настройки защиты от спама','moderation'],['/antiraid','Защита от массового входа','moderation'],
+['/profile','Открыть профиль участника','profile'],['/warns','Посмотреть свои предупреждения','profile'],
+['/top','Рейтинг активных участников','profile'],['/activity','Активность участников','profile'],['/online','Недавно замеченные участники','profile'],
+['/time','Текущее время','utility'],['/calc','Калькулятор выражений','utility'],['/random','Случайное число','utility'],
+['/dice','Бросить кубик','utility'],['/date','Дата и московское время','utility'],['/suggest','Отправить предложение разработчику','utility'],
+['/quote','Цитата из сообщения (ответом)','utility'],['/favorites','Сохранить сообщение в избранное (ответом)','utility'],
+['/achievements','Посмотреть достижения','profile'],['/language','Информация о языке интерфейса','utility'],['/notifications','Информация об уведомлениях','utility'],
+['/report','Отправить жалобу','utility'],['/appeal','Отправить апелляцию','utility'],['/marry','Предложение брака (ответом)','profile'],
+['/acceptmarry','Принять предложение брака','profile'],['/marriage','Информация о браке','profile'],['/divorce','Расторгнуть брак','profile'],
+['/settrigger','Управление триггером','chat'],['/history','История чата / участника','chat'],['/auditlog','Журнал действий (при наличии прав)','chat'],
+['/owner','Панель владельца бота','owner'],['/status','Статус бота','owner'],['/ping','Проверка связи с Telegram и БД','owner'],
+['/diag','Диагностика конфигурации','owner'],['/globalstats','Глобальная статистика','owner'],['/modules','Состояние модулей','owner'],
+['/version','Версия бота','owner'],['/logs','Последние записи аудита','owner'],['/load','Информация о нагрузке','owner'],
+['/maintenance','Режим техобслуживания','owner'],['/operator','Выдать доступ оператору','owner'],['/revokeoperator','Отозвать доступ оператора','owner'],
+['/operators','Список операторов','owner'],['/globalban','Глобальный запрет внутри бота','owner'],['/globalunban','Снять глобальный запрет','owner'],
+['/exportstats','Экспорт статистики в JSON','owner'],['/permissions','Проверить разрешения бота','owner'],['/audit','Журнал аудита','owner'],
+['/reports','Очередь жалоб','owner'],['/appeals','Очередь апелляций','owner'],['/closereport','Закрыть жалобу','owner'],['/closeappeal','Закрыть апелляцию','owner']
 ];
-let filter='all',toastTimer;
+let activeFilter='all',toastTimer;
 const list=document.getElementById('commandList'),search=document.getElementById('search'),toast=document.getElementById('toast');
-function showToast(message){toast.textContent=message;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1900)}
-function escapeHtml(value){return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
-function render(){const q=search.value.trim().toLowerCase();const found=commands.filter(x=>(filter==='all'||x.k===filter)&&(!q||(x.c+' '+x.d).toLowerCase().includes(q)));list.innerHTML=found.length?found.map((x,i)=>'<div class="command" style="animation-delay:'+Math.min(i*25,200)+'ms"><div class="command-info"><code>'+escapeHtml(x.c)+'</code><p>'+escapeHtml(x.d)+'</p></div><button class="copy" type="button" data-copy="'+escapeHtml(x.c)+'" aria-label="Скопировать '+escapeHtml(x.c)+'" title="Скопировать команду">⧉</button></div>').join(''):'<div class="empty">✧<br>Ничего не нашлось.<br>Попробуй другое слово.</div>'}
-search.addEventListener('input',render);
-document.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;render();try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}));
-list.addEventListener('click',async e=>{const b=e.target.closest('[data-copy]');if(!b)return;const value=b.dataset.copy;try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(value)}else{const t=document.createElement('textarea');t.value=value;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}showToast('Команда скопирована');try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred('success')}catch(e){}}catch(e){showToast('Не удалось скопировать')}});render();
-if('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target.classList.add('is-visible');observer.unobserve(entry.target)}}),{threshold:.08});document.querySelectorAll('.section-head,.feature,.panel,.vpn').forEach(el=>{el.classList.add('reveal');observer.observe(el)})}\ndocument.getElementById('commandsJump').addEventListener('click',()=>{document.getElementById('commandsTitle').scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>search.focus({preventScroll:true}),300);try{tg&&tg.HapticFeedback&&tg.HapticFeedback.impactOccurred('light')}catch(e){}});
-document.getElementById('vpnButton').addEventListener('click',()=>{try{if(tg&&tg.openTelegramLink)tg.openTelegramLink('https://t.me/awesomeproxyvpn_bot');else window.open('https://t.me/awesomeproxyvpn_bot','_blank','noopener')}catch(e){window.location.href='https://t.me/awesomeproxyvpn_bot'}});
-document.getElementById('addBot').addEventListener('click',()=>{const url='https://t.me/pear_cm_bot?startgroup=true';try{if(tg&&tg.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}});
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function notify(s){toast.textContent=s;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1750)}
+function renderCommands(){const q=(search.value||'').trim().toLowerCase();const items=catalog.filter(x=>(activeFilter==='all'||x[2]===activeFilter)&&(!q||(x[0]+' '+x[1]).toLowerCase().includes(q)));document.getElementById('count').textContent=items.length+' '+(items.length===1?'команда':items.length<5?'команды':'команд');list.innerHTML=items.length?items.map((x,i)=>'<div class="command" style="animation-delay:'+Math.min(i*12,120)+'ms"><div class="command-main"><code>'+esc(x[0])+'</code><p>'+esc(x[1])+'</p></div><button class="copy" data-copy="'+esc(x[0])+'" aria-label="Скопировать '+esc(x[0])+'">⧉</button></div>').join(''):'<div class="empty">Ничего не найдено.<br>Попробуй другой запрос.</div>'}
+function go(name){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===name));document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
+document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.tab)));
+document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.category){activeFilter=b.dataset.category;document.querySelectorAll('.filter').forEach(f=>f.classList.toggle('active',f.dataset.filter===activeFilter));renderCommands()}go(b.dataset.go)}));
+document.querySelectorAll('.filter').forEach(b=>b.addEventListener('click',()=>{activeFilter=b.dataset.filter;document.querySelectorAll('.filter').forEach(f=>f.classList.toggle('active',f===b));renderCommands();try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}));
+search.addEventListener('input',renderCommands);
+async function copyText(value){try{if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(value);else{const t=document.createElement('textarea');t.value=value;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}notify('Скопировано: '+value);try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred('success')}catch(e){}}catch(e){notify('Не удалось скопировать')}}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-copy]');if(b)copyText(b.dataset.copy)});
+function openTelegram(url){try{if(tg&&tg.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}}
+document.getElementById('addBot').addEventListener('click',()=>openTelegram('https://t.me/pear_cm_bot?startgroup=true'));
+document.getElementById('addBot2').addEventListener('click',()=>openTelegram('https://t.me/pear_cm_bot?startgroup=true'));
+document.getElementById('vpnButton').addEventListener('click',()=>openTelegram('https://t.me/awesomeproxyvpn_bot'));
+document.getElementById('vpnButton2').addEventListener('click',()=>openTelegram('https://t.me/awesomeproxyvpn_bot'));
+renderCommands();
 </script>
 </body>
 </html>
