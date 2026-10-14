@@ -1552,19 +1552,25 @@ async def warn_cmd(message: Message) -> None:
         asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
     )
     user = user or {}
-    saved, audit_saved = await asyncio.gather(
-        asyncio.to_thread(db_upsert, "bot_users", {
-            **user, "user_id": target[0], "chat_id": message.chat.id,
-            "warns": before + 1, "rank": int(user.get("rank") or 0),
-            "messages": int(user.get("messages") or 0),
-        }, "user_id,chat_id"),
-        audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
-                   f"warns={before + 1}; reason={reason}; expires_in_days=7"),
+    # The audit ledger is the source of truth for seven-day warning expiry/counts.
+    # Persist it first; never announce a warning if the ledger write failed.
+    audit_saved = await audit_wait(
+        message.chat.id, message.from_user.id if message.from_user else 0,
+        "warn", target[0], f"reason={reason}; expires_in_days=7",
     )
-    if not saved:
-        await message.answer("⚠️ Варн не сохранён: Supabase не подтвердил запись в bot_users. Проверь журнал и подключение базы.")
+    if not audit_saved:
+        await message.answer("⚠️ Варн не зарегистрирован: база не подтвердила запись в журнал. Попробуй позже.")
         return
     count = before + 1
+    saved = await asyncio.to_thread(db_upsert, "bot_users", {
+        **user, "user_id": target[0], "chat_id": message.chat.id,
+        "warns": count, "rank": int(user.get("rank") or 0),
+        "messages": int(user.get("messages") or 0),
+    }, "user_id,chat_id")
+    if not saved:
+        log.error("Warning audit saved but profile counter update failed chat=%s user=%s", message.chat.id, target[0])
+        await message.answer("⚠️ Предупреждение записано в журнал, но счётчик профиля не обновился. Не повторяй команду — проверь базу.")
+        return
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     await message.answer(
         f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
