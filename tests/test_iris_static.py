@@ -203,16 +203,16 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             ("clearwarns_cmd", "clearwarns"),
         ):
             start = self.source.index(f"async def {function}")
-            end = self.source.find("\\n@router.message", start + 1)
+            end = self.source.find("\n@router.message", start + 1)
             body = self.source[start:end if end >= 0 else len(self.source)]
             self.assertIn(f'ensure_moderation_target_safe(message, target, "{action}")', body)
 
     def test_rank_change_aliases_include_common_russian_forms(self):
         for fragment in (
-            "поднять(?:\\\\s+ранг)?",
-            "назначить\\\\s+(?:ранг|чин)",
-            "понизить\\\\s+в\\\\s+должности",
-            "снять\\\\s+(?:ранг|чин",
+            r"поднять(?:\s+ранг)?",
+            r"назначить\s+(?:ранг|чин)",
+            r"понизить\s+в\s+должности",
+            r"снять\s+(?:ранг|чин",
             "разжаловать",
         ):
             self.assertIn(fragment, self.source)
