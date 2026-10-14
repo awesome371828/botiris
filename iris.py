@@ -210,37 +210,51 @@ def _is_transient_db_error(exc: Exception) -> bool:
         "server disconnected", "rate limit",
     ))
 
+def _db_read_with_retry(table: str, operation: str, build_query):
+    """Retry idempotent Supabase reads/upserts on transient failures with bounded backoff."""
+    for attempt in range(3):
+        try:
+            return build_query()
+        except Exception as exc:
+            if attempt < 2 and _is_transient_db_error(exc):
+                delay = 0.25 * (2 ** attempt)
+                log.warning("Temporary Supabase %s failure for %s (attempt %s/3); retrying in %.2fs: %s",
+                            operation, table, attempt + 1, delay, exc)
+                time.sleep(delay)
+                continue
+            log.exception("Supabase %s failed: %s", operation, table)
+            return None
+    return None
+
 def db_one(table: str, **filters: Any) -> dict | None:
     if db is None:
         return None
-    try:
+    def query():
         q = db.table(table).select("*")
         for key, value in filters.items():
             q = q.eq(key, value)
         rows = q.limit(1).execute().data or []
         return rows[0] if rows else None
-    except Exception:
-        log.exception("Supabase select failed: %s", table)
-        return None
+    return _db_read_with_retry(table, "select", query)
 
 def db_rows(table: str, limit: int = 20, order: str | None = None, **filters: Any) -> list[dict]:
     if db is None:
         return []
-    try:
+    def query():
         q = db.table(table).select("*")
         for key, value in filters.items():
             q = q.eq(key, value)
         if order:
             q = q.order(order, desc=True)
         return q.limit(limit).execute().data or []
-    except Exception:
-        log.exception("Supabase query failed: %s", table)
-        return []
+    result = _db_read_with_retry(table, "query", query)
+    return result if result is not None else []
 
 def db_insert(table: str, payload: dict) -> dict | None:
     if db is None:
         return None
     try:
+        # Do not retry inserts: a timeout may occur after the server committed, duplicating rows.
         result = db.table(table).insert(payload).execute()
         return (result.data or [None])[0]
     except Exception:
@@ -250,12 +264,10 @@ def db_insert(table: str, payload: dict) -> dict | None:
 def db_upsert(table: str, payload: dict, on_conflict: str) -> dict | None:
     if db is None:
         return None
-    try:
+    def query():
         result = db.table(table).upsert(payload, on_conflict=on_conflict).execute()
         return (result.data or [None])[0]
-    except Exception:
-        log.exception("Supabase upsert failed: %s", table)
-        return None
+    return _db_read_with_retry(table, "upsert", query)
 
 # Audit writes must exist for every moderation command. Keep non-critical audit calls
 # off the event loop; commands that need confirmation can await audit_wait().
