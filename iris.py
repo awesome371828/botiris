@@ -545,7 +545,18 @@ def moderation_command_key(message: Message) -> str | None:
     if not words:
         return None
     first = words[0]
-    if first in {"дать", "выдать", "снять", "убрать", "удалить"} and len(words) > 1:
+    # Also recognize «@user мут 1 час» and multi-word forms like «снять варн».
+    if first.startswith("@") and len(words) > 1:
+        first = words[1]
+        words = words[1:]
+    if first in {"снять", "убрать", "удалить"} and len(words) > 1:
+        second = words[1]
+        if second in {"варн", "предупреждение"}:
+            return "unwarn"
+        if second in {"мут", "муту"}:
+            return "unmute"
+        first = second
+    elif first in {"дать", "выдать"} and len(words) > 1:
         first = words[1]
     return {"мут":"mute", "замутить":"mute", "замуть":"mute", "бан":"ban",
             "забанить":"ban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick",
@@ -918,10 +929,11 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     target = await resolve_target(message, args_after_command(message))
     if not target:
         await message.answer(f"Ответьте на сообщение участника командой <code>/{command}</code>.")
-    elif message.from_user and target[0] == message.from_user.id:
+        return None
+    if message.from_user and target[0] == message.from_user.id:
         await message.answer("Нельзя применить это действие к самому себе.")
         return None
-    elif target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
+    if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя применять это действие к владельцу бота.")
         return None
     if message.from_user and target[0] != message.from_user.id:
