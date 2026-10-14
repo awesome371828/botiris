@@ -381,7 +381,7 @@ begin
             nullif(item->>'username', ''),
             coalesce(nullif(item->>'first_name', ''), 'Пользователь'),
             coalesce(nullif(item->>'created_at', '')::timestamptz, now())
-        from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) as item
+        from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) as data(item)
         where nullif(item->>'message_id', '') is not null
         on conflict (chat_id, message_id) do nothing
         returning chat_id, user_id, username, first_name, created_at
