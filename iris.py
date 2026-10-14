@@ -2272,7 +2272,7 @@ async def logs_cmd(message: Message) -> None:
 
 # ── Simple marriage feature ───────────────────────────────────────────────────
 @router.message(Command("marry", "proposemarriage", "wed"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|браки|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|браки|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба\s*[!?.,]*$"))
 async def marry_cmd(message: Message) -> None:
     if not message.from_user or not is_group(message):
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
