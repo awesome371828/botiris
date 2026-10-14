@@ -1226,9 +1226,13 @@ _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
 
 async def _activity_writer_loop() -> None:
     while True:
-        first = await _ACTIVITY_QUEUE.get()
+        if _ACTIVITY_OVERFLOW:
+            first = _ACTIVITY_OVERFLOW.popleft()
+            queued_count = 0
+        else:
+            first = await _ACTIVITY_QUEUE.get()
+            queued_count = 1
         batch = [first]
-        queued_count = 1
         deadline = time.monotonic() + 0.75
         while len(batch) < 100:
             while _ACTIVITY_OVERFLOW and len(batch) < 100:
