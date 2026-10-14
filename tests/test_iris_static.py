@@ -131,7 +131,10 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn('settings["chat_permissions_before_lock"]', self.source)
 
     def test_delete_command_is_bounded(self):
+        self.assertIn("requested < 1", self.source)
         self.assertIn("requested > 100", self.source)
+        self.assertIn("индивидуально", self.source.casefold())
+        self.assertIn("Удалено сообщений:", self.source)
         self.assertIn("За один раз можно удалить максимум", self.source)
 
     def test_top_defaults_to_current_chat_in_groups(self):
