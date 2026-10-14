@@ -179,10 +179,15 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             self.assertIn("current >= actor_rank or new_rank >= actor_rank", body)
             self.assertNotIn("new_rank >= max(3, actor_rank)", body)
 
-    def test_admin_listing_includes_real_telegram_admins(self):
-        self.assertIn("telegram_admin_ids.add(u.id)", self.source)
-        self.assertIn("Администраторы Telegram", self.source)
-        self.assertIn("Telegram administrators are listed once", self.source)
+    def test_admin_listing_shows_only_internal_pear_cm_roles(self):
+        start = self.source.index("async def admins")
+        end = self.source.index("# ── Activity tracking and welcome", start)
+        body = self.source[start:end]
+        self.assertIn('db_rows, "bot_users"', body)
+        self.assertIn("Администраторы и модераторы Pear CM", body)
+        self.assertIn("This list is intentionally limited to Pear CM roles", body)
+        self.assertNotIn("get_chat_administrators", body)
+        self.assertNotIn("Администраторы Telegram", body)
 
     def test_warning_removal_requires_audit_ledger_write(self):
         unwarn_start = self.source.index("async def unwarn_cmd")
