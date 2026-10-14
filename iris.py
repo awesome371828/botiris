@@ -3437,13 +3437,17 @@ async def open_chat_cmd(message: Message) -> None:
             settings.pop("chat_permissions_before_lock", None)
             settings["chat_locked_by_bot"] = False
             save_chat_settings(message.chat.id, settings)
+            persisted = False
             if db is not None:
-                await asyncio.to_thread(db_upsert, "bot_chat_settings", {
+                persisted = bool(await asyncio.to_thread(db_upsert, "bot_chat_settings", {
                     "chat_id": message.chat.id, "settings": dict(settings),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
-                }, "chat_id")
+                }, "chat_id"))
             audit(message.chat.id, message.from_user.id, "chat_open")
-            await message.answer("🔓 Чат открыт.")
+            if persisted:
+                await message.answer("🔓 Чат открыт.")
+            else:
+                await message.answer("🔓 Чат открыт в Telegram, но состояние не удалось надёжно сохранить в базе. После восстановления базы повтори <code>+чат</code>.")
         except Exception as exc:
             await safe_error(message, exc)
 
@@ -3480,6 +3484,19 @@ async def close_chat_cmd(message: Message) -> None:
                         "can_send_voice_notes": True, "can_send_polls": True,
                         "can_send_other_messages": True, "can_add_web_page_previews": True,
                     }
+            if db is None:
+                await message.answer("⛔ Не закрываю чат: база данных не настроена, и после перезапуска бот может потерять сохранённые разрешения. Сначала подключи Supabase.")
+                return
+            settings["chat_locked_by_bot"] = True
+            # Persist the restore permissions and lock marker BEFORE changing Telegram.
+            # If the process exits between these steps, +чат safely restores the old permissions.
+            pre_saved = await asyncio.to_thread(db_upsert, "bot_chat_settings", {
+                "chat_id": message.chat.id, "settings": dict(settings),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }, "chat_id")
+            if not pre_saved:
+                await message.answer("⛔ Не закрываю чат: не удалось сохранить исходные разрешения в базе.")
+                return
             await bot.set_chat_permissions(
                 message.chat.id,
                 permissions=ChatPermissions(
@@ -3490,13 +3507,7 @@ async def close_chat_cmd(message: Message) -> None:
                     can_send_other_messages=False, can_add_web_page_previews=False,
                 ),
             )
-            settings["chat_locked_by_bot"] = True
             save_chat_settings(message.chat.id, settings)
-            if db is not None:
-                await asyncio.to_thread(db_upsert, "bot_chat_settings", {
-                    "chat_id": message.chat.id, "settings": dict(settings),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }, "chat_id")
             audit(message.chat.id, message.from_user.id, "chat_close")
             await message.answer("🔒 Чат закрыт. Открыть: <code>+чат</code>.")
         except Exception as exc:
