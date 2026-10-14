@@ -1711,9 +1711,11 @@ async def top_cmd(message: Message) -> None:
     category_aliases = {
         "деньги":"money", "баланс":"money", "валюта":"money", "по деньгам":"money", "по балансу":"money",
         "ранги":"rank", "по рангам":"rank", "репутация":"rep", "по репутации":"rep",
-        "отношения":"relations", "по отношениям":"relations", "браки":"marriages", "по бракам":"marriages",
+        "отношения":"rep", "по отношениям":"rep", "браки":"marriages", "по бракам":"marriages",
         "кланы":"clans", "по кланам":"clans", "награды":"awards", "по наградам":"awards",
         "варны":"warns", "предупреждения":"warns", "по варнам":"warns",
+        "сообщения":"messages", "сообщений":"messages", "по сообщениям":"messages", "активность":"messages",
+        "участники":"members", "новички":"members", "по участникам":"members",
     }
     category_key = category_aliases.get(category)
     if category_key:
@@ -1728,8 +1730,23 @@ async def top_cmd(message: Message) -> None:
             return
         if category_key == "clans":
             rows = await asyncio.to_thread(db_rows, "bot_clans", 1000, None, chat_id=message.chat.id)
-            lines = [f"{i}. 🏰 {escape(str(r.get('name','Клан')))}" for i,r in enumerate(rows[:10],1)]
+            member_rows = await asyncio.to_thread(db_rows, "bot_clan_members", 5000, None, chat_id=message.chat.id)
+            counts = {}
+            for member in member_rows: counts[member.get("clan_name")] = counts.get(member.get("clan_name"), 0) + 1
+            rows.sort(key=lambda r: counts.get(r.get("name"), 0), reverse=True)
+            lines = [f"{i}. 🏰 {escape(str(r.get('name','Клан')))} — {counts.get(r.get('name'),0)} участн." for i,r in enumerate(rows[:10],1)]
             await message.answer("<b>🏆 Топ кланов</b>\n" + ("\n".join(lines) if lines else "Пока нет кланов."))
+            return
+        if category_key == "members":
+            rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "created_at", chat_id=message.chat.id)
+            rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+            lines = [f"{i}. {('@'+escape(str(r.get('username')))) if r.get('username') else escape(str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1)]
+            await message.answer("<b>🆕 Топ новичков</b>\n" + ("\n".join(lines) if lines else "Пока нет участников."))
+            return
+        if category_key == "messages":
+            rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
+            lines = [f"{i}. {('@'+escape(str(r.get('username')))) if r.get('username') else escape(str(r.get('first_name') or 'Участник'))} — <b>{int(r.get('messages') or 0)}</b> 💬" for i,r in enumerate(rows[:10],1)]
+            await message.answer("<b>🏆 Топ сообщений</b>\n" + ("\n".join(lines) if lines else "Пока нет статистики."))
             return
         table, field, icon = table_map[category_key]
         rows = await asyncio.to_thread(db_rows, table, 1000, field, chat_id=message.chat.id)
@@ -4136,7 +4153,7 @@ async def who_is_cmd(message: Message) -> None:
         f"Ранг: <b>{role_name(rank)}</b> ({rank})\nСообщений: <b>{msgs}</b>\nПредупреждений: <b>{warns}</b>"
     )
 
-@router.message(F.text.regexp(r"(?i)^\s*\.лдк(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*лдк(?:\s|$)"))
 async def personal_command_access_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
@@ -4145,14 +4162,14 @@ async def personal_command_access_cmd(message: Message) -> None:
     rules = settings.setdefault("personal_command_access", {})
     if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() in {"список","помощь","help"}):
         lines = ["<b>🔐 Личный доступ к командам</b>",
-                 "Формат: <code>.лдк мут запрет</code> ответом на сообщение участника",
-                 "<code>.лдк мут разрешить</code> ответом на сообщение",
-                 "<code>.лдк мут сброс</code> ответом на сообщение",
+                 "Формат: <code>лдк мут запрет</code> ответом на сообщение участника",
+                 "<code>лдк мут разрешить</code> ответом на сообщение",
+                 "<code>лдк мут сброс</code> ответом на сообщение",
                  "Доступные команды: мут, размут, бан, разбан, кик, варн, снять варн, повысить, понизить, очистить."]
         await message.answer("\n".join(lines))
         return
     if len(parts) < 3:
-        await message.answer("Формат: <code>.лдк команда запрет|разрешить|сброс</code> ответом на сообщение.")
+        await message.answer("Формат: <code>лдк команда запрет|разрешить|сброс</code> ответом на сообщение.")
         return
     action = _feature_normalize(parts[-1])
     command_phrase = _feature_normalize(" ".join(parts[1:-1]))
@@ -4164,7 +4181,7 @@ async def personal_command_access_cmd(message: Message) -> None:
     }
     key = aliases.get(command_phrase)
     if not key:
-        await message.answer("Неизвестная команда. Пример: <code>.лдк мут запрет</code> ответом на сообщение.")
+        await message.answer("Неизвестная команда. Пример: <code>лдк мут запрет</code> ответом на сообщение.")
         return
     target = await _feature_target(message)
     if not target:
@@ -4199,7 +4216,10 @@ async def personal_command_access_cmd(message: Message) -> None:
 async def marriages_list_cmd(message: Message) -> None:
     raw = _feature_normalize(message.text or "")
     if raw.startswith(("мой брак","чей брак","брак участника")):
-        target = await _feature_target(message, " ".join((message.text or "").split()[2:]) or None)
+        if raw.startswith("мой брак") and message.from_user:
+            target = {"user_id":message.from_user.id,"first_name":message.from_user.full_name,"username":message.from_user.username}
+        else:
+            target = await _feature_target(message, " ".join((message.text or "").split()[2:]) or None)
         if not target:
             await message.answer("Ответь на сообщение участника или укажи его @username: <code>брак участника @username</code>.")
             return
