@@ -924,19 +924,25 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
     return True
 
 @router.message(Command("mute"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?мут(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
-    raw_args = args_after_command(message)
-    # Reply syntax: "мут час спам". Without a reply: "мут @username 1 час спам".
-    target_args = [] if message.reply_to_message else raw_args[:1]
-    target = await resolve_target(message, target_args)
+    raw_args = re.split(r"(?i)^\s*[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)\s*", (message.text or "").strip(), maxsplit=1)[-1].split()
+    target = None
+    if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+        u = message.reply_to_message.from_user
+        target = (u.id, u.full_name)
+    elif not message.reply_to_message:
+        # Prefer @username over numbers so «мут 1 час @user» never treats 1 as a user ID.
+        username_arg = next((x for x in raw_args if x.startswith("@")), None)
+        id_arg = next((x for x in raw_args if x.isdigit() and len(x) >= 7), None)
+        target = await resolve_target(message, [username_arg] if username_arg else ([id_arg] if id_arg else [])
     if not target:
-        await message.answer(
-            "Укажите цель: ответьте на сообщение командой <code>мут час</code> "
-            "или напишите <code>мут @username 1 час причина</code>."
-        )
+        await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известный чату @username/ID.")
+        return
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
+        await message.answer("Ответьте именно на сообщение участника, а не на сообщение бота.")
         return
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("Нельзя замутить самого себя.")
@@ -945,31 +951,21 @@ async def mute_cmd(message: Message) -> None:
         await message.answer("⛔ Нельзя замутить владельца бота.")
         return
 
-    # Reply form: «мут час даун». Without reply: «мут @user час даун» / «мут 123456789 67 часов флуд».
-    # Do not treat a duration word such as «час» as a username/target.
-    if message.reply_to_message:
-        duration_tokens = raw_args
-    else:
-        duration_tokens = raw_args[1:] if raw_args and (
-            raw_args[0].startswith("@") or raw_args[0].isdigit()
-        ) else []
+    duration_tokens = list(raw_args)
+    if not message.reply_to_message:
+        duration_tokens = [x for x in duration_tokens if x != (username_arg or id_arg)]
     duration, duration_label, reason = split_duration_reason(duration_tokens)
-    permanent_words = {"навсегда", "бессрочно", "навечно", "перманентно"}
+    permanent_words = {"навсегда", "бессрочно", "навечно", "перманентно", "постоянно"}
+    issued_at = moscow_now()
     if duration is None:
-        if duration_tokens and duration_tokens[0].lower().strip(",.;") in permanent_words:
+        if not duration_tokens or duration_tokens[0].lower().strip(",.;") in permanent_words:
             duration_label = "бессрочно"
-            reason = " ".join(duration_tokens[1:]).strip() or None
+            reason = (" ".join(duration_tokens[1:]).strip() or None) if duration_tokens else None
             until = None
         else:
-            await message.answer(
-                "Не удалось распознать срок — я не буду случайно выдавать бессрочный мут.\n"
-                "Примеры: <code>мут час</code>, <code>мут день спам</code>, "
-                "<code>мут 67 часов флуд</code>, <code>мут год</code>.\n"
-                "Для бессрочного мута: <code>мут навсегда причина</code>."
-            )
+            await message.answer("Не удалось распознать срок. Если срок не указан, мут бессрочный. Примеры: <code>мут час</code>, <code>мут 2 часа спам</code>, <code>мут 67 часов флуд</code>.")
             return
     else:
-        issued_at = moscow_now()
         until = issued_at + duration
 
     reason = escape(reason or "не указана")
@@ -1024,7 +1020,7 @@ async def mute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unmute"))
-@router.message(F.text.regexp(r"(?i)^[.!/! ]?(?:размут|анмут|унмут)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать)\s+)?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить)(?:\s|$)"))
 async def unmute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1047,7 +1043,7 @@ async def unmute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("ban"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?бан(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:бан|забанить|забань)(?:\s|$)"))
 async def ban_cmd(message: Message) -> None:
     if not await check_mod(message, min_rank=3):
         return
@@ -1084,7 +1080,7 @@ async def unban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("kick"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?кик(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:кик|кикнуть|исключить|выгнать)(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
     if not await check_mod(message, min_rank=3):
         return
@@ -1102,7 +1098,7 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:варн|предупредить|предупреждение)(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await check_mod(message, require_restrict=False):
         return
@@ -1170,7 +1166,7 @@ async def warn_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать|удалить)\s+)?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение)(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message, min_rank=2):
         return
