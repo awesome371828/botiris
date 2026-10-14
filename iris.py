@@ -2374,6 +2374,27 @@ async def marriage_status_cmd(message: Message) -> None:
             lines.append(f"• {proposer_name} ❤️ {partner_name}")
         await message.answer("\n".join(lines))
         return
+    raw_status = (message.text or "").lower()
+    if "отн" in raw_status or "отнош" in raw_status or "роман" in raw_status:
+        try:
+            links = await asyncio.to_thread(db_rows, "bot_relationships", 1000, "points", chat_id=message.chat.id)
+            links = [r for r in links if message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))]
+            links.sort(key=lambda r: int(r.get("points") or 0), reverse=True)
+            users = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
+            names = {int(u.get("user_id") or 0): str(u.get("first_name") or "Участник") for u in users}
+            lines = ["💞 <b>Ваши отношения</b>", "💔 Активного брака пока нет."]
+            if links:
+                lines.append("\\n✨ <b>Связи в чате</b>")
+                for rel in links[:15]:
+                    one, two = int(rel.get("user1_id") or 0), int(rel.get("user2_id") or 0)
+                    other = two if one == message.from_user.id else one
+                    lines.append(f"• {mention(other, names.get(other, 'Участник'))} — {int(rel.get('points') or 0)} 💗")
+            else:
+                lines.append("\\nПока нет накопленных очков отношений. Используй команды вроде «обнять», «поцеловать» или «поддержать» в ответ на сообщение.")
+            await message.answer("\\n".join(lines))
+            return
+        except Exception:
+            log.exception("Could not fetch relationships without marriage")
     await message.answer("💔 Вы пока не состоите в браке в этой группе. Чтобы предложить брак, ответьте на сообщение участника командой «брак» или «пожениться».")
 
 @router.message(Command("divorce", "breakup"))
