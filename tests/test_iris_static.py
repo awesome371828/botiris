@@ -105,6 +105,16 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         ):
             self.assertIn(fragment.casefold(), self.source.casefold())
 
+    def test_runtime_reliability_guards_exist(self):
+        for fragment in (
+            "def _is_transient_db_error",
+            "def _db_read_with_retry",
+            "acquire_single_instance_lock()",
+            "_ACTIVITY_OVERFLOW_MAX = 20000",
+            "Temporary Supabase",
+        ):
+            self.assertIn(fragment, self.source)
+
     def test_schema_has_query_indexes_for_chat_scoped_lists(self):
         schema = SCHEMA.read_text(encoding="utf-8").lower()
         self.assertIn("bot_activity_daily_chat_day_idx", schema)
