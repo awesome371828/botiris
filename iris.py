@@ -4199,6 +4199,8 @@ async def personal_command_access_cmd(message: Message) -> None:
             key = "unban"
         elif any(t.startswith(("бан","забан")) for t in tokens):
             key = "ban"
+        elif any(t.startswith(("снят","снять","убрат","убрать","удал","анварн")) for t in tokens) and any(t.startswith(("варн","предупрежд")) for t in tokens):
+            key = "unwarn"
         elif any(t.startswith(("варн","предупрежд")) for t in tokens):
             key = "warn"
         elif any(t.startswith(("повыс","повыш")) for t in tokens):
@@ -4359,7 +4361,11 @@ async def roleplay_relationship_cmd(message: Message) -> None:
             return
         a,b = sorted((message.from_user.id,int(target.get("user_id") or 0)))
         row = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
-        await message.answer(f"❤️ <b>Отношения</b>\n{mention(a,str(target.get('first_name') or 'Участник'))} и {mention(b,str(target.get('first_name') or 'Участник'))}\nОчки связи: <b>{int(row.get('points') or 0)}</b>")
+        own_name = message.from_user.full_name or "Участник"
+        target_name = str(target.get("first_name") or "Участник")
+        a_name = own_name if a == message.from_user.id else target_name
+        b_name = target_name if b == int(target.get("user_id") or 0) else own_name
+        await message.answer(f"❤️ <b>Отношения</b>\n{mention(a,a_name)} и {mention(b,b_name)}\nОчки связи: <b>{int(row.get('points') or 0)}</b>")
         return
     target = await _feature_target(message, raw[len(action):].strip() if action else None)
     if not target:
