@@ -1626,16 +1626,20 @@ async def unwarn_cmd(message: Message) -> None:
     if count <= 0:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
         return
+    new_count = max(0, count - 1)
+    ledger_saved = await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={new_count}")
+    if not ledger_saved:
+        await message.answer("⚠️ Не удалось записать снятие предупреждения в журнал. Счётчик не меняю — попробуй позже.")
+        return
     user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     saved = await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
-        "warns": max(0, count - 1), "rank": int(user.get("rank", 0) or 0), "messages": int(user.get("messages", 0) or 0),
+        "warns": new_count, "rank": int(user.get("rank", 0) or 0), "messages": int(user.get("messages", 0) or 0),
     }, "user_id,chat_id")
     if not saved:
-        await message.answer("⚠️ Не удалось сохранить снятие варна в базе. Ничего не подтверждаю как выполненное — проверь Supabase и повтори позже.")
+        await message.answer("⚠️ Снятие зарегистрировано в журнале, но счётчик профиля не обновился. Не повторяй команду; проверь базу.")
         return
-    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={max(0,count-1)}")
-    await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{max(0,count-1)}</b>.")
+    await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{new_count}</b>.")
     
 @router.message(Command("clearwarns"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
@@ -1645,15 +1649,18 @@ async def clearwarns_cmd(message: Message) -> None:
     target = await moderation_target(message, "clearwarns")
     if not target:
         return
+    ledger_saved = await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
+    if not ledger_saved:
+        await message.answer("⚠️ Не удалось записать сброс предупреждений в журнал. Данные не подтверждаю — попробуй позже.")
+        return
     user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     saved = await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": 0, "rank": int(user.get("rank", 0) or 0), "messages": int(user.get("messages", 0) or 0),
     }, "user_id,chat_id")
     if not saved:
-        await message.answer("⚠️ Не удалось сбросить предупреждения: база данных не подтвердила запись.")
+        await message.answer("⚠️ Сброс записан в журнале, но счётчик профиля не обновился. Не повторяй команду; проверь базу.")
         return
-    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
     await message.answer(f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.")
 
 # ── Message tools ─────────────────────────────────────────────────────────────
