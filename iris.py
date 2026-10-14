@@ -2303,6 +2303,7 @@ async def marry_cmd(message: Message) -> None:
     )
 
 @router.message(Command("acceptmarry"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:принять брак|согласен на брак|согласна на брак|да согласен|да согласна|принимаю предложение)(?:\s|$)"))
 async def accept_marry_cmd(message: Message) -> None:
     if not message.from_user or not message.reply_to_message or not message.reply_to_message.from_user:
         await message.answer("Ответьте на сообщение с предложением брака командой /acceptmarry.")
@@ -2327,10 +2328,39 @@ async def marriage_status_cmd(message: Message) -> None:
     if not message.from_user:
         return
     rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
-    for row in rows:
-        if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
-            await message.answer(f"💍 Брак: <b>{row.get('user1_name', 'Участник')}</b> ❤️ <b>{row.get('user2_name', 'Участник')}</b>")
-            return
+    active_marriage = next((row for row in rows if row.get("status") == "married" and
+        message.from_user.id in (int(row.get("user1_id") or 0), int(row.get("user2_id") or 0))), None)
+    if active_marriage:
+        one_id, two_id = int(active_marriage.get("user1_id") or 0), int(active_marriage.get("user2_id") or 0)
+        one_name, two_name = str(active_marriage.get("user1_name") or "Участник"), str(active_marriage.get("user2_name") or "Участник")
+        start_at = active_marriage.get("accepted_at") or active_marriage.get("created_at")
+        duration = ""
+        try:
+            start_dt = datetime.fromisoformat(str(start_at).replace("Z", "+00:00"))
+            days = max(0, (datetime.now(timezone.utc) - start_dt.astimezone(timezone.utc)).days)
+            duration = f"\n⏱ Длится уже {days // 30} мес. {days % 30} дн."
+        except Exception:
+            pass
+        response = (f"👰💍 Брак между {mention(one_id, one_name)} и {mention(two_id, two_name)}"
+                    f"\n🗓 Зарегистрирован {str(start_at or 'дата неизвестна')[:10]}{duration}")
+        raw_rel = (message.text or "").lower()
+        if "мои отн" in raw_rel or "отнош" in raw_rel or raw_rel.strip().endswith("отн"):
+            try:
+                links = await asyncio.to_thread(db_rows, "bot_relationships", 1000, "points", chat_id=message.chat.id)
+                links = [r for r in links if message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))]
+                links.sort(key=lambda r: int(r.get("points") or 0), reverse=True)
+                if links:
+                    users = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
+                    names = {int(u.get("user_id") or 0): str(u.get("first_name") or "Участник") for u in users}
+                    response += "\n\n💞 <b>Другие отношения</b>"
+                    for rel in links[:10]:
+                        aa, bb = int(rel.get("user1_id") or 0), int(rel.get("user2_id") or 0)
+                        other = bb if aa == message.from_user.id else aa
+                        response += f"\n• {mention(other, names.get(other, 'Участник'))} — {int(rel.get('points') or 0)} 💗"
+            except Exception:
+                log.exception("Could not fetch roleplay relationships")
+        await message.answer(response)
+        return
     pending = [
         r for r in rows
         if r.get("status") == "pending"
@@ -4945,7 +4975,7 @@ async def clan_cmd(message: Message) -> None:
 
 
 @router.message(Command("choose"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:выбери участника|случайный участник|рандом участника|рандом участник|жребий|да или нет|шипперинг|шипперим|шиперим|шиперинг|шипперить|шиперить|зашипперить|зашиперить|кого шипперим|кого шиперим|рандом шиппер|рандом шипер|шипперни|шиперни|шипперь|шиперь)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:выбери участника|случайный участник|рандом участника|рандом участник|жребий|да или нет|шипперинг|шиперинг|шипперим|шиперим|шипперимся|шиперимся|шипперить|шиперить|шиппер|шипер|зашипперить|зашиперить|зашиппери|зашипери|кого шипперим|кого шиперим|рандом шиппер|рандом шипер|рандомная пара|случайная пара|шипперни|шиперни|шипперь|шиперь|сошиппери|сошипери)(?:\s|$)"))
 async def random_community_cmd(message: Message) -> None:
     raw = _feature_normalize(message.text or "")
     if raw.startswith("/choose"):
@@ -4964,9 +4994,9 @@ async def random_community_cmd(message: Message) -> None:
             unique[uid] = row
     members = list(unique.values())
     shipper_aliases = {
-        "шипперинг", "шипперим", "шиперим", "шиперинг", "шипперить", "шиперить",
-        "зашипперить", "зашиперить", "кого шипперим", "кого шиперим",
-        "рандом шиппер", "рандом шипер", "шипперни", "шиперни", "шипперь", "шиперь",
+        "шипперинг", "шипперим", "шиперим", "шиперинг", "шипперимся", "шиперимся", "шипперить", "шиперить", "шиппер", "шипер",
+        "зашипперить", "зашиперить", "зашиппери", "зашипери", "кого шипперим", "кого шиперим",
+        "рандом шиппер", "рандом шипер", "рандомная пара", "случайная пара", "шипперни", "шиперни", "шипперь", "шиперь", "сошиппери", "сошипери",
     }
     if raw in shipper_aliases:
         if len(members) < 2:
@@ -4974,7 +5004,7 @@ async def random_community_cmd(message: Message) -> None:
             return
         pair = random.sample(members, 2)
         names = [p.get("first_name") or p.get("username") or f"ID {p.get('user_id')}" for p in pair]
-        await message.answer(f"💞 Случайная пара дня: {mention(int(pair[0]['user_id']),str(names[0]))} ❤️ {mention(int(pair[1]['user_id']),str(names[1]))}")
+        await message.answer(f"💞 <b>РАНДОМ ШИППЕРИМ:</b> {mention(int(pair[0]['user_id']),str(names[0]))}⁬ + {mention(int(pair[1]['user_id']),str(names[1]))}⁬. Любите друг друга и берегите. Мур.")
         return
     if not members:
         await message.answer("Пока некого выбирать: бот ещё не видел участников в этом чате.")
