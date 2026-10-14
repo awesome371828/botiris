@@ -1051,14 +1051,34 @@ async def admins(message: Message) -> None:
                     display = f"@{username} ({display})"
                 ranks[u.id] = (5, display, username)
 
-        lines = ["🛡 <b>Администраторы Pear CM</b>"]
-        for uid, (rank, name, username) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
-            if username and not name.startswith("@"):
-                name = f"@{username} ({name})"
-            lines.append(f"• <b>{escape(name)}</b> — <b>{role_name(rank)}</b> · ранг {rank}")
-        if len(lines) == 1:
-            lines.append("Пока никто не назначен администраторами Pear CM.")
-        await message.answer("\n".join(lines))
+        rank_titles = {
+            5: "⭐⭐⭐⭐⭐ Цари",
+            4: "⭐⭐⭐⭐ Окольничьи",
+            3: "⭐⭐⭐ Бояре",
+            2: "⭐⭐ Старшие модераторы",
+            1: "⭐ Модераторы",
+        }
+        grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
+        for uid, entry in ranks.items():
+            grouped[entry[0]].append((uid, entry[1], entry[2]))
+        lines = ["🛡 <b>Модераторы чата</b>", ""]
+        for rank in (5, 4, 3, 2, 1):
+            members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
+            if not members:
+                continue
+            lines.append(f"<b>{rank_titles[rank]}</b>")
+            icon = "🎾" if rank == 3 else "🏐"
+            for uid, name, username in members:
+                display = escape(str(name or "Участник"))
+                if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+                    link = f"https://t.me/{username}"
+                else:
+                    link = f"tg://user?id={uid}"
+                lines.append(f"{icon} <a href=\"{link}\">{display}</a>")
+            lines.append("")
+        if len(lines) <= 2:
+            lines = ["🛡 <b>Модераторы чата</b>", "Пока никто не назначен модератором Pear CM."]
+        await message.answer("\n".join(lines).strip())
     except Exception:
         log.exception("Could not build Pear CM internal admin list")
         await message.answer("Не удалось получить список администраторов Pear CM. Попробуйте ещё раз.")
@@ -1120,6 +1140,38 @@ def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, st
             db.table("bot_activity_events").insert(events).execute()
         except Exception:
             log.exception("Batched activity-event insert failed for %s events", len(events))
+
+        # Maintain compact per-chat/per-user/day counters in one atomic RPC call.
+        # Leaderboards read aggregates instead of scanning an unbounded event log.
+        daily: dict[tuple[int, int, str], dict[str, Any]] = {}
+        for event in events:
+            chat_id = int(event["chat_id"])
+            user_id = int(event["user_id"])
+            username = event.get("username")
+            first_name = event.get("first_name") or "Пользователь"
+            created_at = event.get("created_at") or now
+            try:
+                stamp = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                day = stamp.astimezone(MOSCOW_TZ).date().isoformat()
+            except Exception:
+                day = moscow_now().date().isoformat()
+            key = (chat_id, user_id, day)
+            item = daily.setdefault(key, {
+                "chat_id": chat_id, "user_id": user_id, "day": day,
+                "messages": 0, "username": username, "first_name": first_name,
+            })
+            item["messages"] += 1
+            if username:
+                item["username"] = username
+            if first_name:
+                item["first_name"] = first_name
+        try:
+            db.rpc("increment_bot_activity_daily_batch", {"p_items": list(daily.values())}).execute()
+        except Exception:
+            # Raw events remain a fallback until schema.sql's aggregate migration is applied.
+            log.exception("Daily activity aggregate update failed for %s grouped records", len(daily))
 
 _ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str]] = asyncio.Queue(maxsize=5000)
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
@@ -1709,11 +1761,11 @@ async def info_cmd(message: Message) -> None:
         f"Сообщений: <b>{int(user.get('messages', 0))}</b>"
     )
 
-@router.message(Command("top"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\s|$)"))
+@router.message(Command("top", "stats", "stat", "стата", "статистика"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:топ|стата|статистика)(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
-    arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip().replace("ё", "е")
+    arg = re.sub(r"^(?:/(?:top|stats|stat)(?:@\w+)?|[.!/]?(?:топ|стата|статистика))\s*", "", raw, flags=re.I).strip().replace("ё", "е")
     category = re.sub(r"\s+", " ", arg).strip()
     category_aliases = {
         "деньги":"money", "баланс":"money", "валюта":"money", "по деньгам":"money", "по балансу":"money",
@@ -1789,6 +1841,18 @@ async def top_cmd(message: Message) -> None:
         title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
         await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {('@'+escape(str(r['username']))) if r.get('username') else escape(str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1)) if ranked else "Пока нет данных для рейтинга."))
         return
+    # Iris-style statistics support both "топ" and "стата", with an optional count.
+    count = 30
+    count_match = re.match(r"^(\d+)\s+(.+)$", arg)
+    if count_match:
+        count = max(1, min(100, int(count_match.group(1))))
+        arg = count_match.group(2).strip()
+    else:
+        trailing_count = re.match(r"^(.+?)\s+(\d+)$", arg)
+        if trailing_count:
+            arg = trailing_count.group(1).strip()
+            count = max(1, min(100, int(trailing_count.group(2))))
+
     global_scope = arg.startswith(("все чаты", "всех чатов", "по всем чатам", "глобальный", "глобально"))
     chat_only = is_group(message) and not global_scope
     if global_scope:
@@ -1797,13 +1861,13 @@ async def top_cmd(message: Message) -> None:
         chat_only = True
         arg = re.sub(r"^(?:чат|чата|в чате|по чату)\s*", "", arg).strip()
     aliases = {
-        "день":"day", "дня":"day", "дню":"day", "дне":"day", "днем":"day", "дневной":"day",
+        "день":"day", "дня":"day", "дню":"day", "дне":"day", "днем":"day", "днём":"day", "дневной":"day",
         "сегодня":"day", "сегодняшний":"day", "сегодняшняя":"day", "за сегодня":"day", "за день":"day",
-        "топ дня":"day", "топ за день":"day", "топ сегодня":"day", "топ за сегодня":"day",
-        "сутки":"day", "суток":"day", "сутками":"day", "суточный":"day", "24 часа":"day",
+        "топ дня":"day", "топ день":"day", "топ за день":"day", "топ сегодня":"day", "топ за сегодня":"day",
+        "сутки":"day", "суток":"day", "сутками":"day", "суточный":"day", "за сутки":"day", "топ сутки":"day", "24 часа":"day",
         "неделя":"week", "неделю":"week", "недели":"week", "неделе":"week", "неделей":"week",
         "недельный":"week", "недельная":"week", "за неделю":"week", "нед":"week", "7 дней":"week",
-        "топ недели":"week", "топ неделю":"week", "топ за неделю":"week", "топ недельный":"week",
+        "топ недели":"week", "топ неделю":"week", "топ неделя":"week", "топ за неделю":"week", "топ недельный":"week",
         "месяц":"month", "месяца":"month", "месяцу":"month", "месяце":"month", "месяцем":"month",
         "месячный":"month", "месячная":"month", "за месяц":"month", "30 дней":"month",
         "топ месяца":"month", "топ месяц":"month", "топ за месяц":"month", "топ месячный":"month",
@@ -1811,36 +1875,58 @@ async def top_cmd(message: Message) -> None:
         "за год":"year", "365 дней":"year", "топ года":"year", "топ год":"year", "топ за год":"year",
         "вся":"all", "все":"all", "все время":"all", "все времена":"all", "за все время":"all",
         "топ вся":"all", "топ все":"all", "топ все время":"all", "топ все времена":"all",
+        "стата вся":"all", "стата все":"all", "стата все время":"all", "статистика":"all",
         "навсегда":"all", "общий":"all", "общий топ":"all", "в целом":"all",
         "все чаты":"all", "всех чатов":"all", "глобально":"all", "глобальный":"all",
         "all":"all", "alltime":"all", "day":"day", "week":"week", "month":"month", "year":"year",
     }
-    compact = re.sub(r"\s+", " ", arg).strip(" .,!?:;")
-    normalized = re.sub(r"^(?:за|топ|топ за)\s+", "", compact).strip()
+    compact = re.sub(r"\s+", " ", arg).strip(" .,!?:;").replace("ё", "е")
+    normalized = re.sub(r"^(?:за|топ|стата|статистика|топ за|стата за)\s+", "", compact).strip()
     period = aliases.get(compact, aliases.get(normalized, "all"))
-    labels = {"all":"за всё время", "day":"за сегодня", "week":"за эту неделю", "month":"за этот месяц", "year":"за этот год"}
+    labels = {
+        "all":"за всё время", "day":"за сутки", "week":"за неделю",
+        "month":"за месяц", "year":"за год",
+    }
 
-    def query_top() -> list[dict]:
+    def query_top() -> tuple[list[dict], int]:
         if period == "all":
-            records = db_rows("bot_users", limit=10000, order="messages")
+            # All-time counters are maintained per chat as messages arrive.
+            if db is None:
+                return [], 0
+            q = db.table("bot_users").select("user_id,username,first_name,messages,chat_id")
+            if chat_only:
+                q = q.eq("chat_id", message.chat.id)
+            records: list[dict] = []
+            offset = 0
+            while True:
+                page = q.order("messages", desc=True).range(offset, offset + 999).execute().data or []
+                records.extend(page)
+                if len(page) < 1000:
+                    break
+                offset += len(page)
+                if offset >= 100000:
+                    log.warning("All-time leaderboard capped at 100000 user-chat rows")
+                    break
             grouped: dict[int, dict] = {}
+            total_messages = 0
             for row in records:
                 try:
-                    uid, count = int(row.get("user_id") or 0), int(row.get("messages") or 0)
+                    uid, n = int(row.get("user_id") or 0), max(0, int(row.get("messages") or 0))
                 except (TypeError, ValueError):
                     continue
                 if uid <= 0:
                     continue
-                item = grouped.setdefault(uid, {"user_id": uid, "username": row.get("username"), "first_name": row.get("first_name") or "Участник", "messages": 0})
-                item["messages"] += count
+                total_messages += n
+                item = grouped.setdefault(uid, {
+                    "user_id": uid, "username": row.get("username"),
+                    "first_name": row.get("first_name") or "Участник", "messages": 0,
+                })
+                item["messages"] += n
                 if row.get("username"):
                     item["username"] = row["username"]
                 if row.get("first_name"):
                     item["first_name"] = row["first_name"]
-            if chat_only:
-                local_rows = db_rows("bot_users", limit=10000, order="messages", chat_id=message.chat.id)
-                grouped = {int(r["user_id"]): {**r, "messages": int(r.get("messages") or 0)} for r in local_rows if r.get("user_id") is not None}
-            return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:10]
+            return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
 
         now_local = moscow_now()
         if period == "day":
@@ -1851,44 +1937,124 @@ async def top_cmd(message: Message) -> None:
             period_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
             period_start = now_local.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        query = db.table("bot_activity_events").select("user_id,username,first_name,chat_id").gte("created_at", period_start.astimezone(timezone.utc).isoformat())
-        if chat_only:
-            query = query.eq("chat_id", message.chat.id)
-        events = query.order("created_at", desc=True).limit(10000).execute().data or []
+        start_day = period_start.date().isoformat()
+        end_day = now_local.date().isoformat()
         grouped: dict[int, dict] = {}
-        for event in events:
-            try:
-                uid = int(event.get("user_id") or 0)
-            except (TypeError, ValueError):
-                continue
-            if uid <= 0:
-                continue
-            item = grouped.setdefault(uid, {"user_id": uid, "username": event.get("username"), "first_name": event.get("first_name") or "Участник", "messages": 0})
-            item["messages"] += 1
-            if event.get("username"):
-                item["username"] = event["username"]
-            if event.get("first_name"):
-                item["first_name"] = event["first_name"]
-        return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:10]
+        total_messages = 0
 
-    if period != "all" and db is None:
-        await message.answer("⚠️ Для топа за период нужна подключённая Supabase и таблица bot_activity_events.")
-        return
+        if db is None:
+            return [], 0
+
+        # Fast path: compact daily aggregates, not a scan of every message.
+        try:
+            q = db.table("bot_activity_daily").select("user_id,username,first_name,chat_id,messages").gte("day", start_day).lte("day", end_day)
+            if chat_only:
+                q = q.eq("chat_id", message.chat.id)
+            offset = 0
+            while True:
+                page = q.order("day").range(offset, offset + 999).execute().data or []
+                for row in page:
+                    try:
+                        uid, n = int(row.get("user_id") or 0), max(0, int(row.get("messages") or 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if uid <= 0:
+                        continue
+                    total_messages += n
+                    item = grouped.setdefault(uid, {
+                        "user_id": uid, "username": row.get("username"),
+                        "first_name": row.get("first_name") or "Участник", "messages": 0,
+                    })
+                    item["messages"] += n
+                    if row.get("username"):
+                        item["username"] = row["username"]
+                    if row.get("first_name"):
+                        item["first_name"] = row["first_name"]
+                if len(page) < 1000:
+                    break
+                offset += len(page)
+                if offset >= 100000:
+                    log.warning("Period leaderboard capped at 100000 daily rows")
+                    break
+        except Exception:
+            # Backward-compatible fallback if the aggregate migration has not been applied.
+            log.exception("Daily aggregate unavailable; falling back to raw activity events")
+            grouped.clear()
+            total_messages = 0
+            q = db.table("bot_activity_events").select("user_id,username,first_name,chat_id,created_at").gte("created_at", period_start.astimezone(timezone.utc).isoformat())
+            if chat_only:
+                q = q.eq("chat_id", message.chat.id)
+            offset = 0
+            while True:
+                page = q.order("created_at").range(offset, offset + 999).execute().data or []
+                for event in page:
+                    try:
+                        uid = int(event.get("user_id") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if uid <= 0:
+                        continue
+                    total_messages += 1
+                    item = grouped.setdefault(uid, {
+                        "user_id": uid, "username": event.get("username"),
+                        "first_name": event.get("first_name") or "Участник", "messages": 0,
+                    })
+                    item["messages"] += 1
+                    if event.get("username"):
+                        item["username"] = event["username"]
+                    if event.get("first_name"):
+                        item["first_name"] = event["first_name"]
+                if len(page) < 1000:
+                    break
+                offset += len(page)
+                if offset >= 100000:
+                    log.warning("Raw activity fallback capped at 100000 events")
+                    break
+        return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
+
     try:
-        rows = await asyncio.to_thread(query_top)
+        rows, total_messages = await asyncio.to_thread(query_top)
     except Exception:
         log.exception("Leaderboard query failed")
-        await message.answer("⚠️ Не удалось получить топ. Проверьте подключение к Supabase и таблицу bot_activity_events.")
+        await message.answer("⚠️ Не удалось получить статистику. Проверь подключение Supabase и таблицы активности.")
         return
     if not rows:
-        await message.answer(f"🏆 Пока нет данных для топа {labels[period]}.")
+        await message.answer(f"📊 Пока нет данных для статистики {labels[period]}. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
         return
-    scope = "этого чата" if chat_only else "всех чатов Pear CM"
-    lines = [f"🏆 <b>Топ участников {labels[period]}</b>", f"<i>Общий рейтинг: {scope}</i>"]
+
+    # Iris-inspired visual hierarchy and Telegram-clickable profile names.
+    lines = [f"📊 <b>Статистика по общительным пользователям {labels[period]}</b>", ""]
     for index, row in enumerate(rows, 1):
-        name = f"@{escape(str(row['username']))}" if row.get("username") else escape(str(row.get("first_name") or "Участник"))
-        lines.append(f"{index}. {name} — <b>{int(row.get('messages', 0))}</b> 💬")
-    await message.answer("\n".join(lines))
+        uid = int(row.get("user_id") or 0)
+        username = str(row.get("username") or "").lstrip("@")
+        display = escape(str(row.get("first_name") or "Участник"))
+        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            link = f"https://t.me/{username}"
+        else:
+            link = f"tg://user?id={uid}"
+        if period == "month":
+            badge = "🔥🔥🔥 " if index <= 5 else ("💥💥 " if index <= 11 else ("⭐️ " if index <= 22 else "⚡️ "))
+        elif period == "week":
+            badge = "⚡️ " if index <= 2 else ("✨ " if index == 3 else "")
+        else:
+            badge = ""
+        lines.append(f"{badge}{index}. <a href=\"{link}\">{display}</a> — {int(row.get('messages') or 0):,}".replace(",", " "))
+    lines.extend(["", f"Всего сообщений: {total_messages:,}".replace(",", " ")])
+    # Telegram message limit is 4096 chars; split defensively.
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = (current + "\n" + line) if current else line
+        if len(candidate) > 3900 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await message.answer(chunk)
+
 
 
 @router.message(Command("logs"))
