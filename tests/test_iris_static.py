@@ -87,6 +87,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             (["1", "месяц"], timedelta(days=30), 2),
             (["год"], timedelta(days=365), 1),
             (["2", "дня", "и", "3", "часа", "флуд"], timedelta(days=2, hours=3), 5),
+            (["1", "час", "30", "минут", "причина"], timedelta(hours=1, minutes=30), 4),
+            (["день"], timedelta(days=1), 1),
+            (["год"], timedelta(days=365), 1),
         ]
         for tokens, expected_duration, expected_consumed in cases:
             with self.subTest(tokens=tokens):
@@ -127,11 +130,13 @@ class PearCMStaticRegressionTests(unittest.TestCase):
 
     def test_activity_counters_are_idempotent_and_retryable(self):
         self.assertIn('"message_id": int(message_id)', self.source)
-        self.assertIn('on_conflict="chat_id,message_id", ignore_duplicates=True', self.source)
+        self.assertIn('db.rpc("record_bot_activity_batch"', self.source)
         self.assertIn("Activity batch persistence failed (attempt %s/3; size=%s)", self.source)
         schema = SCHEMA.read_text(encoding="utf-8").lower()
         self.assertIn("alter table public.bot_activity_events add column if not exists message_id bigint", schema)
         self.assertIn("bot_activity_events_chat_message_uidx", schema)
+        self.assertIn("create or replace function public.record_bot_activity_batch", schema)
+        self.assertIn("on conflict (chat_id, message_id) do nothing", schema)
 
     def test_warning_updates_check_database_write_results(self):
         self.assertIn("Не удалось сохранить снятие варна", self.source)
