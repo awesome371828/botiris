@@ -250,38 +250,27 @@ def db_upsert(table: str, payload: dict, on_conflict: str) -> dict | None:
 def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: str) -> dict:
     current = db_one("bot_users", user_id=user_id, chat_id=chat_id)
     if current:
+        try:
+            stored_rank = max(0, min(5, int(current.get("rank", 0) or 0)))
+        except (TypeError, ValueError):
+            stored_rank = 0
+        rank = 5 if user_id == OWNER_ID else stored_rank
         db_upsert("bot_users", {
             "user_id": user_id, "chat_id": chat_id, "username": username,
-            "first_name": first_name or "Пользователь",
+            "first_name": first_name or "Пользователь", "rank": rank,
             "last_seen": datetime.now(timezone.utc).isoformat(),
         }, "user_id,chat_id")
-        current.update({"username": username, "first_name": first_name or "Пользователь"})
+        current.update({"username": username, "first_name": first_name or "Пользователь", "rank": rank})
+        invalidate_user_rank(chat_id, user_id)
         return current
+    rank = 5 if user_id == OWNER_ID else 0
     row = db_upsert("bot_users", {
         "user_id": user_id, "chat_id": chat_id, "username": username,
-        "first_name": first_name or "Пользователь", "warns": 0, "rank": 0,
+        "first_name": first_name or "Пользователь", "warns": 0, "rank": rank,
         "messages": 0, "last_seen": datetime.now(timezone.utc).isoformat(),
     }, "user_id,chat_id")
-    return row or {"user_id": user_id, "chat_id": chat_id, "warns": 0, "rank": 0, "messages": 0}
-
-def audit(chat_id: int, actor_id: int, action: str, target_id: int | None = None, details: str = "") -> None:
-    # Audit persistence must not block the bot's asyncio event loop.
-    payload = {
-        "chat_id": chat_id, "actor_id": actor_id, "action": action,
-        "target_id": target_id, "details": details[:1000],
-    }
-    try:
-        asyncio.get_running_loop().create_task(asyncio.to_thread(db_insert, "bot_audit", payload))
-    except RuntimeError:
-        db_insert("bot_audit", payload)
-
-async def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None, details: str = "") -> None:
-    """Persist critical moderation audit events before dependent warning-count reads."""
-    payload = {
-        "chat_id": chat_id, "actor_id": actor_id, "action": action,
-        "target_id": target_id, "details": details[:1000],
-    }
-    await asyncio.to_thread(db_insert, "bot_audit", payload)
+    invalidate_user_rank(chat_id, user_id)
+    return row or {"user_id": user_id, "chat_id": chat_id, "warns": 0, "rank": rank, "messages": 0}
 
 def set_warns(chat_id: int, user_id: int, amount: int) -> int:
     user = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {
@@ -358,12 +347,32 @@ async def await_bot_rights_hint(chat_id: int) -> str:
     except Exception:
         return "⚠️ Не удалось проверить права автоматически. Напиши /checkrights в группе."
 
+_USER_RANK_CACHE: dict[tuple[int, int], tuple[int, float]] = {}
+_USER_RANK_CACHE_TTL = 20.0
+
 def user_rank(chat_id: int, user_id: int) -> int:
+    if user_id == OWNER_ID:
+        return 5
+    key = (chat_id, user_id)
+    now = time.monotonic()
+    cached = _USER_RANK_CACHE.get(key)
+    if cached and now - cached[1] < _USER_RANK_CACHE_TTL:
+        return cached[0]
     row = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
     try:
-        return max(0, min(5, int(row.get("rank", 0))))
+        rank = max(0, min(5, int(row.get("rank", 0))))
     except (TypeError, ValueError):
-        return 0
+        rank = 0
+    _USER_RANK_CACHE[key] = (rank, now)
+    if len(_USER_RANK_CACHE) > 10000:
+        cutoff = now - _USER_RANK_CACHE_TTL * 3
+        for old_key, (_, stamp) in list(_USER_RANK_CACHE.items()):
+            if stamp < cutoff:
+                _USER_RANK_CACHE.pop(old_key, None)
+    return rank
+
+def invalidate_user_rank(chat_id: int, user_id: int) -> None:
+    _USER_RANK_CACHE.pop((chat_id, user_id), None)
 
 async def require_admin(message: Message, min_rank: int = 1) -> bool:
     min_rank = required_rank_for(message, min_rank)
@@ -389,19 +398,27 @@ async def require_real_admin(message: Message) -> bool:
     return False
 
 _TIME_UNITS = {
-    "с": 1, "сек": 1, "секунда": 1, "секунды": 1, "секунд": 1,
-    "s": 1, "sec": 1, "секунду": 1,
-    "м": 60, "мин": 60, "минута": 60, "минуты": 60, "минут": 60,
-    "m": 60, "min": 60,
-    "ч": 3600, "час": 3600, "часа": 3600, "часов": 3600, "часе": 3600,
-    "h": 3600, "hr": 3600,
-    "д": 86400, "дн": 86400, "день": 86400, "дня": 86400, "дней": 86400,
-    "сутки": 86400, "суток": 86400, "day": 86400, "days": 86400, "d": 86400,
-    "н": 604800, "нед": 604800, "неделя": 604800, "недели": 604800,
-    "недель": 604800, "week": 604800, "weeks": 604800, "w": 604800,
-    "мес": 2592000, "месяц": 2592000, "месяца": 2592000, "месяцев": 2592000,
+    "с": 1, "сек": 1, "секунда": 1, "секунды": 1, "секунд": 1, "секунду": 1,
+    "секундами": 1, "секундах": 1, "секундочку": 1, "секундочка": 1,
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "м": 60, "мин": 60, "минута": 60, "минуты": 60, "минут": 60, "минуту": 60,
+    "минутами": 60, "минутах": 60, "минуточку": 60, "минуточка": 60,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "ч": 3600, "час": 3600, "часа": 3600, "часов": 3600, "часе": 3600, "часу": 3600,
+    "часами": 3600, "часах": 3600, "часик": 3600, "часика": 3600, "часиков": 3600,
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "д": 86400, "дн": 86400, "день": 86400, "дня": 86400, "дней": 86400, "денька": 86400,
+    "днём": 86400, "днем": 86400, "днями": 86400, "днях": 86400, "дню": 86400,
+    "сутки": 86400, "суток": 86400, "сутками": 86400, "сутках": 86400, "сутку": 86400,
+    "day": 86400, "days": 86400, "d": 86400,
+    "н": 604800, "нед": 604800, "неделя": 604800, "недели": 604800, "неделю": 604800,
+    "недель": 604800, "неделями": 604800, "неделях": 604800,
+    "week": 604800, "weeks": 604800, "w": 604800,
+    "мес": 2592000, "месяц": 2592000, "месяца": 2592000, "месяцев": 2592000, "месяцу": 2592000,
+    "месяцами": 2592000, "месяцах": 2592000,
     "month": 2592000, "months": 2592000,
-    "г": 31536000, "год": 31536000, "года": 31536000, "лет": 31536000,
+    "г": 31536000, "год": 31536000, "года": 31536000, "лет": 31536000, "году": 31536000,
+    "годом": 31536000, "годами": 31536000, "годах": 31536000,
     "years": 31536000, "year": 31536000, "y": 31536000,
 }
 
@@ -558,12 +575,14 @@ def moderation_command_key(message: Message) -> str | None:
         first = second
     elif first in {"дать", "выдать"} and len(words) > 1:
         first = words[1]
-    return {"мут":"mute", "замутить":"mute", "замуть":"mute", "бан":"ban",
-            "забанить":"ban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick",
-            "варн":"warn", "предупредить":"warn", "анварн":"unwarn",
-            "снятьварн":"unwarn", "убратьварн":"unwarn", "размут":"unmute",
-            "анмут":"unmute", "унмут":"unmute", "разбан":"unban"}.get(first,
-            first if first in {"mute","unmute","ban","unban","kick","warn","unwarn","clearwarns"} else None)
+    return {"мут":"mute", "замутить":"mute", "замуть":"mute", "замут":"mute",
+            "бан":"ban", "забанить":"ban", "забан":"ban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick",
+            "варн":"warn", "предупредить":"warn", "предупреждение":"warn",
+            "анварн":"unwarn", "снятьварн":"unwarn", "убратьварн":"unwarn",
+            "размут":"unmute", "анмут":"unmute", "унмут":"unmute", "снятьмут":"unmute", "убратьмут":"unmute",
+            "разбан":"unban", "повысить":"promote", "повыситьранг":"promote", "понизить":"demote",
+            "понизитьранг":"demote", "очистить":"purge", "-смс":"delete", "пин":"pin", "анпин":"unpin"}.get(first,
+            first if first in {"mute","unmute","ban","unban","kick","warn","unwarn","clearwarns","promote","demote","purge","delete","pin","unpin"} else None)
 
 def required_rank_for(message: Message, default_rank: int) -> int:
     key = moderation_command_key(message)
@@ -651,6 +670,7 @@ async def admin_panel_button(message: Message) -> None:
     await owner_panel(message)
 
 @router.message(Command("help", "commands"))
+@router.message(F.text.regexp(r"(?i)^/(?:help|commands)(?:@\w+)?(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:помощь|команды)(?:\s|$)"))
 @router.message(F.text.in_({"🔗 Команды", "❓ Помощь"}))
 async def help_command(message: Message) -> None:
@@ -811,32 +831,31 @@ async def marriage_menu(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:админы|кто админ)(?:\s|$)"))
 async def admins(message: Message) -> None:
     try:
-        members = await bot.get_chat_administrators(message.chat.id)
-        lines = ["🛡 <b>Администраторы чата</b>"]
-        seen_ids = set()
-        for member in members[:50]:
-            u = member.user
-            seen_ids.add(u.id)
-            internal_rank = user_rank(message.chat.id, u.id)
-            label = "создатель Telegram" if member.status == ChatMemberStatus.CREATOR else "администратор Telegram"
-            if internal_rank > 0:
-                label += f" · ранг {internal_rank}: {role_name(internal_rank)}"
-            lines.append(f"• {mention(u.id, u.full_name)} — {label}")
-        # Also show Pear CM internal moderators who are not Telegram administrators.
-        ranked_users = db_rows("bot_users", limit=1000, chat_id=message.chat.id)
+        # Only show Pear CM internal roles; do not list everyone who is a Telegram admin.
+        ranked_users = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
+        ranks: dict[int, tuple[int, str]] = {}
         for row in ranked_users:
             try:
                 uid = int(row.get("user_id", 0))
-                internal_rank = max(0, min(5, int(row.get("rank", 0) or 0)))
+                rank = max(0, min(5, int(row.get("rank", 0) or 0)))
             except (TypeError, ValueError):
                 continue
-            if uid in seen_ids or internal_rank <= 0:
-                continue
-            uname = row.get("first_name") or row.get("username") or f"ID {uid}"
-            lines.append(f"• {mention(uid, uname)} — ранг {internal_rank}: {role_name(internal_rank)}")
+            if uid > 0 and rank > 0:
+                name = str(row.get("first_name") or row.get("username") or f"ID {uid}")
+                ranks[uid] = (rank, name)
+        if OWNER_ID not in ranks:
+            owner_row = next((r for r in ranked_users if int(r.get("user_id", 0) or 0) == OWNER_ID), {})
+            ranks[OWNER_ID] = (5, str(owner_row.get("first_name") or owner_row.get("username") or "Владелец Pear CM"))
+        lines = ["🛡 <b>Администраторы Pear CM</b>"]
+        for uid, (rank, name) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
+            # Plain escaped names avoid mentions/pings and decorative user prefixes.
+            lines.append(f"• <b>{escape(name)}</b> — <b>{role_name(rank)}</b> · ранг {rank}")
+        if len(lines) == 1:
+            lines.append("Пока никто не назначен администраторами Pear CM.")
         await message.answer("\n".join(lines))
     except Exception:
-        await message.answer("Не удалось получить список. Проверьте, что бот добавлен в группу.")
+        log.exception("Could not build Pear CM internal admin list")
+        await message.answer("Не удалось получить список администраторов Pear CM. Попробуйте ещё раз.")
 
 # ── Activity tracking and welcome ────────────────────────────────────────────
 @router.message(F.new_chat_members)
@@ -1758,63 +1777,90 @@ async def rank_cmd(message: Message) -> None:
 async def promote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    target = await resolve_target(message, args_after_command(message))
+    args = args_after_command(message)
+    explicit = next((int(x) for x in args if x.isdigit() and 0 <= int(x) <= 5), None)
+    target_args = [x for x in args if not (x.isdigit() and 0 <= int(x) <= 5)]
+    target = await resolve_target(message, target_args)
     if not target:
-        await message.answer("Ответьте на сообщение участника и напишите <code>повысить</code> либо укажите <code>@username</code>.")
+        await message.answer("Ответьте на сообщение участника: <code>повысить</code> — на один ранг, <code>повысить 5</code> — назначить ранг 5.")
         return
     if message.from_user and target[0] == message.from_user.id:
-        await message.answer("⛔ Нельзя повышать собственный ранг.")
+        await message.answer("⛔ Нельзя менять собственный ранг.")
         return
     current = user_rank(message.chat.id, target[0])
-    if current >= 5:
-        await message.answer("ℹ️ Уже максимальный ранг: Создатель.")
+    new_rank = explicit if explicit is not None else current + 1
+    if new_rank <= current:
+        await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для повышения выберите ранг выше.")
         return
-    if current == 4:
-        try:
-            actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-        except Exception:
-            actor_member = None
-        if not (message.from_user and message.from_user.id == OWNER_ID) and (not actor_member or actor_member.status != ChatMemberStatus.CREATOR):
-            await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
-            return
-    new_rank = current + 1
+    if new_rank > 5:
+        await message.answer("ℹ️ Достигнут максимальный ранг: Создатель.")
+        return
+    actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
+    try:
+        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id) if message.from_user else None
+    except Exception:
+        actor_member = None
+    actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
+    if new_rank == 5 and not (actor_is_owner or actor_is_creator):
+        await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
+        return
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else user_rank(message.chat.id, message.from_user.id if message.from_user else 0)
+    if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
+        await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
+        return
+    if current == 5 and not (actor_is_owner or actor_is_creator):
+        await message.answer("⛔ Изменять ранг создателя может только создатель чата или владелец Pear CM.")
+        return
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    invalidate_user_rank(message.chat.id, target[0])
     audit(message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
-    await message.answer(f"⬆️ {mention(target[0], target[1])}: <b>{current} — {role_name(current)}</b> → <b>{new_rank} — {role_name(new_rank)}</b>.")
+    await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить|понизитьранг|demote)(?:\s|$)"))
 async def demote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    target = await resolve_target(message, args_after_command(message))
+    args = args_after_command(message)
+    explicit = next((int(x) for x in args if x.isdigit() and 0 <= int(x) <= 5), None)
+    target_args = [x for x in args if not (x.isdigit() and 0 <= int(x) <= 5)]
+    target = await resolve_target(message, target_args)
     if not target:
-        await message.answer("Ответьте на сообщение участника и напишите <code>понизить</code> либо укажите <code>@username</code>.")
+        await message.answer("Ответьте на сообщение участника: <code>понизить</code> — на один ранг, <code>понизить 2</code> — назначить ранг 2.")
         return
     if message.from_user and target[0] == message.from_user.id:
-        await message.answer("⛔ Нельзя понижать собственный ранг.")
+        await message.answer("⛔ Нельзя менять собственный ранг.")
         return
     current = user_rank(message.chat.id, target[0])
-    if current <= 0:
+    new_rank = explicit if explicit is not None else current - 1
+    if new_rank >= current:
+        await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для понижения выберите ранг ниже.")
+        return
+    if new_rank < 0:
         await message.answer("ℹ️ Уже минимальный ранг: Участник.")
         return
-    if current == 5:
-        try:
-            actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-        except Exception:
-            actor_member = None
-        if not (message.from_user and message.from_user.id == OWNER_ID) and (not actor_member or actor_member.status != ChatMemberStatus.CREATOR):
-            await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
-            return
-    new_rank = current - 1
+    actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
+    try:
+        actor_member = await bot.get_chat_member(message.chat.id, message.from_user.id) if message.from_user else None
+    except Exception:
+        actor_member = None
+    actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
+    if current == 5 and not (actor_is_owner or actor_is_creator):
+        await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
+        return
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else user_rank(message.chat.id, message.from_user.id if message.from_user else 0)
+    if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
+        await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
+        return
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    invalidate_user_rank(message.chat.id, target[0])
     audit(message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
-    await message.answer(f"⬇️ {mention(target[0], target[1])}: <b>{current} — {role_name(current)}</b> → <b>{new_rank} — {role_name(new_rank)}</b>.")
+    await message.answer(f"⬇️ <b>{escape(target[1])}</b> был понижен до роли <b>{role_name(new_rank)}</b>.")
 
 @router.message(F.text.regexp(r"(?i)^\.дк\s+"))
 async def command_rank_rule_cmd(message: Message) -> None:
