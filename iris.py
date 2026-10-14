@@ -325,13 +325,17 @@ def user_rank(chat_id: int, user_id: int) -> int:
     except (TypeError, ValueError):
         return 0
 
-async def require_admin(message: Message) -> bool:
+async def require_admin(message: Message, min_rank: int = 1) -> bool:
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
         return False
-    if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
+    if await is_admin(bot, message.chat.id, message.from_user.id):
         return True
-    await message.answer("⛔ Команда доступна администраторам и назначенным модераторам.")
+    rank = user_rank(message.chat.id, message.from_user.id)
+    if rank >= min_rank:
+        return True
+    role = {1: "помощника", 2: "модератора", 3: "старшего модератора", 4: "администратора", 5: "создателя"}.get(min_rank, "модератора")
+    await message.answer(f"⛔ Для этой команды нужен ранг не ниже {min_rank} ({role}) или права администратора Telegram.")
     return False
 
 async def require_real_admin(message: Message) -> bool:
@@ -780,8 +784,8 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
                 return None
     return target
 
-async def check_mod(message: Message) -> bool:
-    if not await require_admin(message):
+async def check_mod(message: Message, min_rank: int = 2) -> bool:
+    if not await require_admin(message, min_rank=min_rank):
         return False
     try:
         me = await bot.get_me()
@@ -923,7 +927,7 @@ async def unmute_cmd(message: Message) -> None:
 @router.message(Command("ban"))
 @router.message(F.text.regexp(r"(?i)^[.!/!]?бан(?:\s|$)"))
 async def ban_cmd(message: Message) -> None:
-    if not await check_mod(message):
+    if not await check_mod(message, min_rank=3):
         return
     target = await moderation_target(message, "ban")
     if not target:
@@ -960,7 +964,7 @@ async def unban_cmd(message: Message) -> None:
 @router.message(Command("kick"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?кик(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
-    if not await check_mod(message):
+    if not await check_mod(message, min_rank=3):
         return
     target = await moderation_target(message, "kick")
     if not target:
@@ -1028,7 +1032,7 @@ async def warn_cmd(message: Message) -> None:
 @router.message(Command("unwarn"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
-    if not await require_admin(message):
+    if not await require_admin(message, min_rank=2):
         return
     target = await moderation_target(message, "unwarn")
     if not target:
@@ -1048,7 +1052,7 @@ async def unwarn_cmd(message: Message) -> None:
 @router.message(Command("clearwarns"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
 async def clearwarns_cmd(message: Message) -> None:
-    if not await require_admin(message):
+    if not await require_admin(message, min_rank=3):
         return
     target = await moderation_target(message, "clearwarns")
     if not target:
