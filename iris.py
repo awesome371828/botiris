@@ -2333,11 +2333,11 @@ async def command_rank_rule_cmd(message: Message) -> None:
     if key is None:
         tokens = command_phrase.split()
         # Resolve grammatical forms by stable stems, while preferring the longest intent.
-        if any(t.startswith(("размут", "анмут", "унмут")) for t in tokens) or ("снят" in tokens and any(t.startswith("мут") for t in tokens)):
+        if any(t.startswith(("размут", "анмут", "унмут", "снят", "снять", "убрат", "убрать", "отключ")) for t in tokens) and any(t.startswith("мут") for t in tokens):
             key = "unmute"
         elif any(t.startswith(("мут", "замут")) for t in tokens):
             key = "mute"
-        elif any(t.startswith(("разбан", "снят")) for t in tokens) and any(t.startswith("бан") for t in tokens):
+        elif any(t.startswith(("разбан", "снят", "снять", "убрат", "убрать", "отмен")) for t in tokens) and any(t.startswith("бан") for t in tokens):
             key = "unban"
         elif any(t.startswith(("бан", "забан", "выдан")) for t in tokens):
             key = "ban"
@@ -4183,6 +4183,22 @@ async def personal_command_access_cmd(message: Message) -> None:
     }
     key = aliases.get(command_phrase)
     if not key:
+        tokens = command_phrase.split()
+        if any(t.startswith(("размут","анмут","унмут","снят","снять","убрат","убрать","отключ")) for t in tokens) and any(t.startswith("мут") for t in tokens):
+            key = "unmute"
+        elif any(t.startswith(("мут","замут")) for t in tokens):
+            key = "mute"
+        elif any(t.startswith(("разбан","снят","снять","убрат","убрать","отмен")) for t in tokens) and any(t.startswith("бан") for t in tokens):
+            key = "unban"
+        elif any(t.startswith(("бан","забан")) for t in tokens):
+            key = "ban"
+        elif any(t.startswith(("варн","предупрежд")) for t in tokens):
+            key = "warn"
+        elif any(t.startswith(("повыс","повыш")) for t in tokens):
+            key = "promote"
+        elif any(t.startswith(("пониз","пониж")) for t in tokens):
+            key = "demote"
+    if not key:
         await message.answer("Неизвестная команда. Пример: <code>лдк мут запрет</code> ответом на сообщение.")
         return
     target = await _feature_target(message)
@@ -4524,7 +4540,7 @@ async def clan_cmd(message: Message) -> None:
             await message.answer("Ты не состоишь в клане.")
             return
         if member.get("role") == "leader":
-            await message.answer("Лидер не может выйти, пока не передаст лидерство или не распустит клан. Функция передачи будет добавлена отдельно.")
+            await message.answer("Лидер не может выйти, пока не передаст лидерство или не распустит клан.")
             return
         deleted = await asyncio.to_thread(lambda: db.table("bot_clan_members").delete().eq("chat_id",chat_id).eq("user_id",uid).execute() if db is not None else None)
         await message.answer("Ты вышел из клана." if deleted else "Не удалось выйти из клана.")
