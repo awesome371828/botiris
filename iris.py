@@ -2656,14 +2656,21 @@ async def marriage_status_cmd(message: Message) -> None:
 async def divorce_cmd(message: Message) -> None:
     if not message.from_user:
         return
-    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=100, chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
     for row in rows:
         if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
             try:
-                await asyncio.to_thread(lambda: db.table("bot_marriages").update({"status": "divorced"}).eq("id", row["id"]).execute())
+                result = await asyncio.to_thread(
+                    lambda: db.table("bot_marriages").update({"status": "divorced"})
+                    .eq("id", row["id"]).eq("status", "married").select("*").execute()
+                )
+                if not result.data:
+                    await message.answer("ℹ️ Брак уже изменён другим действием. Обнови статус командой «мой брак».")
+                    return
                 await message.answer("💔 Брак расторгнут.")
             except Exception:
-                await message.answer("Не удалось изменить запись в базе данных.")
+                log.exception("Could not divorce marriage id=%s chat=%s", row.get("id"), message.chat.id)
+                await message.answer("Не удалось изменить запись в базе данных. Брак не подтверждён как расторгнутый.")
             return
     await message.answer("У вас нет активного брака.")
 
