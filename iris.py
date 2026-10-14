@@ -2842,15 +2842,17 @@ async def promote_rank_cmd(message: Message) -> None:
     actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
     actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id) if message.from_user else None
     actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
+    target_member = await get_chat_member_cached(bot, message.chat.id, target[0])
+    if target_member and target_member.status == ChatMemberStatus.CREATOR:
+        await message.answer("⛔ Нельзя изменять ранг создателя Telegram-чата.")
+        return
     if new_rank == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else int(actor_rank_loaded or 0)
-    if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
-        await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
-        return
-    if current == 5 and not (actor_is_owner or actor_is_creator):
-        await message.answer("⛔ Изменять ранг создателя может только создатель чата или владелец Pear CM.")
+    actor_is_telegram_admin = bool(actor_member and actor_member.status == ChatMemberStatus.ADMINISTRATOR)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else max(int(actor_rank_loaded or 0), 4 if actor_is_telegram_admin else 0)
+    if not (actor_is_owner or actor_is_creator) and (current >= actor_rank or new_rank >= actor_rank):
+        await message.answer("⛔ Можно менять только ранг участника ниже своего и назначать ранг строго ниже своего.")
         return
     recent = _RECENT_CHAT_USERS.get((message.chat.id, target[0]))
     recent_username = recent[0] if recent else None
@@ -2911,12 +2913,17 @@ async def demote_rank_cmd(message: Message) -> None:
     actor_is_owner = bool(message.from_user and message.from_user.id == OWNER_ID)
     actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id) if message.from_user else None
     actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR)
+    target_member = await get_chat_member_cached(bot, message.chat.id, target[0])
+    if target_member and target_member.status == ChatMemberStatus.CREATOR:
+        await message.answer("⛔ Нельзя изменять ранг создателя Telegram-чата.")
+        return
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else int(actor_rank_loaded or 0)
-    if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
-        await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
+    actor_is_telegram_admin = bool(actor_member and actor_member.status == ChatMemberStatus.ADMINISTRATOR)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else max(int(actor_rank_loaded or 0), 4 if actor_is_telegram_admin else 0)
+    if not (actor_is_owner or actor_is_creator) and (current >= actor_rank or new_rank >= actor_rank):
+        await message.answer("⛔ Можно менять только ранг участника ниже своего и назначать ранг строго ниже своего.")
         return
     recent = _RECENT_CHAT_USERS.get((message.chat.id, target[0]))
     recent_username = recent[0] if recent else None
