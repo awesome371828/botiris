@@ -722,6 +722,7 @@ async def moscow_time_cmd(message: Message) -> None:
     )
 
 
+@router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
 @router.message(Command("warns"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:варны|мои варны)(?:\s|$)"))
 async def my_warns(message: Message) -> None:
@@ -1673,10 +1674,13 @@ async def set_trigger_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     parts = args_after_command(message)
-    if len(parts) < 3 or parts[0] not in {"3", "5", "7", "10"} or parts[1] not in {"mute", "ban", "off"}:
+    if len(parts) < 2 or parts[0] not in {"3", "5", "7", "10"} or parts[1] not in {"mute", "ban", "off"}:
         await message.answer("Формат: <code>/settrigger 3 mute 1ч</code>, <code>/settrigger 7 ban</code> или <code>/settrigger 5 off</code>.")
         return
     threshold, action = parts[0], parts[1]
+    if action == "mute" and len(parts) < 3:
+        await message.answer("Для триггера mute укажи срок, например <code>/settrigger 3 mute 1ч</code>.")
+        return
     settings = get_chat_settings(message.chat.id)
     settings[f"warn_{threshold}_action"] = "off" if action == "off" else action
     if action != "off" and len(parts) >= 3:
