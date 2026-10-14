@@ -1640,10 +1640,13 @@ async def unwarn_cmd(message: Message) -> None:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
         return
     user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    await asyncio.to_thread(db_upsert, "bot_users", {
+    saved = await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
-        "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
+        "warns": max(0, count - 1), "rank": int(user.get("rank", 0) or 0), "messages": int(user.get("messages", 0) or 0),
     }, "user_id,chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить снятие варна в базе. Ничего не подтверждаю как выполненное — проверь Supabase и повтори позже.")
+        return
     await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={max(0,count-1)}")
     await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{max(0,count-1)}</b>.")
     
@@ -1655,11 +1658,14 @@ async def clearwarns_cmd(message: Message) -> None:
     target = await moderation_target(message, "clearwarns")
     if not target:
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    saved = await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
-        "warns": 0, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
+        "warns": 0, "rank": int(user.get("rank", 0) or 0), "messages": int(user.get("messages", 0) or 0),
     }, "user_id,chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сбросить предупреждения: база данных не подтвердила запись.")
+        return
     await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
     await message.answer(f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.")
 
@@ -3121,7 +3127,7 @@ async def moderation_history_cmd(message: Message) -> None:
             target_id = int(target_match.group(1))
         elif args and args[0].isdigit():
             target_id = int(args[0])
-    rows = db_rows("bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
     if target_id is not None:
         rows = [r for r in rows if int(r.get("target_id") or 0) == target_id]
     action_set = {"mute", "unmute", "ban", "unban", "kick", "warn", "clearwarns", "purge", "purge_recent", "delete"}
@@ -3153,7 +3159,7 @@ async def audit_search_cmd(message: Message) -> None:
     hours = int(args[1]) if len(args) > 1 and args[1].isdigit() else 24
     hours = max(1, min(hours, 720))
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    rows = db_rows("bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
     result = []
     for row in rows:
         if moderator_id is not None and int(row.get("actor_id") or 0) != moderator_id:
