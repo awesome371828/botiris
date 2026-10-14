@@ -3130,7 +3130,11 @@ async def apply_configured_filter_action(message: Message, settings: dict[str, A
         return
     try:
         member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
-        if member and member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
+        if member is None:
+            log.warning("Skipped configured filter action because Telegram member status could not be verified chat=%s user=%s",
+                        message.chat.id, message.from_user.id)
+            return
+        if member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
             log.info("Skipped configured filter action for Telegram admin chat=%s user=%s action=%s",
                      message.chat.id, message.from_user.id, action)
             return
