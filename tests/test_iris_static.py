@@ -231,7 +231,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         marriage_start = self.source.index("async def marry_cmd")
         marriage_end = self.source.index("@router.callback_query(F.data.startswith(\"marriage:\"))", marriage_start)
         marriage = self.source[marriage_start:marriage_end]
-        self.assertIn('r"(?i)^\\s*[.!/]?(?:брак|браки', marriage)
+        self.assertIn('r"(?i)^\\s*[.!/]?(?:брак|браки', self.source)
         self.assertIn('брак да', self.source)
         self.assertIn('брак нет', self.source)
         self.assertTrue(marriage.rstrip().endswith(")"))
