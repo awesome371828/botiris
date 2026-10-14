@@ -21,14 +21,14 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
-    BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
+    BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, CallbackQuery, BufferedInputFile,
     ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
 )
 from supabase import Client, create_client
@@ -44,7 +44,7 @@ SUPABASE_KEY = (
 )
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-4"
+MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-5"
 
 def moscow_now() -> datetime:
     """Current aware Moscow time (MSK, UTC+3), updated from system time."""
@@ -79,6 +79,41 @@ bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
+
+# Command cooldown: one command per user/chat every two seconds.
+_COMMAND_LAST: dict[tuple[int, int], float] = {}
+_COMMAND_NOTICE_LAST: dict[tuple[int, int], float] = {}
+
+class CommandRateLimitMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if not isinstance(event, Message) or not event.from_user or event.from_user.is_bot:
+            return await handler(event, data)
+        text_value = (event.text or "").strip()
+        looks_like_command = bool(re.match(r"^(?:/|[!.])\\w+", text_value, re.I)) or bool(re.match(r"^(?:мут|бан|кик|варн|размут|разбан|очистить|профиль|команды|помощь)(?:\\s|$)", text_value, re.I))
+        if not looks_like_command:
+            return await handler(event, data)
+        key = (event.chat.id, event.from_user.id)
+        now = time.monotonic()
+        previous = _COMMAND_LAST.get(key, 0.0)
+        if now - previous < 2.0:
+            last_notice = _COMMAND_NOTICE_LAST.get(key, 0.0)
+            if now - last_notice >= 5.0:
+                _COMMAND_NOTICE_LAST[key] = now
+                try:
+                    await event.answer("⏳ Не так быстро: команды можно отправлять раз в 2 секунды.")
+                except Exception:
+                    pass
+            return None
+        _COMMAND_LAST[key] = now
+        if len(_COMMAND_LAST) > 10000:
+            cutoff = now - 3600
+            for old_key, stamp in list(_COMMAND_LAST.items()):
+                if stamp < cutoff:
+                    _COMMAND_LAST.pop(old_key, None)
+                    _COMMAND_NOTICE_LAST.pop(old_key, None)
+        return await handler(event, data)
+
+router.message.middleware(CommandRateLimitMiddleware())
 
 # Track real message IDs observed during this process. Telegram Bot API has no history endpoint.
 _RECENT_MESSAGE_IDS: dict[int, deque[int]] = defaultdict(lambda: deque(maxlen=5000))
@@ -117,16 +152,19 @@ URL_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/)", re.I)
 INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.I)
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
-def main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
+def main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
+    rows = [
             [KeyboardButton(text="➕ Добавить в чат")],
-            [KeyboardButton(text="🏅 Чаты: топ дня"), KeyboardButton(text="🏆 Супер топ чатов")],
+            [KeyboardButton(text="🚀 Начать пользоваться ботом")],
             [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
             [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
             [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url=MINI_APP_URL))],
             [KeyboardButton(text="⚠️ Мои варны"), KeyboardButton(text="🛡 Кто админ")],
-        ],
+        ]
+    if user_id == OWNER_ID:
+        rows.insert(2, [KeyboardButton(text="🛠 Админ-панель")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Выберите раздел или введите команду…",
@@ -378,6 +416,7 @@ async def safe_error(message: Message, exc: Exception) -> None:
 
 # ── Welcome and menu ─────────────────────────────────────────────────────────
 @router.message(CommandStart())
+@router.message(F.text == "🚀 Начать пользоваться ботом")
 async def start(message: Message) -> None:
     if message.chat.type == ChatType.PRIVATE:
         text = (
@@ -388,12 +427,24 @@ async def start(message: Message) -> None:
             "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
             '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
         )
-        await message.answer(text, reply_markup=main_keyboard())
+        await message.answer(text, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
     else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💠 Профиль", callback_data="group:profile"), InlineKeyboardButton(text="🔗 Команды", callback_data="group:help")],
+            [InlineKeyboardButton(text="🌐 Открыть Mini App", url=MINI_APP_URL)],
+        ])
         await message.answer(
-            f"👋 Бот включён в чате <b>{message.chat.title or 'группа'}</b>!\n"
-            "Команды: /help, /commands, /profile, /admins."
+            f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
+            "Нажми кнопку ниже — отвечу на запрос.\n\n"
+            "⚠️ <b>Чтобы бот полноценно работал, выдайте ему права администратора</b> и включите только нужные разрешения: удаление сообщений, ограничение/блокировка участников и управление сообщениями. Без прав команды модерации не смогут выполнять действия.",
+            reply_markup=keyboard,
         )
+
+@router.message(F.text == "🛠 Админ-панель")
+async def admin_panel_button(message: Message) -> None:
+    if not message.from_user or message.from_user.id != OWNER_ID:
+        return
+    await owner_panel(message)
 
 @router.message(Command("help", "commands"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:помощь|команды)(?:\s|$)"))
@@ -438,7 +489,7 @@ async def menu_button(message: Message) -> None:
 @router.message(F.text == "➕ Добавить в чат")
 async def add_to_chat(message: Message) -> None:
     if message.chat.type != ChatType.PRIVATE:
-        await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат».")
+        await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат». ⚠️ Чтобы команды модерации работали в этой группе, выдайте Pear CM права администратора с необходимыми разрешениями.")
         return
     try:
         me = await bot.get_me()
@@ -471,9 +522,30 @@ async def installation_help(message: Message) -> None:
         reply_markup=main_keyboard(),
     )
 
-@router.message(F.text.in_({"🏅 Чаты: топ дня", "🏆 Супер топ чатов"}))
-async def chat_top_placeholder(message: Message) -> None:
-    await message.answer("🏆 Рейтинг чатов пока не собирается. В этой версии доступны профиль и топ участников группы.")
+@router.callback_query(F.data.startswith("group:"))
+async def group_menu_callback(callback: CallbackQuery) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[-1]
+    if action == "profile" and callback.from_user:
+        user = ensure_user(callback.from_user.id, callback.message.chat.id, callback.from_user.username, callback.from_user.full_name)
+        body = (f"👤 <b>Профиль</b>\n{mention(callback.from_user.id, callback.from_user.full_name)}\n\n"
+                f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>\n\n"
+                "⚠️ Чтобы функции модерации работали, выдайте Pear CM права администратора чата.")
+    else:
+        body = ("📚 <b>Основные команды Pear CM</b>\n• /profile — профиль и статистика\n• /top — топ участников\n• /admins — список администраторов\n• /warns — предупреждения\n• /help — все команды\n\n"
+                "⚠️ Чтобы бот мог удалять сообщения, выдавать муты/баны и закреплять сообщения, выдайте ему права администратора с соответствующими разрешениями.")
+    await callback.answer()
+    await callback.message.answer(body)
+
+@router.message(F.text.in_({"🏅 Чаты: топ дня", "🏆 Супер топ чатов", "Топ чат", "Чаты топ дня"}))
+async def removed_chat_top_button(message: Message) -> None:
+    await message.answer("Эти рейтинги чатов убраны из меню. Используйте /top, чтобы посмотреть активных участников текущей группы.")
+
+@router.message(F.chat.type != ChatType.PRIVATE, F.text.in_({"➕ Добавить в чат", "💠 Профиль", "💍 Брак", "🛠 Установка", "🔗 Команды", "🌐 Открыть приложение", "⚠️ Мои варны", "🛡 Кто админ"}))
+async def group_menu_text_fallback(message: Message) -> None:
+    await message.answer("Я вижу нажатие кнопки, но часть функций доступна только в личке или в группе с нужными правами.\n\n⚠️ <b>Чтобы Pear CM полноценно работал в чате, выдайте ему права администратора</b> — как минимум необходимые права для модерации. Затем повторите команду.\nПодсказка: /help — команды, /profile — профиль, /top — топ участников.")
 
 @router.message(F.text == "💠 Профиль")
 @router.message(Command("profile"))
@@ -483,11 +555,16 @@ async def profile(message: Message) -> None:
         return
     chat_id = message.chat.id
     user = ensure_user(message.from_user.id, chat_id, message.from_user.username, message.from_user.full_name)
+    messages = int(user.get("messages", 0))
+    rank = int(user.get("rank", 0))
+    warns = int(user.get("warns", 0))
+    level_name = "Новичок" if messages < 25 else "Участник" if messages < 100 else "Активный" if messages < 500 else "Легенда чата"
+    next_goal = next((goal for goal in (25, 100, 500, 1000) if messages < goal), None)
+    progress = f"📈 До следующего рубежа: <b>{next_goal - messages}</b> сообщ." if next_goal else "✨ Достигнут высокий рубеж активности!"
     await message.answer(
-        f"👤 <b>Профиль</b>\n{mention(message.from_user.id, message.from_user.full_name)}\n\n"
-        f"⚠️ Предупреждения: <b>{int(user.get('warns', 0))}</b>\n"
-        f"🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n"
-        f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>"
+        f"👤 <b>Профиль участника</b>\n{mention(message.from_user.id, message.from_user.full_name)}\n\n"
+        f"💬 Сообщений: <b>{messages}</b>\n🏅 Ранг: <b>{rank}</b> · <b>{level_name}</b>\n⚠️ Предупреждения: <b>{warns}</b>\n{progress}\n\n"
+        "💡 Подсказка: /top — рейтинг участников, /activity — статистика активности."
     )
 
 @router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
@@ -1880,7 +1957,7 @@ async def _owner_or_operator(message: Message) -> bool:
 async def owner_panel(message: Message) -> None:
     if not await _owner_only(message):
         return
-    await message.answer(OWNER_HELP, reply_markup=main_keyboard())
+    await message.answer(OWNER_HELP, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
 
 @router.message(Command("status", "статусбота"))
 @router.message(F.text.regexp(r"(?i)^\s*статус бота\s*$"))
