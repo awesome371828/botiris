@@ -2,56 +2,134 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<meta name="theme-color" content="#0b1119">
-<title>Pear CM — приложение</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#080b14">
+<meta name="color-scheme" content="dark">
+<title>Pear CM — пространство управления</title>
+<meta name="description" content="Pear CM — инструменты для управления Telegram-чатом в одном красивом приложении.">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#0b1119;--panel:rgba(255,255,255,.065);--line:rgba(255,255,255,.105);--muted:#9ba9b8;--text:#f4f8fb;--mint:#8af0c2;--blue:#82b9ff}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 85% 0%,rgba(52,117,128,.22),transparent 38%),radial-gradient(ellipse at 0% 38%,rgba(60,92,150,.17),transparent 38%),var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
-main{max-width:560px;margin:0 auto;padding:22px 17px 34px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.4px}.logo{width:43px;height:43px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(140deg,#a1f6d2,#63b6ad);color:#10251f;font-size:21px;box-shadow:0 8px 28px #71d9b82b}.badge{font-size:11px;color:var(--mint);border:1px solid #8af0c23d;background:#8af0c211;border-radius:99px;padding:6px 10px}
-h1{font-size:31px;line-height:1.12;letter-spacing:-1.2px;margin:0 0 12px}.gradient{background:linear-gradient(90deg,#b7ffdd,#85c9ff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{color:#aab7c6;margin:0 0 20px;max-width:420px}
-.hero{position:relative;overflow:hidden;padding:23px;border-radius:26px;background:linear-gradient(135deg,rgba(128,219,193,.13),rgba(121,163,230,.08));border:1px solid var(--line);box-shadow:0 20px 70px #0002}.hero:after{content:"";position:absolute;width:170px;height:170px;border-radius:50%;right:-80px;top:-85px;background:#8af0c218;filter:blur(3px);pointer-events:none}
-.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}.btn{appearance:none;border:0;border-radius:14px;padding:13px 15px;font:700 14px inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:transform .15s,opacity .15s}.btn:active{transform:scale(.98)}.primary{background:var(--mint);color:#10251e;flex:1}.secondary{background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--text)}
-.section-head{display:flex;align-items:end;justify-content:space-between;margin:27px 2px 12px}.section-head h2{font-size:18px;margin:0;letter-spacing:-.3px}.hint{color:var(--muted);font-size:12px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:19px;padding:16px;min-height:120px}.icon{font-size:22px;margin-bottom:11px}.card h3{font-size:14px;margin:0 0 5px}.card p{font-size:12px;color:var(--muted);margin:0}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:15px}.search{width:100%;padding:13px 14px;background:#ffffff0b;border:1px solid var(--line);border-radius:13px;color:var(--text);font:inherit;outline:none;margin-bottom:12px}.search:focus{border-color:#8af0c277}.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}.chip{border:1px solid var(--line);border-radius:99px;padding:7px 10px;background:#ffffff08;color:#b9c5d1;font-size:12px;cursor:pointer}.chip.active{background:#8af0c21b;border-color:#8af0c266;color:var(--mint)}.command{padding:12px 1px;border-bottom:1px solid #ffffff12}.command:last-child{border:0}.command code{color:var(--mint);font:600 13px ui-monospace,SFMono-Regular,monospace}.command p{margin:4px 0 0;font-size:12px;color:var(--muted)}
-.vpn{margin-top:14px;padding:18px;border-radius:21px;background:linear-gradient(130deg,rgba(112,160,245,.13),rgba(138,240,194,.09));border:1px solid #8ab8f52b}.vpn h3{margin:0 0 6px;font-size:17px}.vpn p{margin:0;color:#adbac8;font-size:13px}.vpn .btn{width:100%;margin-top:14px;background:#f1f6ff;color:#172234}
-footer{text-align:center;color:#6f7f90;font-size:11px;padding:25px 0 0}.hidden{display:none!important}
-@media(min-width:480px){main{padding-top:30px}.hero{padding:28px}}
+:root{color-scheme:dark;--bg:#080b14;--surface:rgba(255,255,255,.055);--surface2:rgba(255,255,255,.085);--stroke:rgba(255,255,255,.105);--text:#f5f7ff;--muted:#929bb3;--mint:#9bffda;--cyan:#80e7ff;--violet:#a9a0ff;--shadow:0 18px 45px rgba(0,0,0,.3);--radius:24px;--tg-bg:var(--bg)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth;background:var(--bg)}
+body{margin:0;min-height:100vh;min-height:100dvh;overflow-x:hidden;color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(ellipse at 15% -10%,rgba(85,99,255,.23),transparent 43%),radial-gradient(ellipse at 100% 18%,rgba(40,222,190,.12),transparent 35%),radial-gradient(ellipse at 50% 90%,rgba(105,83,255,.10),transparent 45%),var(--bg);background-attachment:fixed}
+button,input{font:inherit}button{color:inherit}
+a{color:inherit;text-decoration:none}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:4px}
+.ambient{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:-1;contain:strict}
+.orb{position:absolute;width:240px;height:240px;border-radius:50%;filter:blur(75px);opacity:.17;animation:drift 13s ease-in-out infinite alternate}
+.orb.one{background:#665dff;top:7%;left:-130px}.orb.two{background:#42e5c2;right:-150px;top:44%;animation-delay:-6s}
+@keyframes drift{to{transform:translate3d(24px,-30px,0) scale(1.12)}}
+main{max-width:620px;margin:0 auto;padding:calc(17px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom))}
+.header{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 22px}
+.brand{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:850;letter-spacing:-.45px}
+.logo{width:46px;height:46px;display:grid;place-items:center;border-radius:17px;position:relative;isolation:isolate;color:#081a1a;font-size:23px;background:linear-gradient(145deg,#d6fff0 0%,#8fffd6 36%,#64c8df 100%);box-shadow:inset 0 2px 1px #fff9,inset 0 -4px 9px #257c8b3b,0 8px 0 #244f5b,0 13px 25px #3fe5c42e;transform:translateY(-2px)}
+.logo:after{content:"";position:absolute;inset:2px;border-radius:15px;border:1px solid #ffffff70}
+.brand small{display:block;color:var(--muted);font-size:11px;font-weight:550;letter-spacing:.2px}
+.status{display:flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid #9bffda25;background:linear-gradient(145deg,#9bffda12,#ffffff04);border-radius:99px;color:#b7ffe6;font-size:10px;font-weight:800;letter-spacing:1px;box-shadow:inset 0 1px #ffffff08}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}
+.hero{position:relative;isolation:isolate;overflow:hidden;border:1px solid #ffffff18;border-radius:30px;padding:25px 22px 22px;background:linear-gradient(145deg,rgba(255,255,255,.105),rgba(255,255,255,.025) 48%,rgba(133,143,255,.07));box-shadow:inset 0 1px 0 #ffffff20,inset 0 -1px 0 #ffffff06,0 24px 65px #0005;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}
+.hero:before{content:"";position:absolute;z-index:-1;width:220px;height:220px;right:-80px;top:-110px;border-radius:50%;background:radial-gradient(circle,#9bffda2a,transparent 68%);pointer-events:none}
+.hero:after{content:"";position:absolute;z-index:-1;inset:0;background:linear-gradient(115deg,transparent 15%,#ffffff08 33%,transparent 52%);pointer-events:none}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;color:#c6d0e7;font-size:10px;font-weight:800;letter-spacing:1.6px;text-transform:uppercase;margin-bottom:15px}
+.spark{color:var(--mint);font-size:15px;text-shadow:0 0 18px #9bffda88}
+h1{font-size:clamp(32px,8vw,45px);line-height:1.03;letter-spacing:-1.9px;margin:0 0 14px;font-weight:900}
+.gradient{background:linear-gradient(100deg,#b8ffe6 5%,#8ce8ff 53%,#b7adff 100%);background-clip:text;-webkit-background-clip:text;color:transparent}
+.lead{font-size:14px;line-height:1.65;color:#aab4cc;max-width:410px;margin:0}
+.hero-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px}
+.mini-stat{display:flex;align-items:center;gap:9px;color:#aeb9ce;font-size:11px}
+.stat-icon{width:29px;height:29px;border:1px solid #ffffff12;border-radius:10px;display:grid;place-items:center;background:#ffffff08}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:19px}
+.btn{position:relative;isolation:isolate;appearance:none;min-height:49px;border:1px solid transparent;border-radius:16px;padding:13px 12px;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;text-align:center;font-size:13px;font-weight:800;letter-spacing:-.1px;transition:transform .18s cubic-bezier(.2,.8,.2,1),filter .18s,box-shadow .18s;user-select:none;touch-action:manipulation}
+.btn:before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(180deg,#ffffff40,transparent 48%);opacity:.7;z-index:-1}
+.btn:after{content:"";position:absolute;left:10%;right:10%;bottom:-5px;height:8px;border-radius:50%;filter:blur(7px);opacity:.3;z-index:-2;transition:opacity .2s}
+.btn:active{transform:translateY(3px) scale(.985);filter:brightness(.96)}
+.btn:active:after{opacity:.1}
+.primary{color:#09221d;background:linear-gradient(155deg,#c5ffe9 0%,#89f8d4 48%,#63d9d3 100%);border-color:#d4fff0a8;box-shadow:inset 0 1px 0 #fff,inset 0 -3px 0 #288d87,0 5px 0 #246e6b,0 10px 22px #4de7c72c}
+.primary:after{background:#70f7d0}
+.secondary{background:linear-gradient(155deg,#ffffff16,#ffffff05);border-color:#ffffff20;color:#f2f5ff;box-shadow:inset 0 1px 0 #ffffff22,inset 0 -3px 0 #0002,0 5px 0 #171c2c,0 10px 22px #0003}
+.secondary:after{background:#8b9dff}
+.btn:hover{filter:brightness(1.07)}@media(hover:hover){.btn:hover{transform:translateY(-2px)}}
+.section-head{display:flex;align-items:end;justify-content:space-between;gap:10px;margin:29px 3px 13px}
+.section-head h2{margin:0;font-size:19px;font-weight:850;letter-spacing:-.6px}
+.section-head .sub{font-size:11px;color:var(--muted);text-align:right}
+.feature-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.feature{position:relative;overflow:hidden;min-height:140px;padding:16px;border-radius:22px;border:1px solid #ffffff13;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.022));box-shadow:inset 0 1px 0 #ffffff0c,0 12px 28px #0002;backdrop-filter:blur(14px);transition:transform .22s,border-color .22s,background .22s}
+.feature:after{content:"";position:absolute;right:-25px;top:-30px;width:85px;height:85px;border-radius:50%;background:var(--glow,#9bffda);opacity:.10;filter:blur(24px);pointer-events:none}
+.feature:active{transform:scale(.985)}
+.feature-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.feature-icon{width:42px;height:42px;border-radius:15px;display:grid;place-items:center;font-size:21px;background:linear-gradient(145deg,#ffffff1a,#ffffff04);border:1px solid #ffffff1a;box-shadow:inset 0 1px #ffffff25,inset 0 -3px #0002,0 4px 0 #171b2b,0 7px 12px #0003;transform:translateY(-2px)}
+.feature-num{font-size:10px;color:#66728c;font-weight:800;letter-spacing:1px}
+.feature h3{margin:0 0 5px;font-size:14px;font-weight:850;letter-spacing:-.2px}
+.feature p{margin:0;font-size:11px;line-height:1.55;color:#939eb7}
+.panel{padding:14px;border:1px solid #ffffff15;border-radius:24px;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.025));box-shadow:inset 0 1px 0 #ffffff0c,0 18px 40px #0002;backdrop-filter:blur(18px)}
+.search-wrap{position:relative;margin-bottom:12px}
+.search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:15px;opacity:.7;pointer-events:none}
+.search{display:block;width:100%;height:48px;padding:0 14px 0 41px;border:1px solid #ffffff12;border-radius:15px;background:linear-gradient(145deg,#05081299,#ffffff05);color:var(--text);outline:none;font-size:13px;box-shadow:inset 0 3px 8px #0002,inset 0 1px #0002;transition:border-color .2s,box-shadow .2s}
+.search::placeholder{color:#78839b}.search:focus{border-color:#9bffda66;box-shadow:inset 0 2px 8px #0002,0 0 0 3px #9bffda0d}
+.chips{display:flex;gap:7px;overflow-x:auto;padding:2px 1px 10px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;border:1px solid #ffffff13;border-radius:11px;padding:8px 11px;background:linear-gradient(145deg,#ffffff0b,#ffffff03);color:#aab4ca;font-size:11px;font-weight:750;box-shadow:inset 0 1px #ffffff09,0 2px 0 #0002;cursor:pointer;transition:all .18s}
+.chip:active{transform:translateY(1px)}
+.chip.active{color:#c6ffeb;border-color:#9bffda45;background:linear-gradient(145deg,#9bffda1e,#9bffda08);box-shadow:inset 0 1px #9bffda1a,0 0 18px #9bffda09}
+.command{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:13px 3px;border-bottom:1px solid #ffffff0e;animation:appear .25s ease both}
+.command:last-child{border-bottom:0}.command-info{min-width:0}.command code{display:inline-block;color:#a8ffe0;font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace;background:#9bffda0c;border:1px solid #9bffda16;border-radius:8px;padding:4px 7px;overflow-wrap:anywhere}
+.command p{margin:6px 0 0;font-size:11px;line-height:1.5;color:#929db4}
+.copy{flex:0 0 33px;width:33px;height:33px;border:1px solid #ffffff14;border-radius:11px;background:linear-gradient(145deg,#ffffff12,#ffffff03);box-shadow:inset 0 1px #ffffff15,0 3px 0 #171b2a;display:grid;place-items:center;font-size:13px;cursor:pointer;transition:transform .15s,color .15s}
+.copy:active{transform:translateY(2px);box-shadow:inset 0 1px #ffffff12,0 1px 0 #171b2a}.empty{padding:22px 6px;text-align:center;color:var(--muted);font-size:12px}
+.vpn{position:relative;overflow:hidden;margin-top:18px;padding:19px;border:1px solid #a7a0ff30;border-radius:25px;background:linear-gradient(135deg,rgba(128,114,255,.15),rgba(104,219,222,.07) 65%,rgba(255,255,255,.025));box-shadow:inset 0 1px #ffffff15,0 20px 45px #0002;backdrop-filter:blur(16px)}
+.vpn:after{content:"✦";position:absolute;right:17px;top:14px;font-size:40px;color:#b8b1ff;opacity:.12;transform:rotate(15deg);pointer-events:none}
+.vpn-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.vpn-icon{width:46px;height:46px;flex:0 0 46px;display:grid;place-items:center;border-radius:16px;font-size:23px;background:linear-gradient(145deg,#d8d3ff,#9f9aff 52%,#7a7de9);color:#1a1a3c;box-shadow:inset 0 2px 1px #fff, inset 0 -3px #5553a0,0 4px 0 #4e4b91,0 8px 17px #7e76ff30;transform:translateY(-2px)}
+.vpn h3{margin:0;font-size:16px;letter-spacing:-.35px}.vpn p{margin:0;color:#aeb6d0;font-size:12px;line-height:1.65}
+.vpn .btn{width:100%;margin-top:15px;color:#19162f;background:linear-gradient(145deg,#e3e0ff,#b9b1ff 55%,#9cafff);border-color:#efedff;box-shadow:inset 0 1px #fff,inset 0 -3px #7771c9,0 5px 0 #57539a,0 10px 22px #8b82ff20}
+.vpn .btn:after{background:#a29aff}
+.footer{padding:26px 0 2px;text-align:center;color:#66718a;font-size:10px;letter-spacing:.2px}
+.footer-mark{display:inline-flex;align-items:center;gap:6px;margin-bottom:5px;color:#8d98b1;font-weight:800}.footer-mark span{color:var(--mint)}
+.toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));z-index:20;transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:11px 16px;border:1px solid #ffffff20;border-radius:14px;background:#171e2df2;color:#f5f7ff;font-size:12px;font-weight:700;box-shadow:0 12px 35px #0007;transition:opacity .2s,transform .2s;white-space:nowrap;backdrop-filter:blur(14px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media(min-width:520px){main{padding-left:22px;padding-right:22px;padding-top:25px}.hero{padding:30px}.feature{min-height:150px;padding:18px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
+<div class="ambient" aria-hidden="true"><div class="orb one"></div><div class="orb two"></div></div>
 <main>
-  <div class="top"><div class="brand"><div class="logo">✳</div><div>Pear CM<div style="font-size:11px;font-weight:500;color:var(--muted);letter-spacing:0">Чат-менеджер</div></div></div><div class="badge">● MINI APP</div></div>
-  <section class="hero">
-    <h1>Управляй чатом.<br><span class="gradient">Без лишней суеты.</span></h1>
-    <p class="lead">Полезные команды, быстрый старт и всё важное о Pear CM — в одном месте.</p>
-    <div class="actions"><button class="btn primary" id="commandsJump">⌕ Найти команду</button><button class="btn secondary" id="addBot">＋ Добавить бота</button></div>
-  </section>
-  <div class="section-head"><h2>Что умеет Pear CM</h2><span class="hint">Коротко о главном</span></div>
-  <div class="grid">
-    <div class="card"><div class="icon">🛡️</div><h3>Модерация</h3><p>Муты, баны, предупреждения и порядок в группе.</p></div>
-    <div class="card"><div class="icon">🧹</div><h3>Чистота чата</h3><p>Удаление сообщений и инструменты против спама.</p></div>
-    <div class="card"><div class="icon">⚙️</div><h3>Управление</h3><p>Настройки чата и полезные инструменты администраторов.</p></div>
-    <div class="card"><div class="icon">📊</div><h3>Активность</h3><p>Профили участников, статистика и топы.</p></div>
-  </div>
-  <div class="section-head" id="commandsTitle"><h2>Команды</h2><span class="hint">Найди нужную</span></div>
-  <section class="panel" id="commandPanel">
-    <input id="search" class="search" placeholder="🔎  Например, мут, бан, профиль…" autocomplete="off">
-    <div class="chips"><button class="chip active" data-filter="all">Все</button><button class="chip" data-filter="moderation">Модерация</button><button class="chip" data-filter="chat">Чат</button><button class="chip" data-filter="user">Пользователю</button></div>
-    <div id="commandList"></div>
-  </section>
-  <section class="vpn">
-    <div style="font-size:23px;margin-bottom:8px">💚</div><h3>Поддержи проект и попробуй VPN</h3>
-    <p>Если Pear CM оказался полезен, загляни в мой VPN-бот. Тарифы, подключение и оплата доступны внутри него.</p>
-    <button class="btn" id="vpnButton">Открыть @awesomeproxyvpn_bot ↗</button>
-  </section>
-  <footer>Pear CM · Сделано с заботой о вашем чате</footer>
+<header class="header">
+  <div class="brand"><div class="logo">✳</div><div>Pear CM<small>Чат-менеджер</small></div></div>
+  <div class="status"><span class="dot"></span> MINI APP</div>
+</header>
+<section class="hero">
+  <div class="eyebrow"><span class="spark">✦</span> YOUR CHAT. YOUR RULES.</div>
+  <h1>Твой чат.<br><span class="gradient">Твои правила.</span></h1>
+  <p class="lead">Всё для управления Telegram-группой — быстро, удобно и красиво. Без лишней суеты.</p>
+  <div class="hero-bottom"><div class="mini-stat"><span class="stat-icon">✧</span><span>Инструменты в одном месте</span></div></div>
+  <div class="actions"><button class="btn primary" id="commandsJump"><span>⌕</span> Найти команду</button><button class="btn secondary" id="addBot"><span>＋</span> Добавить бота</button></div>
+</section>
+<div class="section-head"><h2>Возможности</h2><span class="sub">Всё под контролем</span></div>
+<section class="feature-grid" aria-label="Возможности Pear CM">
+  <article class="feature" style="--glow:#8bffdc"><div class="feature-top"><div class="feature-icon">🛡️</div><span class="feature-num">01</span></div><h3>Модерация</h3><p>Инструменты для порядка и контроля участников.</p></article>
+  <article class="feature" style="--glow:#8da8ff"><div class="feature-top"><div class="feature-icon">✦</div><span class="feature-num">02</span></div><h3>Чистый чат</h3><p>Быстрая очистка сообщений и меньше шума.</p></article>
+  <article class="feature" style="--glow:#ffcf91"><div class="feature-top"><div class="feature-icon">⚙️</div><span class="feature-num">03</span></div><h3>Управление</h3><p>Удобные команды для администраторов группы.</p></article>
+  <article class="feature" style="--glow:#d0a0ff"><div class="feature-top"><div class="feature-icon">◈</div><span class="feature-num">04</span></div><h3>Активность</h3><p>Полезная информация об участниках и чате.</p></article>
+</section>
+<div class="section-head" id="commandsTitle"><h2>Команды</h2><span class="sub">Найди и скопируй</span></div>
+<section class="panel" id="commandPanel">
+  <div class="search-wrap"><span class="search-icon">⌕</span><input id="search" class="search" placeholder="Поиск: мут, бан, профиль…" autocomplete="off" aria-label="Поиск команд"></div>
+  <div class="chips" role="group" aria-label="Категории команд"><button class="chip active" data-filter="all">Все команды</button><button class="chip" data-filter="moderation">Модерация</button><button class="chip" data-filter="chat">Чат</button><button class="chip" data-filter="user">Профиль</button></div>
+  <div id="commandList" aria-live="polite"></div>
+</section>
+<section class="vpn">
+  <div class="vpn-head"><div class="vpn-icon">↗</div><div><div class="eyebrow" style="margin:0 0 4px;color:#c3bcff;letter-spacing:1px">ANOTHER PROJECT</div><h3>Попробуй мой VPN</h3></div></div>
+  <p>Тарифы, подключение и оплата доступны в отдельном Telegram-боте.</p>
+  <button class="btn" id="vpnButton">Открыть VPN-бота <span>↗</span></button>
+</section>
+<footer class="footer"><div class="footer-mark"><span>✳</span> PEAR CM</div><br>Инструменты для чатов. Ничего лишнего.</footer>
 </main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
-const tg=window.Telegram?.WebApp;
-try{tg?.ready();tg?.expand();if(tg?.themeParams?.bg_color)document.documentElement.style.setProperty('--bg',tg.themeParams.bg_color)}catch(e){}
+const tg=window.Telegram&&window.Telegram.WebApp;
+try{if(tg){tg.ready();tg.expand();if(tg.setHeaderColor)tg.setHeaderColor('#080b14');if(tg.setBackgroundColor)tg.setBackgroundColor('#080b14');if(tg.disableVerticalSwipes)tg.disableVerticalSwipes();}}catch(e){}
 const commands=[
 {c:'-смс 100',d:'Удалить последние сообщения (до 100 за раз).',k:'moderation'},
 {c:'-чат / +чат',d:'Закрыть или снова открыть чат для сообщений.',k:'chat'},
@@ -66,11 +144,17 @@ const commands=[
 {c:'/top',d:'Открыть рейтинг активных участников.',k:'user'},
 {c:'/warns',d:'Проверить свои предупреждения.',k:'user'}
 ];
-let filter='all';const list=document.getElementById('commandList'),search=document.getElementById('search');
-function render(){const q=search.value.trim().toLowerCase();const found=commands.filter(x=>(filter==='all'||x.k===filter)&&(!q||(x.c+' '+x.d).toLowerCase().includes(q)));list.innerHTML=found.length?found.map(x=>'<div class="command"><code>'+x.c.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code><p>'+x.d+'</p></div>').join(''):'<div class="command"><p>Ничего не найдено. Попробуй другое слово.</p></div>'}
-search.addEventListener('input',render);document.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;render()}));render();
-document.getElementById('commandsJump').onclick=()=>{document.getElementById('commandsTitle').scrollIntoView({behavior:'smooth'});setTimeout(()=>search.focus(),250)};
-document.getElementById('vpnButton').onclick=()=>{if(tg?.openTelegramLink)tg.openTelegramLink('https://t.me/awesomeproxyvpn_bot');else window.open('https://t.me/awesomeproxyvpn_bot','_blank','noopener')};
-document.getElementById('addBot').onclick=()=>{const url='https://t.me/pear_cm_bot?startgroup=true';if(tg?.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')};
+let filter='all',toastTimer;
+const list=document.getElementById('commandList'),search=document.getElementById('search'),toast=document.getElementById('toast');
+function showToast(message){toast.textContent=message;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1900)}
+function escapeHtml(value){return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function render(){const q=search.value.trim().toLowerCase();const found=commands.filter(x=>(filter==='all'||x.k===filter)&&(!q||(x.c+' '+x.d).toLowerCase().includes(q)));list.innerHTML=found.length?found.map((x,i)=>'<div class="command" style="animation-delay:'+Math.min(i*25,200)+'ms"><div class="command-info"><code>'+escapeHtml(x.c)+'</code><p>'+escapeHtml(x.d)+'</p></div><button class="copy" type="button" data-copy="'+escapeHtml(x.c)+'" aria-label="Скопировать '+escapeHtml(x.c)+'" title="Скопировать команду">⧉</button></div>').join(''):'<div class="empty">✧<br>Ничего не нашлось.<br>Попробуй другое слово.</div>'}
+search.addEventListener('input',render);
+document.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;render();try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}));
+list.addEventListener('click',async e=>{const b=e.target.closest('[data-copy]');if(!b)return;const value=b.dataset.copy;try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(value)}else{const t=document.createElement('textarea');t.value=value;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}showToast('Команда скопирована');try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred('success')}catch(e){}}catch(e){showToast('Не удалось скопировать')}});render();
+document.getElementById('commandsJump').addEventListener('click',()=>{document.getElementById('commandsTitle').scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>search.focus({preventScroll:true}),300);try{tg&&tg.HapticFeedback&&tg.HapticFeedback.impactOccurred('light')}catch(e){}});
+document.getElementById('vpnButton').addEventListener('click',()=>{try{if(tg&&tg.openTelegramLink)tg.openTelegramLink('https://t.me/awesomeproxyvpn_bot');else window.open('https://t.me/awesomeproxyvpn_bot','_blank','noopener')}catch(e){window.location.href='https://t.me/awesomeproxyvpn_bot'}});
+document.getElementById('addBot').addEventListener('click',()=>{const url='https://t.me/pear_cm_bot?startgroup=true';try{if(tg&&tg.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}});
 </script>
-</body></html>
+</body>
+</html>
