@@ -273,11 +273,9 @@ def set_warns(chat_id: int, user_id: int, amount: int) -> int:
 def active_warn_count(chat_id: int, user_id: int) -> int:
     """Count warnings from the last seven days; a clear/unwarn event adjusts the active ledger."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    rows = db_rows("bot_audit", limit=1000, order="created_at", chat_id=chat_id)
+    rows = db_rows("bot_audit", limit=1000, order="created_at", chat_id=chat_id, target_id=user_id)
     relevant = []
     for row in rows:
-        if int(row.get("target_id") or 0) != user_id:
-            continue
         action = str(row.get("action") or "").lower()
         if action not in {"warn", "unwarn", "clearwarns"}:
             continue
