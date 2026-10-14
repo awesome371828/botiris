@@ -304,3 +304,62 @@ revoke all on public.bot_member_profiles, public.bot_economy, public.bot_clans,
 
 grant all on public.bot_member_profiles, public.bot_economy, public.bot_clans,
     public.bot_clan_members, public.bot_awards, public.bot_relationships to service_role;
+
+
+-- Fast, chat-specific Iris-style activity statistics.
+-- Counts are updated atomically by a single RPC per queued activity batch.
+create table if not exists public.bot_activity_daily (
+    chat_id bigint not null,
+    user_id bigint not null,
+    day date not null,
+    username text,
+    first_name text not null default 'Пользователь',
+    messages bigint not null default 0 check (messages >= 0),
+    updated_at timestamptz not null default now(),
+    primary key (chat_id, user_id, day)
+);
+
+create index if not exists bot_activity_daily_chat_day_idx
+    on public.bot_activity_daily (chat_id, day desc);
+create index if not exists bot_activity_daily_day_idx
+    on public.bot_activity_daily (day desc);
+create index if not exists bot_activity_daily_chat_user_idx
+    on public.bot_activity_daily (chat_id, user_id, day desc);
+
+alter table public.bot_activity_daily enable row level security;
+revoke all on public.bot_activity_daily from anon, authenticated;
+grant all on public.bot_activity_daily to service_role;
+
+create or replace function public.increment_bot_activity_daily_batch(p_items jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    item jsonb;
+begin
+    for item in select value from jsonb_array_elements(coalesce(p_items, '[]'::jsonb))
+    loop
+        insert into public.bot_activity_daily
+            (chat_id, user_id, day, username, first_name, messages, updated_at)
+        values
+            ((item->>'chat_id')::bigint,
+             (item->>'user_id')::bigint,
+             (item->>'day')::date,
+             nullif(item->>'username', ''),
+             coalesce(nullif(item->>'first_name', ''), 'Пользователь'),
+             greatest(0, coalesce((item->>'messages')::bigint, 0)),
+             now())
+        on conflict (chat_id, user_id, day)
+        do update set
+            messages = public.bot_activity_daily.messages + excluded.messages,
+            username = coalesce(excluded.username, public.bot_activity_daily.username),
+            first_name = coalesce(nullif(excluded.first_name, ''), public.bot_activity_daily.first_name),
+            updated_at = now();
+    end loop;
+end;
+$$;
+
+revoke all on function public.increment_bot_activity_daily_batch(jsonb) from public, anon, authenticated;
+grant execute on function public.increment_bot_activity_daily_batch(jsonb) to service_role;
