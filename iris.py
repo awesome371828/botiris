@@ -1462,15 +1462,20 @@ async def unmute_cmd(message: Message) -> None:
     if not target:
         return
     try:
-        await bot.restrict_chat_member(
-            message.chat.id, target[0],
-            permissions=ChatPermissions(
+        chat_info = await bot.get_chat(message.chat.id)
+        default_permissions = getattr(chat_info, "permissions", None)
+        if default_permissions is not None:
+            permissions = ChatPermissions(**default_permissions.model_dump(exclude_none=True))
+        else:
+            # Telegram omits defaults only on some chat types; use the standard
+            # permissive set only when no default-permissions object is available.
+            permissions = ChatPermissions(
                 can_send_messages=True, can_send_audios=True, can_send_documents=True,
                 can_send_photos=True, can_send_videos=True, can_send_video_notes=True,
                 can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True,
                 can_add_web_page_previews=True,
-            ),
-        )
+            )
+        await bot.restrict_chat_member(message.chat.id, target[0], permissions=permissions)
         audit(message.chat.id, message.from_user.id, "unmute", target[0])
         await message.answer(f"🔊 Ограничения сняты с {mention(target[0], target[1])}.")
     except Exception as exc:
