@@ -444,6 +444,14 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
         custom_rank = settings.get(f"modrank_{key}") if key else None
         if custom_rank is None and key:
             custom_rank = settings.get("modrank_default")
+        personal = settings.get("personal_command_access", {})
+        per_command = personal.get(key, {}) if isinstance(personal, dict) and key else {}
+        personal_rule = per_command.get(str(message.from_user.id)) if isinstance(per_command, dict) else None
+        if personal_rule == "deny":
+            await message.answer("⛔ Для тебя отдельно запрещена эта команда администратором.")
+            return False
+        if personal_rule == "allow":
+            return True
         if custom_rank is not None:
             min_rank = max(1, min(5, int(custom_rank)))
     except (TypeError, ValueError):
@@ -1051,7 +1059,7 @@ async def admins(message: Message) -> None:
 # ── Activity tracking and welcome ────────────────────────────────────────────
 @router.message(F.new_chat_members)
 async def welcome_members(message: Message) -> None:
-    settings = get_chat_settings(message.chat.id) if "get_chat_settings" in globals() else dict(FILTER_DEFAULTS)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id) if "get_chat_settings" in globals() else dict(FILTER_DEFAULTS)
     for user in message.new_chat_members:
         if user.is_bot:
             if settings.get("antibot"):
@@ -1699,6 +1707,44 @@ async def info_cmd(message: Message) -> None:
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
     arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip().replace("ё", "е")
+    category = re.sub(r"\s+", " ", arg).strip()
+    category_aliases = {
+        "деньги":"money", "баланс":"money", "валюта":"money", "по деньгам":"money", "по балансу":"money",
+        "ранги":"rank", "по рангам":"rank", "репутация":"rep", "по репутации":"rep",
+        "отношения":"relations", "по отношениям":"relations", "браки":"marriages", "по бракам":"marriages",
+        "кланы":"clans", "по кланам":"clans", "награды":"awards", "по наградам":"awards",
+        "варны":"warns", "предупреждения":"warns", "по варнам":"warns",
+    }
+    category_key = category_aliases.get(category)
+    if category_key:
+        table_map = {"money":("bot_economy","balance","🪙"), "rank":("bot_users","rank","⭐"),
+                     "rep":("bot_relationships","points","❤️"), "marriages":("bot_marriages","id","💍"),
+                     "clans":("bot_clans","id","🏰"), "awards":("bot_awards","id","🏅"),
+                     "warns":("bot_users","warns","⚠️")}
+        if category_key == "marriages":
+            rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, None, chat_id=message.chat.id, status="married")
+            pairs = [r for r in rows if r.get("status") == "married"]
+            await message.answer("<b>🏆 Топ браков</b>\n" + ("\n".join(f"{i}. {escape(str(p.get('user1_name','Участник')))} ❤️ {escape(str(p.get('user2_name','Участник')))}" for i,p in enumerate(pairs[:10],1)) if pairs else "Пока нет зарегистрированных браков."))
+            return
+        if category_key == "clans":
+            rows = await asyncio.to_thread(db_rows, "bot_clans", 1000, None, chat_id=message.chat.id)
+            lines = [f"{i}. 🏰 {escape(str(r.get('name','Клан')))}" for i,r in enumerate(rows[:10],1)]
+            await message.answer("<b>🏆 Топ кланов</b>\n" + ("\n".join(lines) if lines else "Пока нет кланов."))
+            return
+        table, field, icon = table_map[category_key]
+        rows = await asyncio.to_thread(db_rows, table, 1000, field, chat_id=message.chat.id)
+        grouped = {}
+        for row in rows:
+            uid = int(row.get("user_id") or 0)
+            if uid <= 0:
+                continue
+            current = grouped.setdefault(uid, {"user_id":uid,"username":row.get("username"),"first_name":row.get("first_name") or "Участник","score":0})
+            current["score"] += int(row.get(field) or (row.get("points") or 0))
+            if row.get("username"): current["username"] = row["username"]
+        ranked = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:10]
+        title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
+        await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {('@'+escape(str(r['username']))) if r.get('username') else escape(str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1)) if ranked else "Пока нет данных для рейтинга."))
+        return
     global_scope = arg.startswith(("все чаты", "всех чатов", "по всем чатам", "глобальный", "глобально"))
     chat_only = is_group(message) and not global_scope
     if global_scope:
@@ -1847,8 +1893,10 @@ async def marry_cmd(message: Message) -> None:
     if partner.id == message.from_user.id or partner.is_bot:
         await message.answer("С этим пользователем нельзя заключить брак.")
         return
-    existing = db_one("bot_marriages", chat_id=message.chat.id, user1_id=message.from_user.id)
-    reverse = db_one("bot_marriages", chat_id=message.chat.id, user1_id=partner.id)
+    existing, reverse = await asyncio.gather(
+        asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=message.from_user.id),
+        asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=partner.id),
+    )
     if existing or reverse:
         await message.answer("💍 Один из вас уже состоит в браке в этой группе.")
         return
@@ -1869,7 +1917,7 @@ async def accept_marry_cmd(message: Message) -> None:
         await message.answer("Ответьте на сообщение с предложением брака командой /acceptmarry.")
         return
     proposer = message.reply_to_message.from_user
-    row = db_one("bot_marriages", chat_id=message.chat.id, user1_id=proposer.id)
+    row = await asyncio.to_thread(db_one, "bot_marriages", chat_id=message.chat.id, user1_id=proposer.id)
     if not row or int(row.get("user2_id", 0)) != message.from_user.id or row.get("status") != "pending":
         await message.answer("Активное предложение этому пользователю не найдено.")
         return
@@ -1886,7 +1934,7 @@ async def accept_marry_cmd(message: Message) -> None:
 async def marriage_status_cmd(message: Message) -> None:
     if not message.from_user:
         return
-    rows = db_rows("bot_marriages", limit=100, chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
     for row in rows:
         if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
             await message.answer(f"💍 Брак: <b>{row.get('user1_name', 'Участник')}</b> ❤️ <b>{row.get('user2_name', 'Участник')}</b>")
@@ -1902,7 +1950,7 @@ async def divorce_cmd(message: Message) -> None:
     for row in rows:
         if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
             try:
-                db.table("bot_marriages").update({"status": "divorced"}).eq("id", row["id"]).execute()
+                await asyncio.to_thread(lambda: db.table("bot_marriages").update({"status": "divorced"}).eq("id", row["id"]).execute())
                 await message.answer("💔 Брак расторгнут.")
             except Exception:
                 await message.answer("Не удалось изменить запись в базе данных.")
@@ -2171,57 +2219,129 @@ async def demote_rank_cmd(message: Message) -> None:
     await message.answer(f"⬇️ <b>{escape(target[1])}</b> был понижен до роли <b>{role_name(new_rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^\.дк\s+"))
+@router.message(F.text.regexp(r"(?i)^\.дк(?:\s|$)"))
 async def command_rank_rule_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    parts = (message.text or "").strip().split()
+    raw = (message.text or "").strip()
+    parts = raw.split()
+    if len(parts) == 1:
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        default_rank = int(settings.get("modrank_default", 1) or 1)
+        rules = []
+        for key, label in (("mute","мут"),("unmute","размут"),("ban","бан"),("unban","разбан"),
+                           ("kick","кик"),("warn","варн"),("unwarn","снять варн"),("promote","повысить"),
+                           ("demote","понизить"),("purge","очистить"),("delete","удалить сообщения"),
+                           ("pin","закрепить"),("unpin","открепить")):
+            rules.append(f"• {label}: ранг {settings.get('modrank_'+key, default_rank)}")
+        await message.answer(
+            "<b>🔐 Доступ к командам (.дк)</b>\n"
+            f"Общий порог: <b>{default_rank}</b> — {role_name(default_rank)}\n" +
+            "\n".join(rules) +
+            "\n\nПримеры: <code>.дк мут 2</code>, <code>.дк мутами 3</code>, "
+            "<code>.дк снять все варны 4</code>, <code>.дк общий 2</code>."
+        )
+        return
     if len(parts) == 2 and parts[1].isdigit():
         required = int(parts[1])
         if not 1 <= required <= 5:
             await message.answer("Ранг должен быть от 1 до 5.")
             return
-        settings = get_chat_settings(message.chat.id)
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
         settings["modrank_default"] = required
         save_chat_settings(message.chat.id, settings)
         await message.answer(
-            f"🔐 Минимальный ранг для команд модерации установлен: <b>{required} — {role_name(required)}</b>. "
+            f"🔐 Общий порог доступа установлен: <b>{required} — {role_name(required)}</b>. "
             "Индивидуальные правила команд имеют приоритет."
         )
         return
     if len(parts) < 3:
-        await message.answer("Формат: <code>.дк 4</code> (общий уровень) или <code>.дк мут 4</code> / <code>.дк снять варн 3</code>. Допустимые ранги: 1–5.")
+        await message.answer("Формат: <code>.дк 3</code> или <code>.дк мутами 2</code>. Ранг — от 1 до 5.")
         return
     try:
         required = int(parts[-1])
     except ValueError:
         required = 0
     if not 1 <= required <= 5:
-        await message.answer("Ранг должен быть от 1 до 5.")
+        await message.answer("Последним аргументом укажи ранг от 1 до 5.")
         return
-    command_phrase = " ".join(parts[1:-1]).lower()
-    aliases = {
+    command_phrase = " ".join(parts[1:-1]).lower().replace("ё", "е")
+    command_phrase = re.sub(r"[\W_]+", " ", command_phrase, flags=re.UNICODE).strip()
+    exact_aliases = {
         "мут":"mute", "замут":"mute", "замутить":"mute", "замуть":"mute", "дать мут":"mute", "выдать мут":"mute",
         "размут":"unmute", "анмут":"unmute", "унмут":"unmute", "снять мут":"unmute", "снять муту":"unmute",
         "убрать мут":"unmute", "убрать муту":"unmute", "снятьмут":"unmute",
         "бан":"ban", "забанить":"ban", "дать бан":"ban", "выдать бан":"ban",
-        "разбан":"unban", "кик":"kick", "кикнуть":"kick", "выгнать":"kick", "исключить":"kick",
-        "варн":"warn", "предупреждение":"warn", "предупредить":"warn", "дать варн":"warn", "выдать варн":"warn",
-        "снять варн":"unwarn", "убрать варн":"unwarn", "удалить варн":"unwarn",
-        "снять предупреждение":"unwarn", "убрать предупреждение":"unwarn", "анварн":"unwarn",
-        "повысить":"promote", "повысить ранг":"promote", "повыситьранг":"promote", "повысить-ранг":"promote", "повышение":"promote", "повышай":"promote", "продвинуть":"promote", "назначить ранг":"promote",
-        "понизить":"demote", "понизить ранг":"demote", "понизитьранг":"demote", "понизить-ранг":"demote", "понижение":"demote", "понижай":"demote", "понизь":"demote",
-        "очистить":"purge", "-смс":"delete", "удалить сообщения":"delete",
-        "пин":"pin", "закрепить":"pin", "анпин":"unpin", "открепить":"unpin",
+        "разбан":"unban", "снять бан":"unban", "разбанить":"unban",
+        "кик":"kick", "кикнуть":"kick", "выгнать":"kick", "исключить":"kick",
+        "варн":"warn", "варны":"warn", "варнами":"warn", "варнов":"warn", "предупреждение":"warn",
+        "предупреждения":"warn", "предупредить":"warn", "дать варн":"warn", "выдать варн":"warn",
+        "снять варн":"unwarn", "снять варны":"unwarn", "снять все варны":"unwarn", "убрать варн":"unwarn",
+        "убрать варны":"unwarn", "удалить варн":"unwarn", "удалить варны":"unwarn",
+        "снять предупреждение":"unwarn", "снять предупреждения":"unwarn", "убрать предупреждение":"unwarn",
+        "анварн":"unwarn", "повысить":"promote", "повышать":"promote", "повышение":"promote",
+        "повысить ранг":"promote", "повысить рангом":"promote", "повыситьранг":"promote",
+        "повысить ранг участника":"promote", "повысить пользователя":"promote", "повышай":"promote",
+        "продвинуть":"promote", "назначить ранг":"promote",
+        "понизить":"demote", "понижать":"demote", "понижение":"demote", "понизить ранг":"demote",
+        "понизитьранг":"demote", "понизить ранг участника":"demote", "понизить пользователя":"demote",
+        "понижай":"demote", "понизь":"demote",
+        "очистить":"purge", "очистка":"purge", "удалить последние сообщения":"purge",
+        "смс":"delete", "сообщение":"delete", "сообщения":"delete", "удалить сообщения":"delete",
+        "пин":"pin", "пинить":"pin", "закрепить":"pin", "закрепление":"pin",
+        "анпин":"unpin", "открепить":"unpin", "снять закреп":"unpin", "открепление":"unpin",
+        "общий":"__default__", "общий доступ":"__default__", "все команды":"__default__",
     }
-    key = aliases.get(command_phrase, command_phrase)
-    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
-        await message.answer("Неизвестная команда. Примеры: <code>.дк мут 4</code>, <code>.дк снять варн 3</code>.")
+    key = exact_aliases.get(command_phrase)
+    if key is None:
+        tokens = command_phrase.split()
+        # Resolve grammatical forms by stable stems, while preferring the longest intent.
+        if any(t.startswith(("размут", "анмут", "унмут")) for t in tokens) or ("снят" in tokens and any(t.startswith("мут") for t in tokens)):
+            key = "unmute"
+        elif any(t.startswith(("мут", "замут")) for t in tokens):
+            key = "mute"
+        elif any(t.startswith(("разбан", "снят")) for t in tokens) and any(t.startswith("бан") for t in tokens):
+            key = "unban"
+        elif any(t.startswith(("бан", "забан", "выдан")) for t in tokens):
+            key = "ban"
+        elif any(t.startswith(("кик", "выгна", "исключ")) for t in tokens):
+            key = "kick"
+        elif any(t.startswith(("снят", "убрат", "удал", "анварн")) for t in tokens) and any(t.startswith(("варн", "предупрежд")) for t in tokens):
+            key = "unwarn"
+        elif any(t.startswith(("варн", "предупрежд")) for t in tokens):
+            key = "warn"
+        elif any(t.startswith(("повыс", "повыш", "продвин", "назнач")) for t in tokens):
+            key = "promote"
+        elif any(t.startswith(("пониз", "пониж")) for t in tokens):
+            key = "demote"
+        elif any(t.startswith(("очист", "удален")) for t in tokens):
+            key = "purge"
+        elif any(t.startswith(("смс", "сообщен", "удал")) for t in tokens):
+            key = "delete"
+        elif any(t.startswith(("анпин", "откреп", "снят")) for t in tokens) and any(t.startswith(("пин", "закреп")) for t in tokens):
+            key = "unpin"
+        elif any(t.startswith(("пин", "закреп")) for t in tokens):
+            key = "pin"
+    if key == "__default__":
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        settings["modrank_default"] = required
+        save_chat_settings(message.chat.id, settings)
+        await message.answer(f"🔐 Общий порог доступа установлен: <b>{required} — {role_name(required)}</b>.")
         return
-    settings = get_chat_settings(message.chat.id)
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
+        await message.answer(
+            "Не удалось распознать команду. Склонения поддерживаются.\n"
+            "Примеры: <code>.дк мутами 2</code>, <code>.дк за баны 4</code>, "
+            "<code>.дк снять все предупреждения 3</code>, <code>.дк повысить рангом 2</code>."
+        )
+        return
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     settings[f"modrank_{key}"] = required
     save_chat_settings(message.chat.id, settings)
-    await message.answer(f"🔐 Для команды <b>{escape(command_phrase)}</b> теперь нужен ранг <b>{required} — {role_name(required)}</b>.")
+    await message.answer(
+        f"🔐 Для команды <b>{escape(command_phrase)}</b> теперь нужен ранг "
+        f"<b>{required} — {role_name(required)}</b>."
+    )
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:настройки фильтров|фильтры|filters)(?:\s|$)"))
 async def filters_status_cmd(message: Message) -> None:
@@ -3846,6 +3966,11 @@ async def main() -> None:
         BotCommand(command="modrights", description="Пороги рангов команд"),
         BotCommand(command="schedule", description="Расписание чата"),
         BotCommand(command="modstats", description="Статистика модераторов"),
+        BotCommand(command="marriages", description="Все браки чата"),
+        BotCommand(command="whois", description="Карточка участника"),
+        BotCommand(command="economy", description="Виртуальная экономика"),
+        BotCommand(command="clan", description="Кланы чата"),
+        BotCommand(command="profileform", description="Анкета участника"),
         BotCommand(command="exportsettings", description="Экспорт настроек"),
         BotCommand(command="importsettings", description="Импорт настроек"),
     ]
@@ -3923,6 +4048,442 @@ async def main() -> None:
             except asyncio.CancelledError:
                 pass
         await bot.session.close()
+
+
+
+# ── Iris-style expanded community features ────────────────────────────────────
+def _feature_normalize(value: str) -> str:
+    value = (value or "").casefold().replace("ё", "е")
+    value = re.sub(r"[\u200b-\u200f\uFEFF]", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+async def _feature_target(message: Message, explicit: str | None = None):
+    if message.reply_to_message and message.reply_to_message.from_user:
+        u = message.reply_to_message.from_user
+        return {"user_id":u.id,"username":u.username,"first_name":u.full_name}
+    token = (explicit or "").strip()
+    if token.startswith("@"):
+        token = token[1:]
+        rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
+        for row in rows:
+            if str(row.get("username") or "").casefold() == token.casefold():
+                return row
+        for (cid, uid), info in list(_RECENT_CHAT_USERS.items()):
+            if cid == message.chat.id and str(info[0] or "").casefold() == token.casefold():
+                return {"user_id":uid,"username":info[0],"first_name":info[1]}
+        return None
+    if token.isdigit():
+        uid = int(token)
+        row = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id)
+        if row:
+            return row
+        recent = _RECENT_CHAT_USERS.get((message.chat.id, uid))
+        return {"user_id":uid,"username":recent[0] if recent else None,"first_name":recent[1] if recent else f"ID {uid}"}
+    return None
+
+def _feature_safe_name(row: dict) -> str:
+    name = str(row.get("first_name") or row.get("user1_name") or "Участник")
+    return escape(name[:80])
+
+@router.message(F.text.regexp(r"(?i)^\s*(?:кто я|кто ты|кто он|кто она|мой статус)(?:\s|$)"))
+async def who_is_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    text_value = (message.text or "").strip()
+    first = _feature_normalize(text_value.split()[0]) if text_value.split() else "кто я"
+    target = None
+    if first in {"кто я", "мой статус"} or _feature_normalize(text_value) == "кто я":
+        target = await asyncio.to_thread(db_one, "bot_users", user_id=message.from_user.id, chat_id=message.chat.id)
+        target = target or {"user_id":message.from_user.id,"username":message.from_user.username,"first_name":message.from_user.full_name,"rank":0,"messages":0,"warns":0}
+    else:
+        rest = re.sub(r"(?i)^\s*(?:кто ты|кто он|кто она)\s*", "", text_value).strip()
+        target = await _feature_target(message, rest or None)
+    if not target:
+        await message.answer("Не нашёл участника. Ответь на его сообщение командой «кто ты» или укажи @username, который уже встречался в этом чате.")
+        return
+    uid = int(target.get("user_id") or 0)
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id) or target
+    rank = max(0,min(5,int(user.get("rank") or 0)))
+    warns = int(user.get("warns") or 0)
+    msgs = int(user.get("messages") or 0)
+    name = user.get("first_name") or target.get("first_name") or "Участник"
+    uname = ("@" + str(user.get("username"))) if user.get("username") else "нет username"
+    await message.answer(
+        f"🪪 <b>Карточка участника</b>\nИмя: {mention(uid, str(name))}\n"
+        f"Username: <code>{escape(uname)}</code>\nID: <code>{uid}</code>\n"
+        f"Ранг: <b>{role_name(rank)}</b> ({rank})\nСообщений: <b>{msgs}</b>\nПредупреждений: <b>{warns}</b>"
+    )
+
+@router.message(F.text.regexp(r"(?i)^\s*\.лдк(?:\s|$)"))
+async def personal_command_access_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    parts = (message.text or "").strip().split()
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    rules = settings.setdefault("personal_command_access", {})
+    if len(parts) == 1 or (len(parts) == 2 and parts[1].lower() in {"список","помощь","help"}):
+        lines = ["<b>🔐 Личный доступ к командам</b>",
+                 "Формат: <code>.лдк мут запрет</code> ответом на сообщение участника",
+                 "<code>.лдк мут разрешить</code> ответом на сообщение",
+                 "<code>.лдк мут сброс</code> ответом на сообщение",
+                 "Доступные команды: мут, размут, бан, разбан, кик, варн, снять варн, повысить, понизить, очистить."]
+        await message.answer("\n".join(lines))
+        return
+    if len(parts) < 3:
+        await message.answer("Формат: <code>.лдк команда запрет|разрешить|сброс</code> ответом на сообщение.")
+        return
+    action = _feature_normalize(parts[-1])
+    command_phrase = _feature_normalize(" ".join(parts[1:-1]))
+    aliases = {
+        "мут":"mute","мутами":"mute","замут":"mute","размут":"unmute","бан":"ban","баны":"ban",
+        "разбан":"unban","кик":"kick","варн":"warn","варны":"warn","снять варн":"unwarn",
+        "снять варны":"unwarn","повысить":"promote","повышение":"promote","понизить":"demote",
+        "понижение":"demote","очистить":"purge","удалить сообщения":"delete","пин":"pin","анпин":"unpin"
+    }
+    key = aliases.get(command_phrase)
+    if not key:
+        await message.answer("Неизвестная команда. Пример: <code>.лдк мут запрет</code> ответом на сообщение.")
+        return
+    target = await _feature_target(message)
+    if not target:
+        await message.answer("Для личного доступа обязательно ответь на сообщение участника.")
+        return
+    uid = str(int(target.get("user_id") or 0))
+    if uid == "0" or int(uid) == (message.from_user.id if message.from_user else 0):
+        await message.answer("Нельзя назначить правило самому себе или неизвестному участнику.")
+        return
+    per_command = rules.setdefault(key, {})
+    if action in {"сброс","сбросить","reset","удалить"}:
+        per_command.pop(uid, None)
+        if not per_command:
+            rules.pop(key, None)
+        result = "Индивидуальное правило удалено."
+    elif action in {"запрет","запретить","запрещен","запрещена","deny","off"}:
+        per_command[uid] = "deny"
+        result = "Команда запрещена этому участнику."
+    elif action in {"разрешить","разрешен","разрешена","allow","on"}:
+        per_command[uid] = "allow"
+        result = "Команда разрешена этому участнику."
+    else:
+        await message.answer("Последний аргумент: запрет, разрешить или сброс.")
+        return
+    settings["personal_command_access"] = rules
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id, "personal_command_access", int(uid), f"{key}={per_command.get(uid, 'reset')}")
+    await message.answer(f"🔐 {result}\nУчастник: {mention(int(uid), str(target.get('first_name') or 'Участник'))}\nКоманда: <b>{escape(command_phrase)}</b>.")
+
+@router.message(F.text.regexp(r"(?i)^\s*(?:браки|список браков|все браки|мой брак|брак участника|чей брак)(?:\s|$)"))
+async def marriages_list_cmd(message: Message) -> None:
+    raw = _feature_normalize(message.text or "")
+    if raw.startswith(("мой брак","чей брак","брак участника")):
+        target = await _feature_target(message, " ".join((message.text or "").split()[2:]) or None)
+        if not target:
+            await message.answer("Ответь на сообщение участника или укажи его @username: <code>брак участника @username</code>.")
+            return
+        uid = int(target.get("user_id") or 0)
+        rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id)
+        row = next((r for r in rows if r.get("status") == "married" and uid in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))), None)
+        if not row:
+            await message.answer("💔 У этого участника сейчас нет зарегистрированного брака в этом чате.")
+            return
+        await message.answer(f"💍 {mention(int(row['user1_id']),str(row.get('user1_name') or 'Участник'))} ❤️ {mention(int(row['user2_id']),str(row.get('user2_name') or 'Участник'))}")
+        return
+    rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id)
+    pairs = [r for r in rows if r.get("status") == "married"]
+    if not pairs:
+        await message.answer("💔 В этом чате пока нет зарегистрированных браков.")
+        return
+    lines = ["💍 <b>Браки участников чата</b>"]
+    for row in pairs[:100]:
+        lines.append(f"• {mention(int(row.get('user1_id') or 0), str(row.get('user1_name') or 'Участник'))} ❤️ {mention(int(row.get('user2_id') or 0), str(row.get('user2_name') or 'Участник'))}")
+    if len(pairs) > 100:
+        lines.append(f"…и ещё {len(pairs)-100} пар.")
+    await message.answer("\n".join(lines))
+
+@router.message(F.text.regexp(r"(?i)^\s*(?:награда|выдать награду|награды)(?:\s|$)"))
+async def award_cmd(message: Message) -> None:
+    raw = (message.text or "").strip()
+    lowered = _feature_normalize(raw)
+    if lowered.startswith("награды") and len(raw.split()) == 1:
+        if not message.from_user:
+            return
+        rows = await asyncio.to_thread(db_rows, "bot_awards", 100, "created_at", chat_id=message.chat.id, user_id=message.from_user.id)
+        await message.answer("<b>🏅 Твои награды</b>\n" + ("\n".join(f"• {escape(str(r.get('award') or 'Награда'))}" for r in rows) if rows else "Пока наград нет."))
+        return
+    if not await require_real_admin(message):
+        return
+    target = await _feature_target(message)
+    parts = raw.split(maxsplit=1)
+    award_text = parts[1] if len(parts) > 1 else ""
+    if message.reply_to_message:
+        # A reply makes the whole remaining text after the command the award title.
+        award_text = re.sub(r"(?i)^\s*(?:выдать\s+)?награду\s*", "", raw).strip()
+    if not target or not award_text or _feature_normalize(award_text) in {"@"+str(target.get("username") or "").lower(), str(target.get("user_id") or "")}:
+        await message.answer("Ответь на сообщение участника: <code>награда Помощник чата</code>.")
+        return
+    row = await asyncio.to_thread(db_insert, "bot_awards", {
+        "chat_id":message.chat.id,"user_id":int(target["user_id"]),"award":award_text[:120],
+        "actor_id":message.from_user.id,"created_at":datetime.now(timezone.utc).isoformat()
+    })
+    await message.answer("🏅 Награда вручена!" if row else "Не удалось сохранить награду. Проверь таблицу bot_awards в schema.sql.")
+
+@router.message(F.text.regexp(r"(?i)^\s*анкета(?:\s|$)"))
+async def member_questionnaire_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    raw = (message.text or "").strip()
+    rest = re.sub(r"(?i)^\s*анкета\s*", "", raw).strip()
+    target = await _feature_target(message) if message.reply_to_message else {"user_id":message.from_user.id,"first_name":message.from_user.full_name,"username":message.from_user.username}
+    uid = int(target.get("user_id") or 0) if target else 0
+    if not uid:
+        await message.answer("Не удалось определить участника.")
+        return
+    if rest and uid != message.from_user.id:
+        await message.answer("Редактировать можно только собственную анкету.")
+        return
+    row = await asyncio.to_thread(db_one, "bot_member_profiles", user_id=uid, chat_id=message.chat.id) or {}
+    if not rest:
+        name = row.get("display_name") or target.get("first_name") or "Участник"
+        await message.answer(
+            f"🪪 <b>Анкета участника</b>\nИмя: {escape(str(name))}\n"
+            f"Интересы: {escape(str(row.get('interests') or 'не указаны'))}\n"
+            f"О себе: {escape(str(row.get('about') or 'пока пусто'))}\n\n"
+            "Заполнить: <code>анкета интересы музыка, игры</code>\n"
+            "О себе: <code>анкета о себе люблю общаться</code>\n"
+            "Очистить: <code>анкета очистить</code>"
+        )
+        return
+    patch = {"chat_id":message.chat.id,"user_id":uid,"display_name":message.from_user.full_name,
+             "updated_at":datetime.now(timezone.utc).isoformat()}
+    if rest.lower() in {"очистить","сброс","удалить"}:
+        patch.update({"interests":"","about":""})
+    elif _feature_normalize(rest).startswith("интересы "):
+        patch["interests"] = rest.split(maxsplit=1)[1][:300]
+        if row.get("about") is not None: patch["about"] = row.get("about")
+    elif _feature_normalize(rest).startswith(("о себе ","обо мне ")):
+        patch["about"] = rest.split(maxsplit=2)[-1][:500]
+        if row.get("interests") is not None: patch["interests"] = row.get("interests")
+    else:
+        await message.answer("Формат: <code>анкета интересы ...</code>, <code>анкета о себе ...</code> или <code>анкета очистить</code>.")
+        return
+    saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", patch, "chat_id,user_id")
+    await message.answer("✅ Анкета обновлена." if saved else "Не удалось сохранить анкету. Проверь таблицу bot_member_profiles в schema.sql.")
+
+# Role-play commands; they also build a lightweight relationship score between the two users.
+_RP_ACTIONS = {
+    "обнять":("🤗","обнял(а)"), "поцеловать":("😘","поцеловал(а)"), "дать пять":("🖐️","дал(а) пять"),
+    "пожать руку":("🤝","пожал(а) руку"), "погладить":("🐾","погладил(а)"), "похвалить":("✨","похвалил(а)"),
+    "поздравить":("🎉","поздравил(а)"), "поддержать":("💚","поддержал(а)"), "пнуть":("🦶","пнул(а)"),
+    "ударить":("💥","ударил(а)")
+}
+@router.message(F.text.regexp(r"(?i)^\s*(?:обнять|поцеловать|дать пять|пожать руку|погладить|похвалить|поздравить|поддержать|пнуть|ударить|отношения)(?:\s|$)"))
+async def roleplay_relationship_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    raw = _feature_normalize(message.text or "")
+    action = next((x for x in sorted(_RP_ACTIONS,key=len,reverse=True) if raw == x or raw.startswith(x+" ")), None)
+    if raw.startswith("отношения"):
+        target = await _feature_target(message, raw[len("отношения"):].strip() or None)
+        if not target:
+            await message.answer("Ответь на сообщение участника командой «отношения».")
+            return
+        a,b = sorted((message.from_user.id,int(target.get("user_id") or 0)))
+        row = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
+        await message.answer(f"❤️ <b>Отношения</b>\n{mention(a,str(target.get('first_name') or 'Участник'))} и {mention(b,str(target.get('first_name') or 'Участник'))}\nОчки связи: <b>{int(row.get('points') or 0)}</b>")
+        return
+    target = await _feature_target(message, raw[len(action):].strip() if action else None)
+    if not target:
+        await message.answer("Ответь на сообщение участника или укажи его @username.")
+        return
+    uid = int(target.get("user_id") or 0)
+    if uid == message.from_user.id or uid <= 0:
+        await message.answer("Эту команду нужно применить к другому участнику.")
+        return
+    emoji, verb = _RP_ACTIONS[action]
+    actor = message.from_user.full_name or "Участник"
+    partner = target.get("first_name") or "Участник"
+    a,b = sorted((message.from_user.id,uid))
+    existing = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
+    points = int(existing.get("points") or 0) + 1
+    saved = await asyncio.to_thread(db_upsert, "bot_relationships", {
+        "chat_id":message.chat.id,"user1_id":a,"user2_id":b,"points":points,
+        "updated_at":datetime.now(timezone.utc).isoformat()
+    }, "chat_id,user1_id,user2_id")
+    await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
+
+# Virtual economy
+@router.message(F.text.regexp(r"(?i)^\s*(?:баланс|кошелек|кошелёк|ежедневный бонус|бонус|передать|перевести|магазин|купить)(?:\s|$)"))
+async def economy_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    raw = (message.text or "").strip()
+    norm = _feature_normalize(raw)
+    uid = message.from_user.id
+    current = await asyncio.to_thread(db_one, "bot_economy", chat_id=message.chat.id, user_id=uid) or {
+        "chat_id":message.chat.id,"user_id":uid,"balance":0
+    }
+    if norm in {"баланс","кошелек","кошелёк"}:
+        await message.answer(f"🪙 Баланс: <b>{int(current.get('balance') or 0)}</b> Pear Coins.")
+        return
+    if norm in {"бонус","ежедневный бонус"}:
+        last = current.get("last_bonus")
+        if last:
+            try:
+                elapsed = datetime.now(timezone.utc)-datetime.fromisoformat(str(last).replace("Z","+00:00"))
+                if elapsed < timedelta(hours=20):
+                    wait = timedelta(hours=20)-elapsed
+                    await message.answer(f"⏳ Бонус уже получен. Попробуй через {int(wait.total_seconds()//3600)} ч {int((wait.total_seconds()%3600)//60)} мин.")
+                    return
+            except Exception:
+                pass
+        balance = int(current.get("balance") or 0)+100
+        saved = await asyncio.to_thread(db_upsert, "bot_economy", {
+            **current,"chat_id":message.chat.id,"user_id":uid,"balance":balance,
+            "last_bonus":datetime.now(timezone.utc).isoformat(),"updated_at":datetime.now(timezone.utc).isoformat()
+        }, "chat_id,user_id")
+        await message.answer(f"🎁 Ежедневный бонус: +100 Pear Coins!\n🪙 Баланс: <b>{balance}</b>" if saved else "Не удалось сохранить бонус. Проверь таблицу bot_economy в schema.sql.")
+        return
+    if norm == "магазин":
+        await message.answer("<b>🛍 Магазин Pear Coins</b>\n• Титул «Активный» — 250 монет\n• Титул «Легенда» — 1000 монет\nПокупка: <code>купить активный</code> или <code>купить легенда</code>.")
+        return
+    if norm.startswith("купить "):
+        item = norm.split(maxsplit=1)[1]
+        prices = {"активный":250,"титул активный":250,"легенда":1000,"титул легенда":1000}
+        price = prices.get(item)
+        if price is None:
+            await message.answer("В магазине доступны: активный (250) и легенда (1000).")
+            return
+        balance = int(current.get("balance") or 0)
+        if balance < price:
+            await message.answer(f"Не хватает монет: нужно {price}, у тебя {balance}.")
+            return
+        saved = await asyncio.to_thread(db_upsert, "bot_economy", {
+            **current,"chat_id":message.chat.id,"user_id":uid,"balance":balance-price,
+            "title":item,"updated_at":datetime.now(timezone.utc).isoformat()
+        }, "chat_id,user_id")
+        await message.answer("🛍 Покупка оформлена!" if saved else "Не удалось оформить покупку.")
+        return
+    if norm.startswith(("передать ","перевести ")):
+        m = re.search(r"(?i)^(?:передать|перевести)\s+(.+?)\s+(\d+)\s*$", raw)
+        target = await _feature_target(message, m.group(1) if m else None)
+        amount = int(m.group(2)) if m else 0
+        if not target:
+            await message.answer("Ответь на сообщение получателя: <code>передать 50</code> или укажи username.")
+            return
+        to_uid = int(target.get("user_id") or 0)
+        if to_uid == uid or amount <= 0 or amount > 1000000:
+            await message.answer("Укажи другого участника и сумму от 1 до 1 000 000.")
+            return
+        receiver = await asyncio.to_thread(db_one, "bot_economy", chat_id=message.chat.id, user_id=to_uid) or {"chat_id":message.chat.id,"user_id":to_uid,"balance":0}
+        sender_balance = int(current.get("balance") or 0)
+        if sender_balance < amount:
+            await message.answer("Недостаточно монет.")
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        sender_saved = await asyncio.to_thread(db_upsert, "bot_economy", {**current,"chat_id":message.chat.id,"user_id":uid,"balance":sender_balance-amount,"updated_at":now}, "chat_id,user_id")
+        receiver_saved = await asyncio.to_thread(db_upsert, "bot_economy", {**receiver,"chat_id":message.chat.id,"user_id":to_uid,"balance":int(receiver.get("balance") or 0)+amount,"updated_at":now}, "chat_id,user_id")
+        if not sender_saved or not receiver_saved:
+            await message.answer("⚠️ Перевод выполнен не полностью. Нужна проверка базы; не повторяй операцию сразу.")
+            return
+        await message.answer(f"🪙 Переведено <b>{amount}</b> монет участнику {mention(to_uid,str(target.get('first_name') or 'Участник'))}.")
+        return
+    await message.answer("Команды экономики: баланс, ежедневный бонус, передать, магазин, купить.")
+
+# Clans
+@router.message(F.text.regexp(r"(?i)^\s*клан(?:\s|$)"))
+async def clan_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    action = _feature_normalize(parts[1]) if len(parts)>1 else "инфо"
+    name = parts[2].strip()[:40] if len(parts)>2 else ""
+    uid, chat_id = message.from_user.id, message.chat.id
+    if action in {"создать","создай"}:
+        if not name or len(name)<2:
+            await message.answer("Название клана: <code>клан создать Стражи</code>.")
+            return
+        current = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        if current:
+            await message.answer("Ты уже состоишь в клане. Сначала выйди: <code>клан выйти</code>.")
+            return
+        saved = await asyncio.to_thread(db_insert, "bot_clans", {"chat_id":chat_id,"name":name,"leader_id":uid,"created_at":datetime.now(timezone.utc).isoformat()})
+        if not saved:
+            await message.answer("Не удалось создать клан. Возможно, название уже занято или таблица bot_clans не создана.")
+            return
+        joined = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"leader","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
+        await message.answer(f"🏰 Клан <b>{escape(name)}</b> создан! Ты его лидер." if joined else "Клан создан, но не удалось записать лидера в состав.")
+        return
+    if action in {"вступить","вступитьв","join"}:
+        if not name:
+            await message.answer("Формат: <code>клан вступить Название</code>.")
+            return
+        existing = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        clan = await asyncio.to_thread(db_one, "bot_clans", chat_id=chat_id, name=name)
+        if existing:
+            await message.answer("Ты уже в клане. Сначала выйди из него.")
+            return
+        if not clan:
+            await message.answer("Клан не найден.")
+            return
+        saved = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"member","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
+        await message.answer(f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if saved else "Не удалось вступить в клан.")
+        return
+    if action in {"выйти","покинуть","leave"}:
+        member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        if not member:
+            await message.answer("Ты не состоишь в клане.")
+            return
+        if member.get("role") == "leader":
+            await message.answer("Лидер не может выйти, пока не передаст лидерство или не распустит клан. Функция передачи будет добавлена отдельно.")
+            return
+        deleted = await asyncio.to_thread(lambda: db.table("bot_clan_members").delete().eq("chat_id",chat_id).eq("user_id",uid).execute() if db is not None else None)
+        await message.answer("Ты вышел из клана." if deleted else "Не удалось выйти из клана.")
+        return
+    if action in {"участники","состав","инфо","информация"}:
+        member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
+        clan_name = name or (member.get("clan_name") if member else None)
+        if not clan_name:
+            await message.answer("Ты пока не в клане. Создай его командой <code>клан создать Название</code>.")
+            return
+        clan = await asyncio.to_thread(db_one, "bot_clans", chat_id=chat_id, name=clan_name)
+        if not clan:
+            await message.answer("Клан не найден.")
+            return
+        members = await asyncio.to_thread(db_rows, "bot_clan_members", 100, "joined_at", chat_id=chat_id, clan_name=clan_name)
+        lines = [f"🏰 <b>Клан {escape(clan_name)}</b>",f"Участников: <b>{len(members)}</b>"]
+        for m in members[:30]:
+            u = await asyncio.to_thread(db_one, "bot_users", user_id=int(m.get("user_id") or 0), chat_id=chat_id) or {}
+            nm = u.get("first_name") or f"ID {m.get('user_id')}"
+            lines.append(f"• {escape(str(nm))}" + (" 👑" if m.get("role")=="leader" else ""))
+        await message.answer("\n".join(lines))
+        return
+    if action in {"помощь","help"}:
+        await message.answer("<b>🏰 Команды кланов</b>\n<code>клан создать Название</code>\n<code>клан вступить Название</code>\n<code>клан выйти</code>\n<code>клан инфо</code>\n<code>клан участники Название</code>")
+        return
+    await message.answer("Команды: <code>клан создать Название</code>, <code>клан вступить Название</code>, <code>клан выйти</code>, <code>клан инфо</code>, <code>клан участники</code>, <code>клан помощь</code>.")
+
+# A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
+@router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
+async def gather_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
+    seen = set()
+    mentions = []
+    for row in rows:
+        uid = int(row.get("user_id") or 0)
+        if uid <= 0 or uid == (message.from_user.id if message.from_user else 0) or uid in seen:
+            continue
+        seen.add(uid)
+        mentions.append(mention(uid,str(row.get("first_name") or "Участник")))
+        if len(mentions) >= 30:
+            break
+    if not mentions:
+        await message.answer("Пока нет участников, которых бот уже видел и может упомянуть.")
+        return
+    await message.answer("📢 <b>Общий сбор!</b>\n" + " · ".join(mentions) + "\n\n<i>Отмечены участники, которых бот уже встречал в этом чате.</i>")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
