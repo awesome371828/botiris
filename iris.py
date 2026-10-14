@@ -1734,13 +1734,33 @@ async def top_cmd(message: Message) -> None:
         table, field, icon = table_map[category_key]
         rows = await asyncio.to_thread(db_rows, table, 1000, field, chat_id=message.chat.id)
         grouped = {}
-        for row in rows:
-            uid = int(row.get("user_id") or 0)
-            if uid <= 0:
-                continue
-            current = grouped.setdefault(uid, {"user_id":uid,"username":row.get("username"),"first_name":row.get("first_name") or "Участник","score":0})
-            current["score"] += int(row.get(field) or (row.get("points") or 0))
-            if row.get("username"): current["username"] = row["username"]
+        if category_key == "rep":
+            for row in rows:
+                score = int(row.get("points") or 0)
+                for uid in (int(row.get("user1_id") or 0), int(row.get("user2_id") or 0)):
+                    if uid <= 0: continue
+                    current = grouped.setdefault(uid, {"user_id":uid,"username":None,"first_name":f"ID {uid}","score":0})
+                    current["score"] += score
+        elif category_key == "awards":
+            for row in rows:
+                uid = int(row.get("user_id") or 0)
+                if uid <= 0: continue
+                current = grouped.setdefault(uid, {"user_id":uid,"username":None,"first_name":f"ID {uid}","score":0})
+                current["score"] += 1
+        else:
+            for row in rows:
+                uid = int(row.get("user_id") or 0)
+                if uid <= 0:
+                    continue
+                current = grouped.setdefault(uid, {"user_id":uid,"username":row.get("username"),"first_name":row.get("first_name") or f"ID {uid}","score":0})
+                current["score"] += int(row.get(field) or 0)
+                if row.get("username"): current["username"] = row["username"]
+        user_rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
+        user_map = {int(u.get("user_id") or 0):u for u in user_rows}
+        for uid, current in grouped.items():
+            u = user_map.get(uid, {})
+            if u.get("username"): current["username"] = u["username"]
+            if u.get("first_name"): current["first_name"] = u["first_name"]
         ranked = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:10]
         title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
         await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {('@'+escape(str(r['username']))) if r.get('username') else escape(str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1)) if ranked else "Пока нет данных для рейтинга."))
@@ -4085,11 +4105,13 @@ def _feature_safe_name(row: dict) -> str:
     name = str(row.get("first_name") or row.get("user1_name") or "Участник")
     return escape(name[:80])
 
+@router.message(Command("whois"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:кто я|кто ты|кто он|кто она|мой статус)(?:\s|$)"))
 async def who_is_cmd(message: Message) -> None:
     if not message.from_user:
         return
     text_value = (message.text or "").strip()
+    text_value = re.sub(r"(?i)^/whois(?:@\w+)?\s*", "", text_value).strip() or "кто я"
     first = _feature_normalize(text_value.split()[0]) if text_value.split() else "кто я"
     target = None
     if first in {"кто я", "мой статус"} or _feature_normalize(text_value) == "кто я":
@@ -4172,6 +4194,7 @@ async def personal_command_access_cmd(message: Message) -> None:
     audit(message.chat.id, message.from_user.id, "personal_command_access", int(uid), f"{key}={per_command.get(uid, 'reset')}")
     await message.answer(f"🔐 {result}\nУчастник: {mention(int(uid), str(target.get('first_name') or 'Участник'))}\nКоманда: <b>{escape(command_phrase)}</b>.")
 
+@router.message(Command("marriages"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:браки|список браков|все браки|мой брак|брак участника|чей брак)(?:\s|$)"))
 async def marriages_list_cmd(message: Message) -> None:
     raw = _feature_normalize(message.text or "")
@@ -4200,11 +4223,12 @@ async def marriages_list_cmd(message: Message) -> None:
         lines.append(f"…и ещё {len(pairs)-100} пар.")
     await message.answer("\n".join(lines))
 
+@router.message(Command("awards"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:награда|выдать награду|награды)(?:\s|$)"))
 async def award_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     lowered = _feature_normalize(raw)
-    if lowered.startswith("награды") and len(raw.split()) == 1:
+    if lowered == "/awards" or (lowered.startswith("награды") and len(raw.split()) == 1):
         if not message.from_user:
             return
         rows = await asyncio.to_thread(db_rows, "bot_awards", 100, "created_at", chat_id=message.chat.id, user_id=message.from_user.id)
@@ -4227,12 +4251,13 @@ async def award_cmd(message: Message) -> None:
     })
     await message.answer("🏅 Награда вручена!" if row else "Не удалось сохранить награду. Проверь таблицу bot_awards в schema.sql.")
 
+@router.message(Command("profileform"))
 @router.message(F.text.regexp(r"(?i)^\s*анкета(?:\s|$)"))
 async def member_questionnaire_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = (message.text or "").strip()
-    rest = re.sub(r"(?i)^\s*анкета\s*", "", raw).strip()
+    rest = re.sub(r"(?i)^\s*(?:анкета|/profileform(?:@\w+)?)\s*", "", raw).strip()
     target = await _feature_target(message) if message.reply_to_message else {"user_id":message.from_user.id,"first_name":message.from_user.full_name,"username":message.from_user.username}
     uid = int(target.get("user_id") or 0) if target else 0
     if not uid:
@@ -4312,12 +4337,15 @@ async def roleplay_relationship_cmd(message: Message) -> None:
     await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
 
 # Virtual economy
+@router.message(Command("economy"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:баланс|кошелек|кошелёк|ежедневный бонус|бонус|передать|перевести|магазин|купить)(?:\s|$)"))
 async def economy_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = (message.text or "").strip()
     norm = _feature_normalize(raw)
+    if norm == "/economy":
+        norm = "баланс"
     uid = message.from_user.id
     current = await asyncio.to_thread(db_one, "bot_economy", chat_id=message.chat.id, user_id=uid) or {
         "chat_id":message.chat.id,"user_id":uid,"balance":0
@@ -4390,6 +4418,7 @@ async def economy_cmd(message: Message) -> None:
     await message.answer("Команды экономики: баланс, ежедневный бонус, передать, магазин, купить.")
 
 # Clans
+@router.message(Command("clan"))
 @router.message(F.text.regexp(r"(?i)^\s*клан(?:\s|$)"))
 async def clan_cmd(message: Message) -> None:
     if not message.from_user:
@@ -4464,6 +4493,7 @@ async def clan_cmd(message: Message) -> None:
     await message.answer("Команды: <code>клан создать Название</code>, <code>клан вступить Название</code>, <code>клан выйти</code>, <code>клан инфо</code>, <code>клан участники</code>, <code>клан помощь</code>.")
 
 # A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
+@router.message(Command("gather"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
     if not await require_real_admin(message):
