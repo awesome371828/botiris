@@ -2384,14 +2384,14 @@ async def marriage_status_cmd(message: Message) -> None:
             names = {int(u.get("user_id") or 0): str(u.get("first_name") or "Участник") for u in users}
             lines = ["💞 <b>Ваши отношения</b>", "💔 Активного брака пока нет."]
             if links:
-                lines.append("\\n✨ <b>Связи в чате</b>")
+                lines.append("✨ <b>Связи в чате</b>")
                 for rel in links[:15]:
                     one, two = int(rel.get("user1_id") or 0), int(rel.get("user2_id") or 0)
                     other = two if one == message.from_user.id else one
                     lines.append(f"• {mention(other, names.get(other, 'Участник'))} — {int(rel.get('points') or 0)} 💗")
             else:
-                lines.append("\\nПока нет накопленных очков отношений. Используй команды вроде «обнять», «поцеловать» или «поддержать» в ответ на сообщение.")
-            await message.answer("\\n".join(lines))
+                lines.append("Пока нет накопленных очков отношений. Используй команды вроде «обнять», «поцеловать» или «поддержать» в ответ на сообщение.")
+            await message.answer("\n".join(lines))
             return
         except Exception:
             log.exception("Could not fetch relationships without marriage")
@@ -4756,17 +4756,38 @@ async def member_questionnaire_cmd(message: Message) -> None:
 
 # Role-play commands; they also build a lightweight relationship score between the two users.
 _RP_ACTIONS = {
-    "обнять":("🤗","обнял(а)"), "поцеловать":("😘","поцеловал(а)"), "дать пять":("🖐️","дал(а) пять"),
-    "пожать руку":("🤝","пожал(а) руку"), "погладить":("🐾","погладил(а)"), "похвалить":("✨","похвалил(а)"),
-    "поздравить":("🎉","поздравил(а)"), "поддержать":("💚","поддержал(а)"), "пнуть":("🦶","пнул(а)"),
-    "ударить":("💥","ударил(а)")
+    "обнять":("🤗","обнял(а)"), "обнимашки":("🤗","обнял(а)"), "поцеловать":("😘","поцеловал(а)"),
+    "чмокнуть":("😘","чмокнул(а)"), "обнять крепко":("🫂","крепко обнял(а)"),
+    "дать пять":("🖐️","дал(а) пять"), "пожать руку":("🤝","пожал(а) руку"),
+    "погладить":("🐾","погладил(а)"), "похвалить":("✨","похвалил(а)"), "поздравить":("🎉","поздравил(а)"),
+    "поддержать":("💚","поддержал(а)"), "утешить":("🫶","утешил(а)"), "успокоить":("🫂","успокоил(а)"),
+    "пнуть":("🦶","пнул(а)"), "ударить":("💥","ударил(а)"), "укусить":("🦷","укусил(а)"),
+    "ущипнуть":("🤏","ущипнул(а)"), "пощекотать":("🤣","пощекотал(а)"), "покормить":("🍓","покормил(а)"),
+    "угостить":("🍰","угостил(а)"), "пригласить на свидание":("🌹","пригласил(а) на свидание"),
+    "подарить":("🎁","подарил(а)"), "пожелать удачи":("🍀","пожелал(а) удачи"),
+    "помочь":("🫶","помог(ла)"), "спасти":("🦸","спас(ла)"), "обидеть":("💔","обидел(а)"),
+    "простить":("🤍","простил(а)"), "помириться":("🕊️","помирил(а)ся"), "поблагодарить":("🙏","поблагодарил(а)"),
+    "поклониться":("🙇","поклонил(а)ся"), "пожелать спокойной ночи":("🌙","пожелал(а) спокойной ночи"),
+    "отношения":("❤️","посмотрел(а) отношения")
 }
-@router.message(F.text.regexp(r"(?i)^\s*(?:обнять|поцеловать|дать пять|пожать руку|погладить|похвалить|поздравить|поддержать|пнуть|ударить|отношения)(?:\s|$)"))
+_RP_ACTION_PATTERN = "|".join(re.escape(x) for x in sorted(_RP_ACTIONS, key=len, reverse=True))
+@router.message(F.text.regexp(r"(?i)^\s*(?:обнять|обнимашки|поцеловать|чмокнуть|обнять крепко|дать пять|пожать руку|погладить|похвалить|поздравить|поддержать|утешить|успокоить|пнуть|ударить|укусить|ущипнуть|пощекотать|покормить|угостить|пригласить на свидание|подарить|пожелать удачи|помочь|спасти|обидеть|простить|помириться|поблагодарить|поклониться|пожелать спокойной ночи|отношения)(?:\s|$)"))
 async def roleplay_relationship_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = _feature_normalize(message.text or "")
+    if raw in {"отн действия", "отношения действия", "действия отношений", "список действий"}:
+        actions = [
+            "обнять", "поцеловать", "чмокнуть", "обнять крепко", "дать пять", "пожать руку", "погладить",
+            "похвалить", "поздравить", "поддержать", "утешить", "успокоить", "пнуть", "ударить", "укусить",
+            "ущипнуть", "пощекотать", "покормить", "угостить", "пригласить на свидание", "подарить айфон",
+            "подарить цветы", "подарить шоколад", "пожелать удачи", "помочь", "спасти", "обидеть", "простить",
+            "помириться", "поблагодарить", "поклониться", "пожелать спокойной ночи", "отношения"
+        ]
+        await message.answer("💞 <b>Действия отношений</b>\n" + "\n".join(f"• <code>{escape(x)}</code>" for x in actions) + "\n\nПрименение: ответь на сообщение участника нужной командой. Подарки: <code>подарить айфон</code>, <code>подарить цветы</code> и т. п.")
+        return
     action = next((x for x in sorted(_RP_ACTIONS,key=len,reverse=True) if raw == x or raw.startswith(x+" ")), None)
+    gift_name = raw[len("подарить"):].strip() if raw.startswith("подарить ") else ""
     if raw.startswith("отношения"):
         target = await _feature_target(message, raw[len("отношения"):].strip() or None)
         if not target:
@@ -4780,7 +4801,11 @@ async def roleplay_relationship_cmd(message: Message) -> None:
         b_name = target_name if b == int(target.get("user_id") or 0) else own_name
         await message.answer(f"❤️ <b>Отношения</b>\n{mention(a,a_name)} и {mention(b,b_name)}\nОчки связи: <b>{int(row.get('points') or 0)}</b>")
         return
-    target = await _feature_target(message, raw[len(action):].strip() if action else None)
+    if action == "подарить" and not gift_name:
+        await message.answer("Напиши, что подарить, например «подарить айфон», ответом на сообщение участника.")
+        return
+    target_arg = gift_name if action == "подарить" else (raw[len(action):].strip() if action else None)
+    target = await _feature_target(message, None if action == "подарить" else target_arg)
     if not target:
         await message.answer("Ответь на сообщение участника или укажи его @username.")
         return
@@ -4793,12 +4818,16 @@ async def roleplay_relationship_cmd(message: Message) -> None:
     partner = target.get("first_name") or "Участник"
     a,b = sorted((message.from_user.id,uid))
     existing = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
-    points = int(existing.get("points") or 0) + 1
+    points = int(existing.get("points") or 0) + (4500 if action == "подарить" and gift_name == "айфон" else 1)
     saved = await asyncio.to_thread(db_upsert, "bot_relationships", {
         "chat_id":message.chat.id,"user1_id":a,"user2_id":b,"points":points,
         "updated_at":datetime.now(timezone.utc).isoformat()
     }, "chat_id,user1_id,user2_id")
-    await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
+    if action == "подарить":
+        item_emoji = {"айфон":"📱","цветы":"💐","шоколад":"🍫","кольцо":"💍","машину":"🚗","машина":"🚗","плюшевого мишку":"🧸"}.get(gift_name, "🎁")
+        await message.answer(f"💓 {item_emoji} | {mention(message.from_user.id,actor)} подарил(а) <b>{escape(gift_name)}</b> {mention(uid,str(partner))}!\n🔅 Крепость отношений выросла на {4500 if gift_name == 'айфон' else 1} hp.")
+    else:
+        await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
 
 # Virtual economy
 @router.message(Command("economy"))
