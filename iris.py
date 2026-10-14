@@ -3496,13 +3496,24 @@ async def close_chat_cmd(message: Message) -> None:
             return
         try:
             if not settings.get("chat_permissions_before_lock"):
-                settings["chat_permissions_before_lock"] = {
-                    "can_send_messages": True, "can_send_audios": True,
-                    "can_send_documents": True, "can_send_photos": True,
-                    "can_send_videos": True, "can_send_video_notes": True,
-                    "can_send_voice_notes": True, "can_send_polls": True,
-                    "can_send_other_messages": True, "can_add_web_page_previews": True,
-                }
+                # Save Telegram's actual default group permissions before locking.
+                # Restoring a hard-coded "all True" set could accidentally enable media
+                # types that the group owner had intentionally disabled.
+                try:
+                    chat_info = await bot.get_chat(message.chat.id)
+                    current_permissions = getattr(chat_info, "permissions", None)
+                    if current_permissions is not None:
+                        settings["chat_permissions_before_lock"] = current_permissions.model_dump(exclude_none=True)
+                except Exception:
+                    log.exception("Could not read existing chat permissions before lock chat=%s", message.chat.id)
+                if not settings.get("chat_permissions_before_lock"):
+                    settings["chat_permissions_before_lock"] = {
+                        "can_send_messages": True, "can_send_audios": True,
+                        "can_send_documents": True, "can_send_photos": True,
+                        "can_send_videos": True, "can_send_video_notes": True,
+                        "can_send_voice_notes": True, "can_send_polls": True,
+                        "can_send_other_messages": True, "can_add_web_page_previews": True,
+                    }
             await bot.set_chat_permissions(
                 message.chat.id,
                 permissions=ChatPermissions(
