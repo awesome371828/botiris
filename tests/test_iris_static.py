@@ -187,7 +187,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("bot.get_chat_administrators(message.chat.id)", body)
         self.assertIn("ChatMemberStatus.CREATOR", body)
         self.assertIn("Создатели чата", body)
-        self.assertIn("This list is intentionally limited", body)
+        self.assertIn("Show Pear CM roles plus the real Telegram chat creator", body)
         self.assertNotIn("Администраторы Telegram", body)
         self.assertNotIn('<a href=', body)
         self.assertNotIn("https://t.me/", body)
