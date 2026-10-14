@@ -200,3 +200,22 @@ grant all on public.bot_users, public.bot_audit, public.bot_activity_events,
     public.bot_operators, public.bot_global_bans, public.bot_reports,
     public.bot_appeals, public.bot_notes, public.bug_report to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+
+-- Additive feature tables/columns for advanced Pear CM administration.
+alter table public.bot_notes add column if not exists chat_id bigint;
+alter table public.bot_notes add column if not exists actor_id bigint;
+
+create table if not exists public.bot_trusted_users (
+    chat_id bigint not null,
+    user_id bigint not null,
+    active boolean not null default true,
+    actor_id bigint,
+    created_at timestamptz not null default now(),
+    primary key (chat_id, user_id)
+);
+create index if not exists bot_trusted_users_chat_active_idx
+    on public.bot_trusted_users (chat_id, active);
+
+create index if not exists bot_notes_chat_user_created_idx
+    on public.bot_notes (chat_id, user_id, created_at desc);
