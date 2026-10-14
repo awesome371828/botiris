@@ -206,6 +206,38 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Удалено сообщений:", self.source)
         self.assertIn("За один раз можно удалить максимум", self.source)
 
+    def test_marriage_flow_authorizes_buttons_and_confirms_database_transitions(self):
+        callback_start = self.source.index("async def marriage_proposal_callback")
+        callback_end = self.source.index("@router.message(Command(\"marriage\"", callback_start)
+        callback = self.source[callback_start:callback_end]
+        self.assertIn('row.get("status") != "pending"', callback)
+        self.assertIn('row.get("user2_id") or 0) != callback.from_user.id', callback)
+        self.assertIn("Эти кнопки предназначены только тому, кому предложили брак", callback)
+        divorce_start = self.source.index("async def divorce_cmd")
+        divorce_end = self.source.index("# ── Integrated moderation stages", divorce_start)
+        divorce = self.source[divorce_start:divorce_end]
+        self.assertIn('.eq("status", "married").select("*").execute()', divorce)
+        self.assertIn("Брак не подтверждён как расторгнутый", divorce)
+
+    def test_database_enforces_single_active_marriage_and_valid_sql_function_quotes(self):
+        schema = SCHEMA.read_text(encoding="utf-8").lower()
+        self.assertIn("create or replace function public.prevent_overlapping_bot_marriages()", schema)
+        self.assertIn("pg_advisory_xact_lock(new.chat_id)", schema)
+        self.assertIn("create trigger bot_marriages_no_overlap", schema)
+        self.assertNotRegex(schema, r"(?m)^as \\$")
+        self.assertNotRegex(schema, r"(?m)^\\$;$")
+
+    def test_command_aliases_and_answer_commands_do_not_share_marriage_matcher(self):
+        marriage_start = self.source.index("async def marry_cmd")
+        marriage_end = self.source.index("@router.callback_query(F.data.startswith(\"marriage:\"))", marriage_start)
+        marriage = self.source[marriage_start:marriage_end]
+        self.assertIn('r"(?i)^\\s*[.!/]?(?:брак|браки', marriage)
+        self.assertIn('брак да', self.source)
+        self.assertIn('брак нет', self.source)
+        self.assertTrue(marriage.rstrip().endswith(")"))
+        self.assertIn("CommandRateLimitMiddleware", self.source)
+        self.assertIn("command_match = re.match", self.source)
+
     def test_top_defaults_to_current_chat_in_groups(self):
         self.assertIn("chat_only = is_group(message) and not global_scope", self.source)
         self.assertIn('global_scope = arg.startswith(("все чаты"', self.source)
