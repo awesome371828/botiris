@@ -169,6 +169,16 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Доступ к функциям Pear CM для этого аккаунта ограничен", self.source)
         self.assertIn("await asyncio.to_thread(_is_globally_banned, callback.from_user.id)", self.source)
 
+    def test_rank_changes_follow_strict_hierarchy(self):
+        for handler_name in ("promote_rank_cmd", "demote_rank_cmd"):
+            start = self.source.index(f"async def {handler_name}")
+            end = self.source.find("\n@router.message", start + 1)
+            body = self.source[start:end if end >= 0 else len(self.source)]
+            self.assertIn("target_member.status == ChatMemberStatus.CREATOR", body)
+            self.assertIn("actor_is_telegram_admin", body)
+            self.assertIn("current >= actor_rank or new_rank >= actor_rank", body)
+            self.assertNotIn("new_rank >= max(3, actor_rank)", body)
+
     def test_admin_listing_includes_real_telegram_admins(self):
         self.assertIn("telegram_admin_ids.add(u.id)", self.source)
         self.assertIn("Администраторы Telegram", self.source)
