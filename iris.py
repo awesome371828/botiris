@@ -201,6 +201,15 @@ def mention(user_id: int, name: str) -> str:
     return f'<a href="tg://user?id={user_id}">{safe}</a>'
 
 # ── Database helpers ─────────────────────────────────────────────────────────
+def _is_transient_db_error(exc: Exception) -> bool:
+    """Identify temporary network/server failures; schema errors should fail immediately."""
+    value = f"{type(exc).__name__} {exc}".casefold()
+    return any(token in value for token in (
+        "timeout", "timed out", "connection", "temporarily unavailable",
+        "temporary failure", "network", "429", "502", "503", "504",
+        "server disconnected", "rate limit",
+    ))
+
 def db_one(table: str, **filters: Any) -> dict | None:
     if db is None:
         return None
