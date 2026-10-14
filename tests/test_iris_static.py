@@ -170,6 +170,13 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Не закрываю чат: база данных не настроена", close_body)
         self.assertIn("не удалось сохранить исходные разрешения", close_body)
 
+    def test_unmute_restores_chat_default_permissions(self):
+        start = self.source.index("async def unmute_cmd")
+        end = self.source.index("@router.message(Command(\"ban\")", start)
+        body = self.source[start:end]
+        self.assertIn("default_permissions = getattr(chat_info, \"permissions\", None)", body)
+        self.assertIn("ChatPermissions(**default_permissions.model_dump(exclude_none=True))", body)
+
     def test_chat_lock_restores_saved_telegram_permissions(self):
         self.assertIn("current_permissions = getattr(chat_info, \"permissions\", None)", self.source)
         self.assertIn("current_permissions.model_dump(exclude_none=True)", self.source)
