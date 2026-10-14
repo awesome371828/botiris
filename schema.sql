@@ -166,7 +166,7 @@ create or replace function public.prevent_overlapping_bot_marriages()
 returns trigger
 language plpgsql
 set search_path = public
-as $
+as $$
 begin
     if new.status in ('pending', 'married') then
         perform pg_advisory_xact_lock(new.chat_id);
@@ -187,7 +187,7 @@ begin
     end if;
     return new;
 end;
-$;
+$$;
 
 drop trigger if exists bot_marriages_no_overlap on public.bot_marriages;
 create trigger bot_marriages_no_overlap
@@ -404,7 +404,7 @@ returns void
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 begin
     with inserted as (
         insert into public.bot_activity_events
@@ -458,7 +458,7 @@ begin
         messages = public.bot_users.messages + excluded.messages,
         last_seen = greatest(public.bot_users.last_seen, excluded.last_seen);
 end;
-$;
+$$;
 
 revoke all on function public.record_bot_activity_batch(jsonb) from public, anon, authenticated;
 grant execute on function public.record_bot_activity_batch(jsonb) to service_role;
@@ -468,7 +468,7 @@ returns void
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 declare
     item jsonb;
 begin
