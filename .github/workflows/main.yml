@@ -4,16 +4,15 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  schedule:
-    - cron: "17 */6 * * *" # UTC; GitHub may delay scheduled jobs
 
 permissions:
   contents: read
 
-# GitHub-hosted runners are temporary; this does not guarantee uninterrupted 24/7 uptime.
+# GitHub-hosted runners are temporary; this is a restart loop within one job,
+# not a guarantee of uninterrupted 24/7 uptime.
 concurrency:
   group: pear-cm-bot
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run-bot:
@@ -22,24 +21,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-
       - name: Validate syntax
         run: |
           python -m py_compile iris.py
           python -m py_compile moderation_full.py
-
-      - name: Run bot with process restart every 3 hours
+      - name: Run bot with 3-hour process restart
         shell: bash
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
