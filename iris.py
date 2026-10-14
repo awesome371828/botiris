@@ -799,10 +799,27 @@ async def admins(message: Message) -> None:
     try:
         members = await bot.get_chat_administrators(message.chat.id)
         lines = ["🛡 <b>Администраторы чата</b>"]
+        seen_ids = set()
         for member in members[:50]:
             u = member.user
-            label = "создатель" if member.status == ChatMemberStatus.CREATOR else "администратор"
+            seen_ids.add(u.id)
+            internal_rank = user_rank(message.chat.id, u.id)
+            label = "создатель Telegram" if member.status == ChatMemberStatus.CREATOR else "администратор Telegram"
+            if internal_rank > 0:
+                label += f" · ранг {internal_rank}: {role_name(internal_rank)}"
             lines.append(f"• {mention(u.id, u.full_name)} — {label}")
+        # Also show Pear CM internal moderators who are not Telegram administrators.
+        ranked_users = db_rows("bot_users", limit=1000, chat_id=message.chat.id)
+        for row in ranked_users:
+            try:
+                uid = int(row.get("user_id", 0))
+                internal_rank = max(0, min(5, int(row.get("rank", 0) or 0)))
+            except (TypeError, ValueError):
+                continue
+            if uid in seen_ids or internal_rank <= 0:
+                continue
+            uname = row.get("first_name") or row.get("username") or f"ID {uid}"
+            lines.append(f"• {mention(uid, uname)} — ранг {internal_rank}: {role_name(internal_rank)}")
         await message.answer("\n".join(lines))
     except Exception:
         await message.answer("Не удалось получить список. Проверьте, что бот добавлен в группу.")
