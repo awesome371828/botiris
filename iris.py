@@ -29,7 +29,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
     BotCommandScopeChat, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
-    ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo,
 )
 from supabase import Client, create_client
 
@@ -123,6 +123,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🏅 Чаты: топ дня"), KeyboardButton(text="🏆 Супер топ чатов")],
             [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
             [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
+            [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url="https://awesome371828.github.io/botiris/"))],
             [KeyboardButton(text="⚠️ Мои варны"), KeyboardButton(text="🛡 Кто админ")],
         ],
         resize_keyboard=True,
