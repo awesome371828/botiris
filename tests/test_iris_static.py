@@ -96,6 +96,26 @@ class PearCMStaticRegressionTests(unittest.TestCase):
                 self.assertEqual(result[1], expected_consumed)
         self.assertIsNone(parse(["2", "года"]))
 
+
+    def test_moderation_and_runtime_safety_guards_are_present(self):
+        for fragment in (
+            "Activity queue is full",
+            "Three active warnings",
+            "Telegram cannot restrict a chat creator or administrator",
+            "Temporary Supabase",
+        ):
+            self.assertIn(fragment.casefold(), self.source.casefold())
+
+    def test_schema_has_query_indexes_for_chat_scoped_lists(self):
+        schema = SCHEMA.read_text(encoding="utf-8").lower()
+        self.assertIn("bot_activity_daily_chat_day_idx", schema)
+        self.assertIn("bot_audit_chat_target_created_idx", schema)
+        self.assertIn("bot_marriages_chat_idx", schema)
+
+    def test_delete_command_is_bounded(self):
+        self.assertIn("requested > 100", self.source)
+        self.assertIn("За один раз можно удалить максимум", self.source)
+
     def test_top_defaults_to_current_chat_in_groups(self):
         self.assertIn("chat_only = is_group(message) and not global_scope", self.source)
         self.assertIn('global_scope = arg.startswith(("все чаты"', self.source)
