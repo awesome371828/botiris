@@ -1464,8 +1464,8 @@ async def auto_moderation_filters(message: Message) -> None:
         # blocking the aiogram event loop for every incoming group message.
         is_command = (message.text or "").lstrip().startswith(("/", "!", "."))
         if not is_command and str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower() == "on":
-            try: await message.delete()
-            except Exception: pass
+            # Maintenance mode must never silently delete ordinary users' messages.
+            # Just skip bot-side processing until maintenance is disabled.
             return
         if not is_command and await asyncio.to_thread(_is_globally_banned, message.from_user.id):
             try: await message.delete()
