@@ -253,6 +253,14 @@ def audit(chat_id: int, actor_id: int, action: str, target_id: int | None = None
     except RuntimeError:
         db_insert("bot_audit", payload)
 
+async def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None, details: str = "") -> None:
+    """Persist critical moderation audit events before dependent warning-count reads."""
+    payload = {
+        "chat_id": chat_id, "actor_id": actor_id, "action": action,
+        "target_id": target_id, "details": details[:1000],
+    }
+    await asyncio.to_thread(db_insert, "bot_audit", payload)
+
 def set_warns(chat_id: int, user_id: int, amount: int) -> int:
     user = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {
         "user_id": user_id, "chat_id": chat_id, "username": None,
@@ -282,9 +290,8 @@ def active_warn_count(chat_id: int, user_id: int) -> int:
         if stamp >= cutoff:
             relevant.append((stamp, action))
     if not relevant:
-        # Preserve compatibility if the audit table is not available or has no recent ledger.
-        row = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
-        return max(0, int(row.get("warns") or 0))
+        # Warnings older than seven days are expired, including legacy counter-only warnings.
+        return 0
     count = 0
     for _, action in sorted(relevant):
         if action == "warn":
@@ -762,6 +769,14 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     elif target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя применять это действие к владельцу бота.")
         return None
+    if message.from_user and target[0] != message.from_user.id:
+        actor_is_admin = await is_admin(bot, message.chat.id, message.from_user.id)
+        if not actor_is_admin:
+            actor_rank = user_rank(message.chat.id, message.from_user.id)
+            target_rank = user_rank(message.chat.id, target[0])
+            if target_rank >= actor_rank and target_rank > 0:
+                await message.answer("⛔ Нельзя модерировать участника с равным или более высоким внутренним рангом.")
+                return None
     return target
 
 async def check_mod(message: Message) -> bool:
@@ -961,8 +976,8 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\\s|$)"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -985,8 +1000,8 @@ async def warn_cmd(message: Message) -> None:
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": before + 1, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
-    audit(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
-          f"warns={before + 1}; reason={reason}; expires_in_days=7")
+    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
+                      f"warns={before + 1}; reason={reason}; expires_in_days=7")
     count = before + 1
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     await message.answer(
@@ -1012,7 +1027,7 @@ async def warn_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -1028,11 +1043,11 @@ async def unwarn_cmd(message: Message) -> None:
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
-    audit(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={max(0,count-1)}")
+    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={max(0,count-1)}")
     await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{max(0,count-1)}</b>.")
     
 @router.message(Command("clearwarns"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
 async def clearwarns_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -1044,7 +1059,7 @@ async def clearwarns_cmd(message: Message) -> None:
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": 0, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
-    audit(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
+    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
     await message.answer(f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.")
 
 # ── Message tools ─────────────────────────────────────────────────────────────
@@ -1532,7 +1547,7 @@ async def auto_moderation_filters(message: Message) -> None:
 
     # Only explicitly globally banned users are deleted here; maintenance mode never deletes.
     if message.from_user.id != OWNER_ID:
-        is_command = bool(re.match(r"^\\s*(?:/|[!.])", message.text or ""))
+        is_command = bool(re.match(r"^\s*(?:/|[!.])", message.text or ""))
         if not is_command and str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower() == "on":
             return
         if not is_command and await asyncio.to_thread(_is_globally_banned, message.from_user.id):
@@ -1545,7 +1560,7 @@ async def auto_moderation_filters(message: Message) -> None:
 
     text_value = message.text or message.caption or ""
     # Never run content filters on commands or administrative commands.
-    if text_value and re.match(r"^\\s*(?:[/!.+-]|мут(?:\\s|$)|анмут(?:\\s|$)|размут(?:\\s|$)|бан(?:\\s|$)|разбан(?:\\s|$)|кик(?:\\s|$)|варн(?:\\s|$)|анварн(?:\\s|$)|снятьварн(?:\\s|$))", text_value, re.I):
+    if text_value and re.match(r"^\s*(?:[/!.+-]|мут(?:\s|$)|анмут(?:\s|$)|размут(?:\s|$)|бан(?:\s|$)|разбан(?:\s|$)|кик(?:\s|$)|варн(?:\s|$)|анварн(?:\s|$)|снятьварн(?:\s|$))", text_value, re.I):
         return
     if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
         return
@@ -1554,8 +1569,8 @@ async def auto_moderation_filters(message: Message) -> None:
     reason = None
     now = time.monotonic()
     key = (message.chat.id, message.from_user.id)
-    normalized = re.sub(r"[^\\w\\s]", " ", text_value.lower(), flags=re.UNICODE)
-    normalized = re.sub(r"\\s+", " ", normalized).strip()
+    normalized = re.sub(r"[^\w\s]", " ", text_value.lower(), flags=re.UNICODE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
 
     # Smart anti-spam is opt-in. Short conversational replies are excluded to prevent false positives.
     if settings.get("antispam") and len(normalized) >= 12 and not message.new_chat_members:
@@ -1602,7 +1617,7 @@ async def auto_moderation_filters(message: Message) -> None:
             reason = "реклама (совпадение с ключевым словом)"
         elif settings.get("antikripta") and any(word in text_value.lower() for word in ("bitcoin", "btc", "ethereum", "usdt", "крипта", "binance", "bybit", "кошелёк", "wallet")):
             reason = "криптореклама"
-        elif settings.get("antiall") and re.search(r"@(all|everyone|here)\\b", text_value, re.I):
+        elif settings.get("antiall") and re.search(r"@(all|everyone|here)\b", text_value, re.I):
             reason = "массовое упоминание"
         elif settings.get("anticaps"):
             letters = [c for c in text_value if c.isalpha()]
