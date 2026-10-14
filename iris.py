@@ -559,7 +559,7 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
             i += 1
             continue
         word_amount = number_words.get(token)
-        numeric = re.fullmatch(r"(\\d{1,7})\\s*([a-zа-яё]+)?", token, re.I)
+        numeric = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
         if numeric or word_amount is not None:
             amount = int(numeric.group(1)) if numeric else int(word_amount)
             unit = numeric.group(2) if numeric else None
@@ -593,7 +593,7 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
         if i >= len(tokens):
             break
         next_token = tokens[i].strip().lower().strip(",.;:")
-        if next_token != "и" and not re.match(r"^\\d", next_token) and next_token not in number_words and _unit_seconds(next_token) is None:
+        if next_token != "и" and not re.match(r"^\d", next_token) and next_token not in number_words and _unit_seconds(next_token) is None:
             break
     # Telegram treats bans at/over the 366-day boundary as permanent; cap timed bans at 365 days.
     if consumed == 0 or total <= 0 or total > 365 * 86400:
