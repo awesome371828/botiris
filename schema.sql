@@ -150,6 +150,11 @@ alter table public.bot_appeals add column if not exists closed_reason text;
 alter table public.bot_appeals add column if not exists created_at timestamptz not null default now();
 alter table public.bot_appeals add column if not exists closed_at timestamptz;
 
+create index if not exists bot_users_chat_last_seen_idx
+    on public.bot_users (chat_id, last_seen desc);
+create index if not exists bot_marriages_chat_status_created_idx
+    on public.bot_marriages (chat_id, status, created_at desc);
+
 create index if not exists bot_audit_chat_created_idx
     on public.bot_audit (chat_id, created_at desc);
 create index if not exists bot_audit_created_idx
