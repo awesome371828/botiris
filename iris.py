@@ -2902,7 +2902,7 @@ async def promote_rank_cmd(message: Message) -> None:
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\s+(?:ранг|чин|админа|администратора|модератора)|убрать\s+(?:ранг|чин)|разжаловать|лишить\s+ранга|понизить\s+в\s+должности|demote)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить\s+в\s+должности|снять\s+(?:ранг|чин|админ(?:а|у|ом|е)?|администратор(?:а|у|ом|е)?|модератор(?:а|у|ом|е)?)|убрать\s+(?:ранг|чин)|лишить\s+ранга|понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|разжаловать|demote)(?:\s|$)"))
 async def demote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
