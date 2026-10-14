@@ -1830,9 +1830,12 @@ async def rank_cmd(message: Message) -> None:
         await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
         return
     user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
+    saved = await asyncio.to_thread(db_upsert, "bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
         "username": user.get("username"), "first_name": user.get("first_name") or target[1],
         "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": rank}, "user_id,chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить ранг. Проверь подключение Supabase и таблицу bot_users.")
+        return
     invalidate_user_rank(message.chat.id, target[0])
     audit(message.chat.id, message.from_user.id, "set_rank", target[0], f"rank={rank}")
     await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
@@ -1888,7 +1891,10 @@ async def promote_rank_cmd(message: Message) -> None:
     payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
         "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
         "messages": int(user.get("messages", 0)), "rank": new_rank}
-    await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
+    saved = await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить повышение ранга. Проверь подключение Supabase и таблицу bot_users.")
+        return
     invalidate_user_rank(message.chat.id, target[0])
     await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
@@ -1941,7 +1947,10 @@ async def demote_rank_cmd(message: Message) -> None:
     payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
         "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
         "messages": int(user.get("messages", 0)), "rank": new_rank}
-    await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
+    saved = await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить понижение ранга. Проверь подключение Supabase и таблицу bot_users.")
+        return
     invalidate_user_rank(message.chat.id, target[0])
     await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬇️ <b>{escape(target[1])}</b> был понижен до роли <b>{role_name(new_rank)}</b>.")
@@ -2991,7 +3000,23 @@ async def online_cmd(message: Message) -> None:
 # ── Global error handling / startup ──────────────────────────────────────────
 @dp.errors()
 async def global_error_handler(event) -> bool:
-    log.error("Unhandled update error: %r", getattr(event, "exception", event))
+    exc = getattr(event, "exception", event)
+    log.exception("Unhandled update error: %r", exc)
+    # Never leave a user with complete silence after a handler crashes.
+    update = getattr(event, "update", None)
+    message = (
+        getattr(update, "message", None)
+        or getattr(update, "edited_message", None)
+        or getattr(getattr(update, "callback_query", None), "message", None)
+    )
+    if message is not None:
+        try:
+            await message.answer(
+                "⚠️ Команда вызвала внутреннюю ошибку. Ошибка записана в журнал; "
+                "повтори команду позже или сообщи владельцу бота."
+            )
+        except Exception:
+            log.exception("Could not send the user-facing internal-error notice")
     return True
 
 async def main() -> None:
