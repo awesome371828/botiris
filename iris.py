@@ -2164,7 +2164,7 @@ async def main() -> None:
     ]
     await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
-    await bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
+    await bot.set_my_commands(private_commands + owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     await bot.delete_webhook(drop_pending_updates=False)
     log.info("Bot started")
     try:
