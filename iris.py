@@ -271,11 +271,6 @@ def audit(chat_id: int, actor_id: int, action: str, target_id: int | None = None
     # Audit logging must not add a Supabase round-trip to unrelated commands.
     loop.create_task(asyncio.to_thread(db_insert, "bot_audit", payload))
 
-def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
-               details: str | None = None) -> bool:
-    """Synchronous persistence primitive used by audit_wait_async; retained for worker threads."""
-    return bool(db_insert("bot_audit", _audit_payload(chat_id, actor_id, action, target_id, details)))
-
 async def audit_wait(chat_id: int, actor_id: int, action: str, target_id: int | None = None,
                      details: str | None = None) -> bool:
     """Persist an audit event without blocking Telegram update processing."""
