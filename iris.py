@@ -798,83 +798,84 @@ async def delete_message_cmd(message: Message) -> None:
             return
 
         count = max(1, requested)
-        # Telegram's deleteMessages API removes up to 100 IDs in one request.
-        # Use IDs actually observed by this process instead of probing thousands
-        # of nonexistent IDs one-by-one (which made the command painfully slow).
-        recent_ids = _RECENT_MESSAGE_IDS.get(message.chat.id, ())
-        candidates: list[int] = []
-        seen: set[int] = set()
-        for mid in reversed(recent_ids):
-            if mid >= message.message_id or mid in seen:
-                continue
-            seen.add(mid)
-            candidates.append(mid)
-            if len(candidates) >= count:
-                break
-
-        deleted_request_count = len(candidates)
+        # Bot API has no getChatHistory method. Message IDs in a chat are monotonic,
+        # so target the immediately preceding ID range instead of only IDs observed
+        # by this process. This includes messages sent by the bot and by other users.
+        first_id = max(1, message.message_id - count)
+        candidates = list(range(first_id, message.message_id))
         forbidden = False
+        bulk_ok = False
+        individually_deleted = 0
+
         if candidates:
             try:
-                await bot.delete_messages(
+                bulk_ok = bool(await bot.delete_messages(
                     chat_id=message.chat.id,
                     message_ids=candidates,
-                )
-            except TelegramForbiddenError:
-                forbidden = True
+                ))
             except TelegramRetryAfter as exc:
-                await asyncio.sleep(float(exc.retry_after) + 0.1)
+                await asyncio.sleep(float(exc.retry_after) + 0.2)
                 try:
-                    await bot.delete_messages(
+                    bulk_ok = bool(await bot.delete_messages(
                         chat_id=message.chat.id,
                         message_ids=candidates,
-                    )
+                    ))
                 except TelegramForbiddenError:
                     forbidden = True
-                except Exception as exc2:
-                    log.warning("Bulk delete failed for chat=%s: %s", message.chat.id, exc2)
-                    # Rare fallback: try IDs individually only after bulk API failure.
-                    for mid in candidates:
-                        try:
-                            await bot.delete_message(chat_id=message.chat.id, message_id=mid)
-                        except TelegramRetryAfter as retry:
-                            await asyncio.sleep(float(retry.retry_after) + 0.1)
-                            try:
-                                await bot.delete_message(chat_id=message.chat.id, message_id=mid)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-            except TelegramBadRequest as exc:
-                log.warning("Bulk delete rejected for chat=%s: %s", message.chat.id, exc)
-                # Fallback handles API/server versions that reject the bulk method.
-                for mid in candidates:
-                    try:
-                        await bot.delete_message(chat_id=message.chat.id, message_id=mid)
-                    except TelegramRetryAfter as retry:
-                        await asyncio.sleep(float(retry.retry_after) + 0.1)
-                        try:
-                            await bot.delete_message(chat_id=message.chat.id, message_id=mid)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                except Exception as retry_exc:
+                    log.warning("Bulk delete retry failed chat=%s: %s", message.chat.id, retry_exc)
+            except TelegramForbiddenError:
+                forbidden = True
             except Exception as exc:
-                log.exception("Bulk delete failed for chat=%s: %s", message.chat.id, exc)
+                log.warning("Bulk delete failed chat=%s: %s; trying individual deletes", message.chat.id, exc)
 
+            # Bulk deletion is fast (one API request). If Telegram rejects the
+            # batch, fall back to a small bounded number of concurrent requests.
+            if not bulk_ok and not forbidden:
+                semaphore = asyncio.Semaphore(5)
+                async def delete_one(mid: int) -> bool:
+                    async with semaphore:
+                        try:
+                            return bool(await bot.delete_message(chat_id=message.chat.id, message_id=mid))
+                        except TelegramRetryAfter as retry:
+                            await asyncio.sleep(float(retry.retry_after) + 0.2)
+                            try:
+                                return bool(await bot.delete_message(chat_id=message.chat.id, message_id=mid))
+                            except Exception as inner_exc:
+                                log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                                return False
+                        except TelegramBadRequest as inner_exc:
+                            log.debug("Skipped chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                            return False
+                        except TelegramForbiddenError:
+                            return False
+                        except Exception as inner_exc:
+                            log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                            return False
+                results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
+                individually_deleted = sum(results)
+
+        # Remove the command itself as well, so it doesn't remain in the chat.
         try:
             await message.delete()
         except Exception:
             pass
-        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};candidate_ids={deleted_request_count}")
+
+        audit(
+            message.chat.id, message.from_user.id, "purge_recent",
+            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};bulk_ok={bulk_ok};fallback_deleted={individually_deleted}",
+        )
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
-        elif not candidates:
-            await message.answer("ℹ️ Пока нечего удалять: бот не видел предыдущие сообщения в этом чате. Проверь, что бот работает и имеет доступ к сообщениям.")
+        elif bulk_ok:
+            await message.answer(
+                f"🧹 Запрос на удаление последних <b>{count} сообщений</b> отправлен, включая сообщения бота."
+                "\nTelegram может пропустить уже удалённые, старые или служебные сообщения."
+            )
         else:
             await message.answer(
-                f"🧹 Запрос на удаление последних сообщений выполнен: <b>{deleted_request_count}</b>."
-                "\nTelegram автоматически пропускает уже удалённые и недоступные сообщения."
+                f"🧹 Удалено сообщений: <b>{individually_deleted}</b> из последних {count} ID."
+                "\nЕсли число меньше, Telegram не разрешил удалить часть сообщений или часть ID не существует."
             )
         return
 
@@ -1154,8 +1155,8 @@ async def divorce_cmd(message: Message) -> None:
 
 # ── Integrated moderation stages from moderation.py ──────────────────────────
 # Stage A: durable per-chat filter settings and human-readable time/reason parsing.
-def get_chat_settings(chat_id: int) -> dict[str, Any]:
-    if chat_id in _CHAT_SETTINGS_CACHE:
+def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, Any]:
+    if not force_refresh and chat_id in _CHAT_SETTINGS_CACHE:
         return _CHAT_SETTINGS_CACHE[chat_id]
     settings = dict(FILTER_DEFAULTS)
     row = db_one("bot_chat_settings", chat_id=chat_id)
@@ -1699,7 +1700,7 @@ async def open_chat_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     async with _CHAT_ACTION_LOCKS[message.chat.id]:
-        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id, True)
         if not settings.get("chat_locked_by_bot"):
             await message.answer("ℹ️ Чат уже открыт.")
             return
@@ -1719,6 +1720,11 @@ async def open_chat_cmd(message: Message) -> None:
             settings.pop("chat_permissions_before_lock", None)
             settings["chat_locked_by_bot"] = False
             save_chat_settings(message.chat.id, settings)
+            if db is not None:
+                await asyncio.to_thread(db_upsert, "bot_chat_settings", {
+                    "chat_id": message.chat.id, "settings": dict(settings),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, "chat_id")
             audit(message.chat.id, message.from_user.id, "chat_open")
             await message.answer("🔓 Чат открыт.")
         except Exception as exc:
@@ -1733,7 +1739,7 @@ async def close_chat_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     async with _CHAT_ACTION_LOCKS[message.chat.id]:
-        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id, True)
         if settings.get("chat_locked_by_bot"):
             await message.answer("ℹ️ Чат уже закрыт. Открыть: <code>+чат</code>.")
             return
@@ -1758,6 +1764,11 @@ async def close_chat_cmd(message: Message) -> None:
             )
             settings["chat_locked_by_bot"] = True
             save_chat_settings(message.chat.id, settings)
+            if db is not None:
+                await asyncio.to_thread(db_upsert, "bot_chat_settings", {
+                    "chat_id": message.chat.id, "settings": dict(settings),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, "chat_id")
             audit(message.chat.id, message.from_user.id, "chat_close")
             await message.answer("🔒 Чат закрыт. Открыть: <code>+чат</code>.")
         except Exception as exc:
