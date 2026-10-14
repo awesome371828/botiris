@@ -147,6 +147,14 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Не удалось сохранить снятие варна", self.source)
         self.assertIn("Не удалось сбросить предупреждения", self.source)
 
+    def test_chat_lock_persists_restore_state_before_telegram_change(self):
+        close_start = self.source.index("async def close_chat_cmd")
+        close_end = self.source.index("@router.message(Command(\"schedule\"", close_start)
+        close_body = self.source[close_start:close_end]
+        self.assertLess(close_body.index("pre_saved = await asyncio.to_thread(db_upsert"), close_body.index("await bot.set_chat_permissions"))
+        self.assertIn("Не закрываю чат: база данных не настроена", close_body)
+        self.assertIn("не удалось сохранить исходные разрешения", close_body)
+
     def test_chat_lock_restores_saved_telegram_permissions(self):
         self.assertIn("current_permissions = getattr(chat_info, \"permissions\", None)", self.source)
         self.assertIn("current_permissions.model_dump(exclude_none=True)", self.source)
