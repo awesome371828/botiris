@@ -6,6 +6,12 @@ Set TELEGRAM_BOT_TOKEN, SUPABASE_URL and SUPABASE_SERVICE_KEY in environment.
 from __future__ import annotations
 
 import asyncio
+import ast
+import json
+import platform
+import random
+import sys
+from io import BytesIO
 import logging
 import os
 import re
@@ -21,7 +27,7 @@ from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
-    BotCommand, ChatPermissions, KeyboardButton, Message,
+    BotCommand, ChatPermissions, KeyboardButton, Message, BufferedInputFile,
     ReplyKeyboardMarkup, ReplyKeyboardRemove,
 )
 from supabase import Client, create_client
@@ -387,7 +393,9 @@ async def help_command(message: Message) -> None:
         "• /info или инфо — информация об участнике; /logs или логи — последние действия\n"
         "• +антиссылка / -антиссылка — управление фильтрами (и другие +анти…/-анти…)\n"
         "• /settrigger 3 mute 1ч — настройка наказания за варны; /rank — ваш ранг\n"
-        "• /time — текущее московское время (Europe/Moscow, UTC+3)\n\n"
+        "• /time или дата — текущее московское время (Europe/Moscow, UTC+3); /calc 2+2 — калькулятор; /random 1 100 — случайное число; /dice — кубик\n"
+        "• /activity — активность; /quote ответом — цитата; /favorites ответом — избранное; /achievements — достижения; /suggest текст — предложение\n\n"
+        "<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
         reply_markup=main_keyboard(),
@@ -823,6 +831,23 @@ async def top_cmd(message: Message) -> None:
 @router.message(Command("logs"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?логи(?:\s|$)"))
 async def logs_cmd(message: Message) -> None:
+    # In private chat, allow the configured owner to inspect global audit logs.
+    if message.chat.type == ChatType.PRIVATE and message.from_user and message.from_user.id == OWNER_ID:
+        rows = db_rows("bot_audit", limit=15, order="created_at")
+        if not rows:
+            await message.answer("📒 Глобальные логи пусты или bot_audit недоступна.")
+            return
+        lines = ["📒 <b>Глобальные действия</b>"]
+        for row in rows:
+            created = str(row.get("created_at") or "")
+            try:
+                created = format_moscow_time(datetime.fromisoformat(created.replace("Z", "+00:00")))
+            except Exception:
+                pass
+            details = (row.get("details") or "—").replace("<", "&lt;").replace(">", "&gt;")[:160]
+            lines.append(f"• <code>{created}</code> · {row.get('action','?')} · actor <code>{row.get('actor_id','?')}</code> · target <code>{row.get('target_id') or '—'}</code>\n  {details}")
+        await message.answer("\n".join(lines))
+        return
     if not await require_admin(message):
         return
     rows = db_rows("bot_audit", limit=10, order="created_at", chat_id=message.chat.id)
@@ -1011,6 +1036,17 @@ async def auto_moderation_filters(message: Message) -> None:
     # This handler is the catch-all for group messages, so activity is recorded
     # here (a handler registered earlier would swallow updates in aiogram 3).
     await track_activity(message)
+    # In maintenance mode, suppress ordinary group messages but keep commands reachable.
+    if message.from_user.id != OWNER_ID:
+        if str(_global_setting("maintenance", "off")).lower() == "on" and not (message.text or "").lstrip().startswith(("/", "!", ".")):
+            try: await message.delete()
+            except Exception: pass
+            return
+        banned = db_one("bot_global_bans", user_id=message.from_user.id, active=True)
+        if banned and not (message.text or "").lstrip().startswith(("/", "!", ".")):
+            try: await message.delete()
+            except Exception: pass
+            return
     # Never filter commands; moderation/admin commands must remain reachable.
     text_value = message.text or message.caption or ""
     if text_value and re.match(r"^\s*(?:[/!.+-]|мут(?:\s|$)|бан(?:\s|$)|кик(?:\s|$)|варн(?:\s|$)|размут(?:\s|$))", text_value, re.I):
@@ -1087,6 +1123,453 @@ async def auto_moderation_filters(message: Message) -> None:
 # handlers and automatic filters can actually run first.
 router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)(auto_moderation_filters)
 
+
+# ── Owner console + community utilities (increment 2) ────────────────────────
+_PROCESS_STARTED = time.monotonic()
+_RUNTIME_FLAGS: dict[str, Any] = {"maintenance": False}
+
+OWNER_HELP = (
+    "<b>🛠 Панель овнера Pear CM</b>\n\n"
+    "<b>Диагностика</b>\n"
+    "/status — статус и время работы\n/ping — проверка Telegram/Supabase\n"
+    "/diag — конфигурация без вывода секретов\n/logs [число] — последние записи аудита\n"
+    "/globalstats — статистика базы\n/exportstats — выгрузка статистики JSON\n"
+    "/modules — состояние основных модулей\n/version — версия сборки\n"
+    "/load — доступная нагрузочная информация\n/permissions — проверка прав бота в группе\n\n"
+    "<b>Управление</b>\n/maintenance on|off|status — режим обслуживания\n"
+    "/operator ID — выдать операторский доступ\n/revokeoperator ID — отозвать доступ\n"
+    "/operators — список операторов\n/globalban ID причина — глобальный запрет в боте\n"
+    "/globalunban ID — снять глобальный запрет\n/audit ID — аудит действий по ID\n\n"
+    "<i>Овнерская панель доступна только BOT_OWNER_ID.</i>"
+)
+
+def _global_setting(key: str, default: Any = None) -> Any:
+    row = db_one("bot_global_settings", key=key)
+    if row is not None:
+        return row.get("value", default)
+    # Runtime fallback keeps simple settings available when the migration is absent.
+    return _RUNTIME_FLAGS.get(key, default)
+
+def _set_global_setting(key: str, value: Any) -> bool:
+    _RUNTIME_FLAGS[key] = value
+    row = db_upsert("bot_global_settings", {
+        "key": key, "value": str(value),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }, "key")
+    return row is not None
+
+def _operator_active(user_id: int) -> bool:
+    row = db_one("bot_operators", user_id=user_id, active=True)
+    return bool(row and row.get("active"))
+
+async def _owner_only(message: Message) -> bool:
+    if message.from_user and message.from_user.id == OWNER_ID:
+        return True
+    await message.answer("⛔ Эта команда доступна только овнеру бота.")
+    return False
+
+async def _owner_or_operator(message: Message) -> bool:
+    if message.from_user and (message.from_user.id == OWNER_ID or _operator_active(message.from_user.id)):
+        return True
+    await message.answer("⛔ Нужен доступ овнера или активного оператора.")
+    return False
+
+@router.message(Command("owner", "ownerpanel"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера)\s*$"))
+async def owner_panel(message: Message) -> None:
+    if not await _owner_only(message):
+        return
+    await message.answer(OWNER_HELP, reply_markup=main_keyboard())
+
+@router.message(Command("status", "статусбота"))
+@router.message(F.text.regexp(r"(?i)^\s*статус бота\s*$"))
+async def owner_status(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    try:
+        me = await bot.get_me()
+        telegram_state = f"OK (@{me.username or 'unknown'})"
+    except Exception as exc:
+        telegram_state = f"ошибка: {type(exc).__name__}"
+    uptime = max(0, int(time.monotonic() - _PROCESS_STARTED))
+    h, r = divmod(uptime, 3600); m, s = divmod(r, 60)
+    users = db_rows("bot_users", limit=1000)
+    await message.answer(
+        "<b>📡 Статус Pear CM</b>\n"
+        f"Telegram API: <code>{telegram_state}</code>\n"
+        f"Процесс: <b>работает</b> · uptime <code>{h}ч {m}м {s}с</code>\n"
+        f"База: <b>{'настроена' if db is not None else 'не настроена'}</b>\n"
+        f"Записей пользователей в выборке: <b>{len(users)}</b>\n"
+        f"Техобслуживание: <b>{'включено' if str(_global_setting('maintenance','off')).lower() == 'on' else 'выключено'}</b>\n"
+        f"Московское время: <code>{format_moscow_time(moscow_now())}</code>"
+    )
+
+@router.message(Command("ping", "пинг"))
+async def owner_ping(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    start = time.perf_counter()
+    try:
+        await bot.get_me()
+        telegram = f"{(time.perf_counter()-start)*1000:.0f} мс"
+    except Exception as exc:
+        telegram = f"ошибка ({type(exc).__name__})"
+    db_result = "не настроена"
+    if db is not None:
+        start = time.perf_counter()
+        try:
+            db.table("bot_users").select("user_id").limit(1).execute()
+            db_result = f"OK · {(time.perf_counter()-start)*1000:.0f} мс"
+        except Exception as exc:
+            db_result = f"ошибка ({type(exc).__name__})"
+    await message.answer(f"🏓 Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>")
+
+@router.message(Command("diag", "diagnostics"))
+@router.message(F.text.regexp(r"(?i)^\s*диагностика\s*$"))
+async def owner_diagnostics(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    checks = [
+        ("Python", sys.version.split()[0]),
+        ("Платформа", platform.platform()),
+        ("Часовой пояс", "Europe/Moscow (UTC+3)"),
+        ("TELEGRAM_BOT_TOKEN задан", "да" if BOT_TOKEN else "нет"),
+        ("SUPABASE_URL задан", "да" if SUPABASE_URL else "нет"),
+        ("SUPABASE_SERVICE_KEY задан", "да" if SUPABASE_KEY else "нет"),
+        ("BOT_OWNER_ID", str(OWNER_ID)),
+    ]
+    lines = [f"• {name}: <code>{val}</code>" for name, val in checks]
+    if db is not None:
+        for table in ("bot_users", "bot_audit", "bot_chat_settings", "bot_global_settings", "bot_operators", "bot_global_bans"):
+            try:
+                db.table(table).select("*").limit(1).execute()
+                lines.append(f"• {table}: <b>OK</b>")
+            except Exception:
+                lines.append(f"• {table}: <b>нет доступа/таблица не создана</b>")
+    await message.answer("<b>🧪 Диагностика</b>\n" + "\n".join(lines) + "\n\nСекретные значения не выводятся.")
+
+@router.message(Command("globalstats", "глобальнаястатистика"))
+@router.message(F.text.regexp(r"(?i)^\s*глобальная статистика\s*$"))
+async def owner_global_stats(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    rows = db_rows("bot_users", limit=1000)
+    audits = db_rows("bot_audit", limit=1000)
+    chats = {r.get("chat_id") for r in rows if r.get("chat_id") is not None}
+    messages = sum(int(r.get("messages") or 0) for r in rows)
+    warns = sum(int(r.get("warns") or 0) for r in rows)
+    await message.answer(
+        "<b>🌐 Глобальная статистика</b>\n"
+        f"Пользовательских записей (выборка до 1000): <b>{len(rows)}</b>\n"
+        f"Чатов в выборке: <b>{len(chats)}</b>\n"
+        f"Сообщений по счётчикам: <b>{messages}</b>\nПредупреждений по счётчикам: <b>{warns}</b>\n"
+        f"Записей аудита в выборке: <b>{len(audits)}</b>\nВремя: <code>{format_moscow_time(moscow_now())}</code>"
+    )
+
+@router.message(Command("logs"))
+@router.message(F.text.regexp(r"(?i)^\s*логи(?:\s+\d+)?\s*$"))
+async def owner_logs(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    count = 10
+    args = args_after_command(message)
+    # Russian phrase has no slash command token; parse trailing integer directly.
+    match = re.search(r"(?:логи|/logs)\s+(\d+)", message.text or "", re.I)
+    if match:
+        count = max(1, min(20, int(match.group(1))))
+    rows = db_rows("bot_audit", limit=count, order="created_at")
+    if not rows:
+        await message.answer("Логи пока пусты или таблица bot_audit недоступна.")
+        return
+    lines=[]
+    for row in rows:
+        created = row.get("created_at")
+        stamp = str(created or "время неизвестно")
+        try:
+            stamp = format_moscow_time(datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+        except Exception:
+            pass
+        detail = (row.get("details") or "—").replace("<", "&lt;").replace(">", "&gt;")[:150]
+        lines.append(f"• <code>{stamp}</code> · <b>{row.get('action','?')}</b> · actor <code>{row.get('actor_id','?')}</code> · target <code>{row.get('target_id') or '—'}</code>\n  {detail}")
+    await message.answer("<b>📜 Последние события</b>\n" + "\n".join(lines))
+
+@router.message(Command("audit"))
+@router.message(F.text.regexp(r"(?i)^\s*аудит\s+\d+\s*$"))
+async def owner_audit_user(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    match = re.search(r"(?:/audit|аудит)\s+(\d+)", message.text or "", re.I)
+    if not match:
+        await message.answer("Формат: <code>/audit USER_ID</code> или <code>аудит USER_ID</code>")
+        return
+    uid=int(match.group(1))
+    rows=db_rows("bot_audit", limit=20, order="created_at", target_id=uid)
+    if not rows:
+        await message.answer("По этому ID записей аудита не найдено.")
+        return
+    await message.answer("<b>Аудит ID " + str(uid) + "</b>\n" + "\n".join(
+        f"• {r.get('action','?')} · {r.get('created_at','?')} · {(r.get('details') or '—')[:180]}" for r in rows
+    ))
+
+@router.message(Command("version", "версия"))
+async def owner_version(message: Message) -> None:
+    if not await _owner_or_operator(message): return
+    await message.answer(f"Pear CM · сборка <code>2026.10-owner-console</code>\nPython <code>{sys.version.split()[0]}</code>\nМСК <code>{format_moscow_time(moscow_now())}</code>")
+
+@router.message(Command("modules", "модули"))
+async def owner_modules(message: Message) -> None:
+    if not await _owner_or_operator(message): return
+    modules = ["профили/активность", "модерация: mute/ban/unban/kick/warn", "аудит действий", "фильтры антиспам", "браки", "московское время", "панель овнера", "диагностика", "статистика"]
+    await message.answer("<b>🧩 Модули основного iris.py</b>\n" + "\n".join("• " + m + " — загружен" for m in modules) + "\n\nОтдельный moderation_full.py не импортируется автоматически: у него legacy-зависимости.")
+
+@router.message(Command("load", "нагрузка"))
+async def owner_load(message: Message) -> None:
+    if not await _owner_or_operator(message): return
+    tasks = len(asyncio.all_tasks()) if hasattr(asyncio, "all_tasks") else -1
+    uptime = int(time.monotonic() - _PROCESS_STARTED)
+    await message.answer(f"<b>⚙️ Нагрузка процесса</b>\nТекущих asyncio-задач: <code>{tasks}</code>\nUptime: <code>{uptime} сек.</code>\nPID: <code>{os.getpid()}</code>\nCPU/RAM точные метрики недоступны без psutil.")
+
+@router.message(Command("maintenance", "техобслуживание"))
+@router.message(F.text.regexp(r"(?i)^\s*техобслуживание(?:\s+(?:on|off|статус|вкл|выкл))?\s*$"))
+async def owner_maintenance(message: Message) -> None:
+    if not await _owner_only(message): return
+    raw=(message.text or "").lower().strip()
+    if raw.startswith("/maintenance"):
+        args=args_after_command(message); action=args[0].lower() if args else "status"
+    else:
+        parts=raw.split(); action=parts[1] if len(parts)>1 else "status"
+    if action in {"on", "вкл", "включить"}:
+        value="on"
+    elif action in {"off", "выкл", "выключить"}:
+        value="off"
+    elif action in {"status", "статус"}:
+        value=str(_global_setting("maintenance", "off")).lower()
+    else:
+        await message.answer("Формат: <code>/maintenance on</code> или <code>/maintenance off</code>.")
+        return
+    if action not in {"status", "статус"}:
+        _set_global_setting("maintenance", value)
+        audit(message.chat.id, message.from_user.id, "maintenance", None, value)
+    await message.answer(f"🛠 Техобслуживание: <b>{'включено' if value == 'on' else 'выключено'}</b>.\n<i>Флаг сохраняется в Supabase, если таблица bot_global_settings создана; иначе действует до перезапуска.</i>")
+
+@router.message(Command("operator"))
+@router.message(F.text.regexp(r"(?i)^\s*выдать доступ\s+\d+\s*$"))
+async def owner_add_operator(message: Message) -> None:
+    if not await _owner_only(message): return
+    match=re.search(r"(?:/operator|выдать доступ)\s+(\d+)", message.text or "", re.I)
+    if not match:
+        await message.answer("Формат: <code>/operator USER_ID</code> или <code>выдать доступ USER_ID</code>")
+        return
+    uid=int(match.group(1))
+    if uid == OWNER_ID:
+        await message.answer("Этот ID уже является овнером."); return
+    row=db_upsert("bot_operators", {"user_id":uid,"active":True,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    if row:
+        audit(message.chat.id, OWNER_ID, "operator_add", uid, "operator granted")
+        await message.answer(f"✅ Доступ оператора выдан ID <code>{uid}</code>.")
+    else:
+        await message.answer("Не удалось сохранить доступ. Создай таблицу bot_operators из schema.sql и проверь Supabase.")
+
+@router.message(Command("revokeoperator"))
+@router.message(F.text.regexp(r"(?i)^\s*отозвать доступ\s+\d+\s*$"))
+async def owner_revoke_operator(message: Message) -> None:
+    if not await _owner_only(message): return
+    match=re.search(r"(?:/revokeoperator|отозвать доступ)\s+(\d+)", message.text or "", re.I)
+    if not match:
+        await message.answer("Формат: <code>/revokeoperator USER_ID</code> или <code>отозвать доступ USER_ID</code>"); return
+    uid=int(match.group(1))
+    row=db_upsert("bot_operators", {"user_id":uid,"active":False,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    if row:
+        audit(message.chat.id, OWNER_ID, "operator_revoke", uid, "operator revoked")
+        await message.answer(f"🔒 Доступ ID <code>{uid}</code> отозван.")
+    else: await message.answer("Не удалось обновить доступ. Проверь таблицу bot_operators в Supabase.")
+
+@router.message(Command("operators", "операторы"))
+async def owner_list_operators(message: Message) -> None:
+    if not await _owner_only(message): return
+    rows=db_rows("bot_operators", limit=100, order="created_at")
+    if not rows:
+        await message.answer("Список пуст или таблица bot_operators не создана."); return
+    await message.answer("<b>Операторы</b>\n" + "\n".join(f"• <code>{r.get('user_id')}</code> — {'активен' if r.get('active') else 'отозван'}" for r in rows))
+
+@router.message(Command("globalban"))
+@router.message(F.text.regexp(r"(?i)^\s*глобальный бан\s+\d+(?:\s+.+)?$"))
+async def owner_global_ban(message: Message) -> None:
+    if not await _owner_only(message): return
+    match=re.match(r"(?is)^\s*(?:/globalban|глобальный бан)\s+(\d+)(?:\s+(.*))?$", message.text or "")
+    if not match:
+        await message.answer("Формат: <code>/globalban USER_ID причина</code>"); return
+    uid=int(match.group(1)); reason=(match.group(2) or "причина не указана")[:500]
+    if uid == OWNER_ID:
+        await message.answer("Нельзя заблокировать овнера."); return
+    row=db_upsert("bot_global_bans", {"user_id":uid,"active":True,"reason":reason,"actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    if row:
+        audit(message.chat.id, OWNER_ID, "globalban", uid, reason)
+        await message.answer(f"🚫 Глобальный запрет включён для ID <code>{uid}</code>. Это блокировка внутри бота, не Telegram-wide бан.")
+    else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
+
+@router.message(Command("globalunban"))
+@router.message(F.text.regexp(r"(?i)^\s*глобальный разбан\s+\d+\s*$"))
+async def owner_global_unban(message: Message) -> None:
+    if not await _owner_only(message): return
+    match=re.search(r"(?:/globalunban|глобальный разбан)\s+(\d+)", message.text or "", re.I)
+    if not match:
+        await message.answer("Формат: <code>/globalunban USER_ID</code>"); return
+    uid=int(match.group(1))
+    row=db_upsert("bot_global_bans", {"user_id":uid,"active":False,"reason":"","actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    if row:
+        audit(message.chat.id, OWNER_ID, "globalunban", uid, "global ban removed")
+        await message.answer(f"✅ Глобальный запрет для ID <code>{uid}</code> снят.")
+    else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
+
+@router.message(Command("exportstats", "экспортстатистики"))
+@router.message(F.text.regexp(r"(?i)^\s*экспорт статистики\s*$"))
+async def owner_export_stats(message: Message) -> None:
+    if not await _owner_only(message): return
+    rows=db_rows("bot_users", limit=1000)
+    data={"generated_at_moscow":format_moscow_time(moscow_now()),"sample_limit":1000,"rows":rows}
+    raw=json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    await message.answer_document(BufferedInputFile(raw, filename="pear_cm_stats.json"), caption="Экспорт статистики (до 1000 записей; секреты не включены).")
+
+@router.message(Command("permissions", "проверкаправ"))
+@router.message(F.text.regexp(r"(?i)^\s*проверка прав\s*$"))
+async def owner_permissions(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Запусти команду в группе, чтобы проверить права бота."); return
+    try:
+        me=await bot.get_me(); member=await bot.get_chat_member(message.chat.id, me.id)
+        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            await message.answer("⚠️ Бот не администратор группы. Мут/бан/удаление/закрепление могут не работать."); return
+        flags=[]
+        for attr,label in (("can_restrict_members","бан/мут"),("can_delete_messages","удаление"),("can_pin_messages","закрепление"),("can_invite_users","приглашения"),("can_manage_chat","управление чатом")):
+            flags.append(f"• {label}: {'✅' if getattr(member,attr,False) else '❌'}")
+        await message.answer("<b>Права бота</b>\n"+"\n".join(flags))
+    except Exception as exc: await message.answer(f"Не удалось проверить права: <code>{type(exc).__name__}</code>")
+
+@router.message(Command("calc", "калькулятор"))
+@router.message(F.text.regexp(r"(?i)^\s*калькулятор\s+.+$"))
+async def calculator_cmd(message: Message) -> None:
+    raw=(message.text or "").strip()
+    expr=re.sub(r"^(?:/calc(?:@\w+)?|/калькулятор|калькулятор)\s*", "", raw, flags=re.I).strip()
+    if not expr:
+        await message.answer("Формат: <code>/calc (12+8)*3</code>"); return
+    try:
+        tree=ast.parse(expr, mode="eval")
+        allowed=(ast.Expression,ast.BinOp,ast.UnaryOp,ast.Constant,ast.Add,ast.Sub,ast.Mult,ast.Div,ast.FloorDiv,ast.Mod,ast.Pow,ast.USub,ast.UAdd,ast.Load)
+        if any(not isinstance(n,allowed) for n in ast.walk(tree)): raise ValueError
+        for n in ast.walk(tree):
+            if isinstance(n,ast.Constant) and (not isinstance(n.value,(int,float)) or abs(n.value)>10**12): raise ValueError
+            if isinstance(n,ast.Pow) and isinstance(n,ast.Constant) and abs(n.value)>10: raise ValueError
+        result=eval(compile(tree,"<calc>","eval"),{"__builtins__":{}},{})
+        if isinstance(result,float) and (result != result or abs(result)==float("inf")): raise ValueError
+        await message.answer(f"🧮 <code>{expr}</code> = <b>{result}</b>")
+    except Exception: await message.answer("Не получилось вычислить. Разрешены числа и операции + - * / // % **, без переменных и функций.")
+
+@router.message(Command("random", "рандом"))
+@router.message(F.text.regexp(r"(?i)^\s*рандом(?:\s+\d+\s+\d+)?\s*$"))
+async def random_number_cmd(message: Message) -> None:
+    raw=(message.text or "").strip()
+    match=re.search(r"(?:/random|/рандом|рандом)\s+(\d+)\s+(\d+)",raw,re.I)
+    lo,hi=(int(match.group(1)),int(match.group(2))) if match else (1,100)
+    if lo>hi or hi-lo>10**9:
+        await message.answer("Укажи корректный диапазон, например <code>/random 1 100</code>."); return
+    await message.answer(f"🎲 Случайное число: <b>{random.randint(lo,hi)}</b>")
+
+@router.message(Command("dice", "кубик"))
+@router.message(F.text.regexp(r"(?i)^\s*кубик\s*$"))
+async def dice_cmd(message: Message) -> None:
+    await message.answer_dice(emoji="🎲")
+
+@router.message(Command("date", "дата"))
+@router.message(F.text.regexp(r"(?i)^\s*дата\s*$"))
+async def date_cmd(message: Message) -> None:
+    now=moscow_now()
+    await message.answer(f"🕒 <b>{format_moscow_time(now)}</b>\nЧасовой пояс: <code>Europe/Moscow (UTC+3)</code>")
+
+@router.message(Command("activity", "актив"))
+@router.message(F.text.regexp(r"(?i)^\s*актив\s*$"))
+async def activity_cmd(message: Message) -> None:
+    rows=db_rows("bot_users",limit=10,order="messages",chat_id=message.chat.id)
+    if not rows:
+        await message.answer("Пока нет статистики активности в этой группе."); return
+    lines=[]
+    for idx,row in enumerate(rows,1):
+        name=(row.get("first_name") or row.get("username") or str(row.get("user_id"))).replace("<","&lt;").replace(">","&gt;")
+        lines.append(f"{idx}. {name} — <b>{int(row.get('messages') or 0)}</b> сообщений")
+    await message.answer("<b>📈 Активные участники (сохранённые счётчики)</b>\n"+"\n".join(lines))
+
+@router.message(Command("suggest", "предложение"))
+@router.message(F.text.regexp(r"(?i)^\s*предложение\s+.+$"))
+async def suggestion_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    raw=(message.text or "")
+    text_value=re.sub(r"^(?:/suggest(?:@\w+)?|/предложение|предложение)\s*", "", raw, flags=re.I).strip()
+    if not text_value:
+        await message.answer("Формат: <code>/suggest идея</code>"); return
+    row=db_insert("bot_reports", {"chat_id":message.chat.id,"reporter_id":message.from_user.id,"message_id":None,"details":"ПРЕДЛОЖЕНИЕ: "+text_value[:1400],"status":"suggestion","created_at":datetime.now(timezone.utc).isoformat()})
+    await message.answer("💡 Предложение сохранено." if row else "Таблица bot_reports недоступна. Примените schema.sql.")
+
+@router.message(Command("quote", "цитата"))
+@router.message(F.text.regexp(r"(?i)^\s*цитата\s*$"))
+async def quote_cmd(message: Message) -> None:
+    if not message.reply_to_message:
+        await message.answer("Ответь на сообщение командой <code>/quote</code> или <code>цитата</code>."); return
+    src=message.reply_to_message
+    text_value=(src.text or src.caption or "[сообщение без текста]")[:2500]
+    author=src.from_user.full_name if src.from_user else "неизвестный автор"
+    await message.answer(f"<blockquote>{text_value.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')}</blockquote>\n— {author}\n<code>{format_moscow_time(moscow_now())}</code>")
+
+@router.message(Command("favorites", "избранное"))
+@router.message(F.text.regexp(r"(?i)^\s*избранное\s*$"))
+async def favorites_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    if not message.reply_to_message:
+        await message.answer("Ответь на сообщение командой <code>/favorites</code>, чтобы сохранить его в избранное."); return
+    src=message.reply_to_message
+    text_value=(src.text or src.caption or f"message_id={src.message_id}")[:2500]
+    row=db_insert("bot_notes", {"user_id":message.from_user.id,"content":f"ИЗБРАННОЕ · chat={src.chat.id} · message={src.message_id}\n{text_value}","created_at":datetime.now(timezone.utc).isoformat()})
+    await message.answer("⭐ Сообщение сохранено в личные заметки." if row else "Не удалось сохранить: проверь таблицу bot_notes из schema.sql.")
+
+@router.message(Command("achievements", "достижения"))
+@router.message(F.text.regexp(r"(?i)^\s*достижения\s*$"))
+async def achievements_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    row=db_one("bot_users",user_id=message.from_user.id,chat_id=message.chat.id) or {}
+    msgs=int(row.get("messages") or 0); warns=int(row.get("warns") or 0)
+    badges=[]
+    if msgs>=1: badges.append("🌱 Первое сообщение")
+    if msgs>=100: badges.append("💬 100 сообщений")
+    if msgs>=1000: badges.append("🔥 1000 сообщений")
+    if warns==0 and msgs>=50: badges.append("🛡 Аккуратный участник")
+    await message.answer("<b>🏅 Достижения</b>\n"+("\n".join(badges) if badges else "Пока нет достижений — участвуй в общении!"))
+
+@router.message(Command("language", "язык"))
+@router.message(F.text.regexp(r"(?i)^\s*язык\s*$"))
+async def language_cmd(message: Message) -> None:
+    await message.answer("🌐 Сейчас интерфейс Pear CM работает на русском. Переключение языка будет доступно после добавления сохранения пользовательских предпочтений.")
+
+@router.message(Command("notifications", "уведомления"))
+@router.message(F.text.regexp(r"(?i)^\s*уведомления\s*$"))
+async def notifications_cmd(message: Message) -> None:
+    await message.answer("🔔 Личные уведомления пока не настраиваются отдельно. Команда зарезервирована, настройки можно добавить в следующем этапе.")
+
+@router.message(Command("online", "ктоонлайн"))
+@router.message(F.text.regexp(r"(?i)^\s*кто онлайн\s*$"))
+async def online_cmd(message: Message) -> None:
+    rows=db_rows("bot_users",limit=20,order="last_seen",chat_id=message.chat.id)
+    if not rows:
+        await message.answer("Нет сохранённой активности."); return
+    lines=[]
+    for row in rows:
+        name=(row.get("first_name") or row.get("username") or str(row.get("user_id"))).replace("<","&lt;").replace(">","&gt;")
+        stamp=row.get("last_seen") or "неизвестно"
+        lines.append(f"• {name} — последнее сообщение: <code>{stamp}</code>")
+    await message.answer("<b>🟢 Недавно активные (это не список онлайн-статуса Telegram)</b>\n"+"\n".join(lines))
+
+
 # ── Global error handling / startup ──────────────────────────────────────────
 @dp.errors()
 async def global_error_handler(event) -> bool:
@@ -1096,6 +1579,35 @@ async def global_error_handler(event) -> bool:
 async def main() -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Открыть меню"),
+        BotCommand(command="owner", description="Панель овнера (только владелец)"),
+        BotCommand(command="status", description="Статус процесса"),
+        BotCommand(command="ping", description="Проверка Telegram и БД"),
+        BotCommand(command="diag", description="Диагностика конфигурации"),
+        BotCommand(command="globalstats", description="Глобальная статистика"),
+        BotCommand(command="modules", description="Состояние модулей"),
+        BotCommand(command="version", description="Версия бота"),
+        BotCommand(command="logs", description="Последние записи аудита"),
+        BotCommand(command="maintenance", description="Режим техобслуживания"),
+        BotCommand(command="operator", description="Выдать доступ оператору"),
+        BotCommand(command="revokeoperator", description="Отозвать доступ оператора"),
+        BotCommand(command="operators", description="Список операторов"),
+        BotCommand(command="globalban", description="Глобальный запрет в боте"),
+        BotCommand(command="globalunban", description="Снять глобальный запрет"),
+        BotCommand(command="exportstats", description="Экспорт статистики JSON"),
+        BotCommand(command="permissions", description="Проверить права бота"),
+        BotCommand(command="calc", description="Калькулятор"),
+        BotCommand(command="random", description="Случайное число"),
+        BotCommand(command="dice", description="Бросить кубик"),
+        BotCommand(command="date", description="Дата и московское время"),
+        BotCommand(command="activity", description="Активность чата"),
+        BotCommand(command="suggest", description="Предложить идею"),
+        BotCommand(command="quote", description="Цитата из ответа"),
+        BotCommand(command="favorites", description="Сохранить в избранное"),
+        BotCommand(command="achievements", description="Достижения"),
+        BotCommand(command="language", description="Язык интерфейса"),
+        BotCommand(command="notifications", description="Настройки уведомлений"),
+        BotCommand(command="online", description="Недавно активные участники"),
+
         BotCommand(command="help", description="Справка и команды"),
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="admins", description="Администраторы чата"),
