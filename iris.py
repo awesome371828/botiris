@@ -1465,7 +1465,7 @@ def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
 
 FILTER_ALIASES = {
     "антиссылка": "antilink", "антилинк": "antilink",
-    "антиинвайт": "antiinvite", "антивызов": "antiinvite",
+    "антиспам": "antispam", "антиинвайт": "antiinvite", "антивызов": "antiinvite",
     "антимат": "antimat", "антифлуд": "antiflood", "антикапс": "anticaps",
     "антиреклама": "antireklama", "антикрипта": "antikripta",
     "антифишинг": "antifishing", "антиолл": "antiall", "антиалл": "antiall",
@@ -1474,7 +1474,7 @@ FILTER_ALIASES = {
     "антидок": "antidocument", "антидокумент": "antidocument",
 }
 
-@router.message(F.text.regexp(r"(?i)^[+-](?:антиссылка|антилинк|антиинвайт|антивызов|антимат|антифлуд|антикапс|антиреклама|антикрипта|антифишинг|антиолл|антиалл|антибот|антистикер|антигиф|антифото|антивидео|антиголос|антидок|антидокумент)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[+-](?:антиссылка|антилинк|антиспам|антиинвайт|антивызов|антимат|антифлуд|антикапс|антиреклама|антикрипта|антифишинг|антиолл|антиалл|антибот|антистикер|антигиф|антифото|антивидео|антиголос|антидок|антидокумент)(?:\s|$)"))
 async def filter_toggle_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
