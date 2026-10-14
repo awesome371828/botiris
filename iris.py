@@ -3169,7 +3169,7 @@ async def apply_configured_filter_action(message: Message, settings: dict[str, A
 
 
 async def auto_moderation_filters(message: Message) -> None:
-    """Monitor-only automatic moderation. This handler NEVER deletes or restricts messages."""
+    """Detect configured spam rules; penalties stay off unless a real admin opts in."""
     if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
     await track_activity(message)
