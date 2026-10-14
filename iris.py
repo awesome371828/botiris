@@ -12,6 +12,7 @@ import platform
 import random
 import sys
 from io import BytesIO
+from html import escape
 import logging
 import os
 import re
@@ -333,41 +334,54 @@ def parse_duration(value: str) -> timedelta | None:
     return parsed[0] if parsed else None
 
 def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | None:
+    """Parse duration phrases, including implicit one-unit forms such as 'час', 'день', 'год'."""
     total = 0
     consumed = 0
     shown: list[str] = []
     i = 0
     while i < len(tokens):
         token = tokens[i].strip().lower().strip(",.;")
-        m = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
-        if not m:
-            break
-        amount = int(m.group(1))
-        unit = m.group(2)
-        used = 1
-        if not unit and i + 1 < len(tokens):
-            unit = tokens[i + 1].lower().strip(",.;")
-            seconds = _unit_seconds(unit)
-            if seconds is not None:
+        numeric = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
+        if numeric:
+            amount = int(numeric.group(1))
+            unit = numeric.group(2)
+            used = 1
+            if not unit:
+                if i + 1 >= len(tokens):
+                    break
+                possible_unit = tokens[i + 1].lower().strip(",.;")
+                seconds = _unit_seconds(possible_unit)
+                if seconds is None:
+                    break
+                unit = possible_unit
                 used = 2
             else:
-                break
-        elif unit:
-            seconds = _unit_seconds(unit)
+                seconds = _unit_seconds(unit)
+                if seconds is None:
+                    break
+        else:
+            # Iris-style shorthand: "мут час" means one hour, "мут день" one day.
+            seconds = _unit_seconds(token)
             if seconds is None:
                 break
-        else:
-            break
+            amount = 1
+            unit = token
+            used = 1
+
         if amount < 1:
             return None
         total += amount * seconds
-        shown.append(f"{amount} {tokens[i + 1] if used == 2 else unit}")
+        shown.append(f"{amount} {unit}")
         consumed += used
         i += used
-        if i >= len(tokens) or not re.match(r"^\d", tokens[i]):
+
+        if i >= len(tokens):
             break
-    # Telegram only accepts temporary restrictions up to about 366 days.
-    # A single year is represented as 365 days; longer periods are rejected.
+        next_token = tokens[i].strip().lower().strip(",.;")
+        if not re.match(r"^\d", next_token) and _unit_seconds(next_token) is None:
+            break
+
+    # Telegram temporary restrictions must be no longer than 366 days.
     if consumed == 0 or total <= 0 or total > 366 * 86400:
         return None
     return timedelta(seconds=total), consumed, " ".join(shown)
@@ -411,8 +425,25 @@ async def bot_can_restrict(message: Message) -> bool:
         return False
 
 async def safe_error(message: Message, exc: Exception) -> None:
-    log.exception("Command failed", exc_info=exc)
-    await message.answer("⚠️ Telegram не выполнил действие. Проверьте права бота и цель команды.")
+    detail = str(exc or "").strip()
+    lowered = detail.lower()
+    if isinstance(exc, TelegramForbiddenError):
+        user_text = "⛔ Telegram запретил действие: у бота нет доступа к чату или необходимых прав. Проверьте, что Pear CM — администратор и у него включено «Ограничение участников»."
+    elif isinstance(exc, TelegramBadRequest) and ("administrator" in lowered or "chat owner" in lowered):
+        user_text = "⛔ Цель — администратор или создатель чата. Telegram не разрешает ограничивать её этим действием."
+    elif isinstance(exc, TelegramBadRequest) and any(term in lowered for term in ("not enough rights", "have no rights", "can't restrict", "cannot restrict", "not an admin")):
+        user_text = "⛔ У Pear CM не хватает прав. Назначьте его администратором и включите право «Ограничение участников»."
+    elif isinstance(exc, TelegramBadRequest) and any(term in lowered for term in ("user not found", "participant_id_invalid", "chat not found")):
+        user_text = "⛔ Не удалось найти участника в этом чате. Ответьте на его сообщение или укажите ID участника, которого бот знает."
+    elif isinstance(exc, TelegramBadRequest):
+        user_text = f"⚠️ Telegram отклонил действие: <code>{escape(detail[:220] or 'неизвестная причина')}</code>"
+    else:
+        user_text = f"⚠️ Техническая ошибка <code>{type(exc).__name__}</code>. Подробности записаны в журнал."
+    log.warning("Moderation action failed (%s): %s", type(exc).__name__, detail[:500])
+    try:
+        await message.answer(user_text)
+    except Exception:
+        log.exception("Could not send moderation error response")
 
 # ── Welcome and menu ─────────────────────────────────────────────────────────
 @router.message(CommandStart())
@@ -688,8 +719,20 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
 async def check_mod(message: Message) -> bool:
     if not await require_admin(message):
         return False
-    if not await bot_can_restrict(message):
-        await message.answer("⚠️ Сначала выдайте боту права администратора с нужными разрешениями.")
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(message.chat.id, me.id)
+    except TelegramForbiddenError:
+        await message.answer("⛔ Бот не имеет доступа к чату. Добавьте его обратно и выдайте права администратора.")
+        return False
+    except TelegramBadRequest:
+        await message.answer("⛔ Не удалось проверить права бота. Убедитесь, что он состоит в чате и назначен администратором.")
+        return False
+    if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+        await message.answer("⛔ Pear CM не администратор чата. Назначьте его администратором.")
+        return False
+    if member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(member, "can_restrict_members", False):
+        await message.answer("⛔ У Pear CM нет права «Ограничение участников». Включите его в настройках администраторов.")
         return False
     return True
 
@@ -699,12 +742,14 @@ async def mute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
     raw_args = args_after_command(message)
-    # In reply-mode every argument follows the command. Without a reply, the
-    # first argument identifies the target (@username or known numeric ID).
+    # Reply syntax: "мут час спам". Without a reply: "мут @username 1 час спам".
     target_args = [] if message.reply_to_message else raw_args[:1]
     target = await resolve_target(message, target_args)
     if not target:
-        await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
+        await message.answer(
+            "Укажите цель: ответьте на сообщение командой <code>мут час</code> "
+            "или напишите <code>мут @username 1 час причина</code>."
+        )
         return
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("Нельзя замутить самого себя.")
@@ -712,27 +757,72 @@ async def mute_cmd(message: Message) -> None:
     if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя замутить владельца бота.")
         return
+
     duration_tokens = raw_args if message.reply_to_message else raw_args[1:]
     duration, duration_label, reason = split_duration_reason(duration_tokens)
+    permanent_words = {"навсегда", "бессрочно", "навечно", "перманентно"}
     if duration is None:
-        # No recognized duration means a permanent mute; all remaining text is the reason.
-        reason = " ".join(duration_tokens).strip() or None
-        duration_label = "бессрочно"
-        until = None
+        if duration_tokens and duration_tokens[0].lower().strip(",.;") in permanent_words:
+            duration_label = "бессрочно"
+            reason = " ".join(duration_tokens[1:]).strip() or None
+            until = None
+        else:
+            await message.answer(
+                "Не удалось распознать срок — я не буду случайно выдавать бессрочный мут.\n"
+                "Примеры: <code>мут час</code>, <code>мут день спам</code>, "
+                "<code>мут 67 часов флуд</code>, <code>мут год</code>.\n"
+                "Для бессрочного мута: <code>мут навсегда причина</code>."
+            )
+            return
     else:
         until = datetime.now(timezone.utc) + duration
-    reason = reason or "не указана"
+
+    reason = escape(reason or "не указана")
+    actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     try:
+        # Telegram cannot restrict a chat creator or administrator.
+        try:
+            target_member = await bot.get_chat_member(message.chat.id, target[0])
+            if target_member.status == ChatMemberStatus.CREATOR:
+                await message.answer("⛔ Создателя чата нельзя замутить через Telegram Bot API.")
+                return
+            if target_member.status == ChatMemberStatus.ADMINISTRATOR:
+                await message.answer("⛔ Нельзя замутить администратора чата. Сначала снимите с него права администратора.")
+                return
+        except TelegramBadRequest:
+            # Let restrict_chat_member return the precise error for an unknown/non-member target.
+            pass
+
         await bot.restrict_chat_member(
-            chat_id=message.chat.id, user_id=target[0],
-            permissions=ChatPermissions(can_send_messages=False), until_date=until,
+            chat_id=message.chat.id,
+            user_id=target[0],
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+            ),
+            until_date=until,
         )
-        audit(message.chat.id, message.from_user.id, "mute", target[0], f"duration={duration_label}; reason={reason}")
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "mute", target[0],
+              f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}")
         if until:
             when = format_moscow_time(until)
-            await message.answer(f"🔇 {mention(target[0], target[1])} замучен на <b>{duration_label}</b> по причине: <b>{reason}</b>. До {when}.")
+            await message.answer(
+                f"🔇 {mention(target[0], target[1])} замучен на <b>{escape(duration_label or 'указанный срок')}</b> "
+                f"по причине: <b>{reason}</b>. До {when}.\n👮 Модератор: {actor}."
+            )
         else:
-            await message.answer(f"🔇 {mention(target[0], target[1])} замучен бессрочно по причине: <b>{reason}</b>.")
+            await message.answer(
+                f"🔇 {mention(target[0], target[1])} замучен <b>бессрочно</b> "
+                f"по причине: <b>{reason}</b>.\n👮 Модератор: {actor}."
+            )
     except Exception as exc:
         await safe_error(message, exc)
 
