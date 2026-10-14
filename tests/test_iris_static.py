@@ -138,6 +138,11 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("create or replace function public.record_bot_activity_batch", schema)
         self.assertIn("on conflict (chat_id, message_id) do nothing", schema)
 
+    def test_admin_listing_includes_real_telegram_admins(self):
+        self.assertIn("telegram_admin_ids.add(u.id)", self.source)
+        self.assertIn("Администраторы Telegram", self.source)
+        self.assertIn("Telegram administrators are listed once", self.source)
+
     def test_warning_updates_check_database_write_results(self):
         self.assertIn("Не удалось сохранить снятие варна", self.source)
         self.assertIn("Не удалось сбросить предупреждения", self.source)
