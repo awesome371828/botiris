@@ -1232,6 +1232,21 @@ _ACTIVITY_OVERFLOW_MAX = 20000
 _ACTIVITY_OVERFLOW: deque[tuple[int, int, str | None, str, str]] = deque()
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
 
+async def _drain_activity_queue(timeout: float = 15.0) -> bool:
+    """Give queued and overflow activity events a chance to persist before shutdown."""
+    deadline = time.monotonic() + max(0.1, timeout)
+    while time.monotonic() < deadline:
+        if _ACTIVITY_QUEUE.empty() and not _ACTIVITY_OVERFLOW:
+            try:
+                await asyncio.wait_for(_ACTIVITY_QUEUE.join(), timeout=max(0.1, deadline - time.monotonic()))
+                return True
+            except asyncio.TimeoutError:
+                return False
+        await asyncio.sleep(0.05)
+    log.warning("Activity queue did not fully drain before shutdown: queue=%s overflow=%s",
+                _ACTIVITY_QUEUE.qsize(), len(_ACTIVITY_OVERFLOW))
+    return False
+
 async def _activity_writer_loop() -> None:
     while True:
         if _ACTIVITY_OVERFLOW:
@@ -4686,6 +4701,11 @@ async def main() -> None:
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        # Do not discard queued counters immediately during normal restarts.
+        try:
+            await _drain_activity_queue(timeout=15.0)
+        except Exception:
+            log.exception("Could not drain activity queue during shutdown")
         activity_writer.cancel()
         schedule_worker.cancel()
         for task in (activity_writer, schedule_worker):
