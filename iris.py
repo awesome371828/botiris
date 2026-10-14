@@ -1688,57 +1688,44 @@ async def delete_message_cmd(message: Message) -> None:
         first_id = max(1, message.message_id - count)
         candidates = list(range(first_id, message.message_id))
         forbidden = False
-        bulk_ok = False
         individually_deleted = 0
+        semaphore = asyncio.Semaphore(5)
 
-        if candidates:
-            try:
-                bulk_ok = bool(await bot.delete_messages(
-                    chat_id=message.chat.id,
-                    message_ids=candidates,
-                ))
-            except TelegramRetryAfter as exc:
-                await asyncio.sleep(float(exc.retry_after) + 0.2)
+        async def delete_one(mid: int) -> bool:
+            nonlocal forbidden
+            async with semaphore:
                 try:
-                    bulk_ok = bool(await bot.delete_messages(
-                        chat_id=message.chat.id,
-                        message_ids=candidates,
-                    ))
+                    await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                    return True
+                except TelegramRetryAfter as retry:
+                    await asyncio.sleep(float(retry.retry_after) + 0.2)
+                    try:
+                        await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                        return True
+                    except TelegramForbiddenError:
+                        forbidden = True
+                        return False
+                    except TelegramBadRequest as inner_exc:
+                        log.debug("Skipped chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                        return False
+                    except Exception as inner_exc:
+                        log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                        return False
                 except TelegramForbiddenError:
                     forbidden = True
-                except Exception as retry_exc:
-                    log.warning("Bulk delete retry failed chat=%s: %s", message.chat.id, retry_exc)
-            except TelegramForbiddenError:
-                forbidden = True
-            except Exception as exc:
-                log.warning("Bulk delete failed chat=%s: %s; trying individual deletes", message.chat.id, exc)
+                    return False
+                except TelegramBadRequest as inner_exc:
+                    # Missing/old/service messages are expected and must not abort the purge.
+                    log.debug("Skipped chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                    return False
+                except Exception as inner_exc:
+                    log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
+                    return False
 
-            # Bulk deletion is fast (one API request). If Telegram rejects the
-            # batch, fall back to a small bounded number of concurrent requests.
-            if not bulk_ok and not forbidden:
-                semaphore = asyncio.Semaphore(5)
-                async def delete_one(mid: int) -> bool:
-                    async with semaphore:
-                        try:
-                            return bool(await bot.delete_message(chat_id=message.chat.id, message_id=mid))
-                        except TelegramRetryAfter as retry:
-                            await asyncio.sleep(float(retry.retry_after) + 0.2)
-                            try:
-                                return bool(await bot.delete_message(chat_id=message.chat.id, message_id=mid))
-                            except Exception as inner_exc:
-                                log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
-                                return False
-                        except TelegramBadRequest as inner_exc:
-                            log.debug("Skipped chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
-                            return False
-                        except TelegramForbiddenError:
-                            return False
-                        except Exception as inner_exc:
-                            log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
-                            return False
-                results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
-                individually_deleted = sum(results)
-
+        # Delete individually so the reply can report an actual count. Telegram's
+        # bulk delete endpoint returns only True/False and can silently skip IDs.
+        results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
+        individually_deleted = sum(1 for result in results if result)
         # Remove the command itself as well, so it doesn't remain in the chat.
         try:
             await message.delete()
@@ -1747,19 +1734,14 @@ async def delete_message_cmd(message: Message) -> None:
 
         audit(
             message.chat.id, message.from_user.id, "purge_recent",
-            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};bulk_ok={bulk_ok};fallback_deleted={individually_deleted}",
+            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={individually_deleted}",
         )
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
-        elif bulk_ok:
-            await message.answer(
-                f"🧹 Запрос на удаление последних <b>{count} сообщений</b> отправлен, включая сообщения бота."
-                "\nTelegram может пропустить уже удалённые, старые или служебные сообщения."
-            )
         else:
             await message.answer(
-                f"🧹 Удалено сообщений: <b>{individually_deleted}</b> из последних {count} ID."
-                "\nЕсли число меньше, Telegram не разрешил удалить часть сообщений или часть ID не существует."
+                f"🧹 Удалено сообщений: <b>{individually_deleted}</b> из последних {count}."
+                "\nУже удалённые, старые и служебные сообщения могут не учитываться."
             )
         return
 
