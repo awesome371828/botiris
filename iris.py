@@ -1310,7 +1310,7 @@ async def ban_cmd(message: Message) -> None:
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         audit(message.chat.id, message.from_user.id, "ban", target[0], f"reason={reason}")
-        await message.answer(f"⛔ {mention(target[0], target[1])} заблокирован в чате. Причина: <b>{reason}</b>.")
+        await message.answer(f"⛔ {mention(target[0], target[1])} заблокирован в чате. Причина: <b>{escape(reason[:300])}</b>.")
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -1348,7 +1348,7 @@ async def kick_cmd(message: Message) -> None:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
         audit(message.chat.id, message.from_user.id, "kick", target[0], f"reason={reason}")
-        await message.answer(f"👢 {mention(target[0], target[1])} исключён из чата. Причина: <b>{reason}</b>.")
+        await message.answer(f"👢 {mention(target[0], target[1])} исключён из чата. Причина: <b>{escape(reason[:300])}</b>.")
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -2911,6 +2911,31 @@ async def admin_notes_cmd(message: Message) -> None:
         lines.append(f"• <code>#{row.get('id','?')}</code> · <code>{stamp}</code>\n  {content}")
     await message.answer(f"<b>📝 Заметки: {mention(target_id, target_name)}</b>\n" + "\n".join(lines))
 
+
+@router.message(F.text.regexp(r"(?i)^\s*(?:удалить заметку|удалитьзаметку)\s+\d+\s*$"))
+async def delete_admin_note_cmd(message: Message) -> None:
+    if not await require_admin(message, min_rank=2):
+        return
+    match = re.search(r"(\d+)\s*$", message.text or "")
+    if not match or db is None:
+        await message.answer("Формат: <code>удалить заметку ID</code>.")
+        return
+    note_id = int(match.group(1))
+    def delete_note_sync() -> bool:
+        try:
+            result = db.table("bot_notes").delete().eq("id", note_id).eq("chat_id", message.chat.id).execute()
+            return bool(result.data)
+        except Exception:
+            log.exception("Could not delete admin note id=%s", note_id)
+            return False
+    deleted = await asyncio.to_thread(delete_note_sync)
+    if deleted:
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "note_delete", None, f"note_id={note_id}")
+        await message.answer(f"🗑 Заметка <code>#{note_id}</code> удалена.")
+    else:
+        await message.answer("Заметка не найдена в этом чате или не удалось её удалить.")
+
+
 @router.message(Command("trusted", "доверенные"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:доверенный|доверенные|недоверенный)(?:\s|$)"))
 async def trusted_users_cmd(message: Message) -> None:
@@ -3167,7 +3192,6 @@ async def _apply_scheduled_chat_lock(chat_id: int, settings: dict[str, Any], sho
             await bot.set_chat_permissions(chat_id, permissions=permissions)
             settings.pop("chat_permissions_before_lock", None)
             settings["chat_locked_by_bot"] = False
-        save_chat_settings(chat_id, settings)
         audit(chat_id, 0, "scheduled_chat_close" if should_lock else "scheduled_chat_open")
         return True
     except Exception:
@@ -3386,7 +3410,7 @@ async def owner_diagnostics(message: Message) -> None:
     ]
     lines = [f"• {name}: <code>{val}</code>" for name, val in checks]
     if db is not None:
-        for table in ("bot_users", "bot_audit", "bot_chat_settings", "bot_global_settings", "bot_operators", "bot_global_bans"):
+        for table in ("bot_users", "bot_audit", "bot_chat_settings", "bot_global_settings", "bot_operators", "bot_global_bans", "bot_trusted_users"):
             try:
                 db.table(table).select("*").limit(1).execute()
                 lines.append(f"• {table}: <b>OK</b>")
