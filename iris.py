@@ -84,10 +84,10 @@ FILTER_DEFAULTS = {
     "antilink": False, "antiinvite": False, "antimat": False,
     "antiflood": False, "anticaps": False, "antireklama": False,
     "antikripta": False, "antifishing": False, "antiall": False,
-    "antibot": False, "antisticker": False, "antigif": False,
+    "antibot": False, "antisticker": False, "antigif": False, "antispam": False, "antiraid": False,
     "antiphoto": False, "antivideo": False, "antivoice": False,
     "antidocument": False, "flood_limit": 5, "flood_window": 10,
-    "caps_percent": 70, "filter_mute_minutes": 10,
+    "caps_percent": 70, "filter_mute_minutes": 10, "raid_threshold": 8, "raid_window": 30, "raid_restrict_minutes": 2,
     "warn_3_action": "mute", "warn_3_time": "1ч",
     "warn_5_action": "mute", "warn_5_time": "24ч",
     "warn_7_action": "ban", "warn_7_time": "7д",
@@ -95,6 +95,9 @@ FILTER_DEFAULTS = {
 }
 _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
 _FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+_SPAM_LAST: dict[tuple[int, int], tuple[str, float]] = {}
+_RAID_JOINS: dict[int, deque[float]] = defaultdict(deque)
+_RAID_RESTRICTED: dict[tuple[int, int], float] = {}
 BAD_WORDS = ("хуй", "пизд", "бляд", "ебал", "ебат", "сука", "мраз", "fuck", "shit", "bitch", "asshole")
 AD_WORDS = ("купить", "продам", "продаю", "скидка", "акция", "распродажа", "заработок", "инвестиции", "крипта", "bitcoin", "ethereum", "usdt", "казино", "ставки", "букмекер", "промокод", "реферал", "подпишись")
 FISHING_RE = re.compile(r"(?:bit\.ly|tinyurl|goo\.gl|t\.me/joinchat|verify.{0,20}wallet|seed.{0,20}phrase)", re.I)
@@ -488,6 +491,8 @@ async def welcome_members(message: Message) -> None:
             continue
         ensure_user(user.id, message.chat.id, user.username, user.full_name)
         await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
+    # Process anti-raid after welcoming; this is called directly because aiogram stops at the first matching service-message handler.
+    await apply_raid_protection(message)
 
 async def track_activity(message: Message) -> None:
     # This handler is registered last and only records regular messages.
@@ -717,13 +722,38 @@ async def clearwarns_cmd(message: Message) -> None:
 
 # ── Message tools ─────────────────────────────────────────────────────────────
 @router.message(Command("del"))
-@router.message(F.text == "-смс")
+@router.message(F.text.regexp(r"(?i)^-смс(?:\s+\d+)?$"))
 async def delete_message_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
+    raw = (message.text or "").strip()
+    match = re.fullmatch(r"(?i)-смс(?:\s+(\d+))?", raw)
+    # With a count, delete up to that many recent messages before this command.
+    # Without a count, retain classic reply-to-delete behavior.
+    if match and match.group(1):
+        count = max(1, min(100, int(match.group(1))))
+        deleted = 0
+        first_id = max(1, message.message_id - count)
+        for mid in range(message.message_id - 1, first_id - 1, -1):
+            try:
+                await bot.delete_message(message.chat.id, mid)
+                deleted += 1
+            except TelegramForbiddenError:
+                break
+            except TelegramBadRequest:
+                continue
+            except Exception:
+                continue
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted}")
+        await message.answer(f"🧹 Удалено сообщений: <b>{deleted}</b> (запрошено {count}, максимум 100).")
+        return
     target_message = message.reply_to_message
     if not target_message:
-        await message.answer("Ответьте на сообщение командой <code>/del</code> или <code>-смс</code>.")
+        await message.answer("Ответьте на сообщение командой <code>/del</code> или используйте <code>-смс 10</code> (до 100 последних сообщений).")
         return
     try:
         await target_message.delete()
@@ -1055,9 +1085,18 @@ async def auto_moderation_filters(message: Message) -> None:
         return
     settings = get_chat_settings(message.chat.id)
     reason = None
+    # Duplicate-message anti-spam is scoped to this chat and user; no cross-chat bleed.
+    if settings.get("antispam") and text_value:
+        key = (message.chat.id, message.from_user.id)
+        normalized = re.sub(r"\s+", " ", text_value.lower()).strip()
+        previous = _SPAM_LAST.get(key)
+        now_mono = time.monotonic()
+        if previous and previous[0] == normalized and now_mono - previous[1] <= 30:
+            reason = "повторяющийся спам"
+        _SPAM_LAST[key] = (normalized[:1000], now_mono)
     if settings.get("antibot") and message.new_chat_members and any(u.is_bot for u in message.new_chat_members):
         reason = "добавление бота"
-    if text_value:
+    if text_value and not reason:
         if settings.get("antiinvite") and INVITE_RE.search(text_value):
             reason = "пригласительная ссылка"
         elif settings.get("antilink") and URL_RE.search(text_value):
@@ -1121,6 +1160,433 @@ async def auto_moderation_filters(message: Message) -> None:
 # Important: the old track_activity catch-all handler was registered before
 # moderation and consumed ordinary group updates. Register it last so command
 # handlers and automatic filters can actually run first.
+# ── Pear CM moderation stage: history, reports, appeals, settings, rights, raid ──
+# State is per chat; durable settings and case records are stored in Supabase.
+@router.message(Command("history"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:история наказаний|нарушения)(?:\s|$)"))
+async def moderation_history_cmd(message: Message) -> None:
+    if not await require_admin(message):
+        return
+    args = args_after_command(message)
+    target_id = None
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_id = message.reply_to_message.from_user.id
+    else:
+        target_match = re.search(r"(?i)(?:история\s+наказаний|нарушения|/history)\s+(\d{4,})", message.text or "")
+        if target_match:
+            target_id = int(target_match.group(1))
+        elif args and args[0].isdigit():
+            target_id = int(args[0])
+    rows = db_rows("bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
+    if target_id is not None:
+        rows = [r for r in rows if int(r.get("target_id") or 0) == target_id]
+    action_set = {"mute", "unmute", "ban", "unban", "kick", "warn", "clearwarns", "purge", "purge_recent", "delete"}
+    rows = [r for r in rows if str(r.get("action", "")).lower() in action_set]
+    if not rows:
+        await message.answer("📜 История наказаний не найдена (или таблица bot_audit ещё не создана).")
+        return
+    lines = []
+    for row in rows[:15]:
+        stamp = str(row.get("created_at") or "время неизвестно")
+        try:
+            dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            stamp = format_moscow_time(dt)
+        except Exception:
+            pass
+        details = str(row.get("details") or "—").replace("<", "&lt;").replace(">", "&gt;")[:100]
+        lines.append(f"• <code>{stamp}</code> · <b>{row.get('action','?')}</b> · модератор <code>{row.get('actor_id','?')}</code> · цель <code>{row.get('target_id') or '—'}</code>\n  {details}")
+    await message.answer("<b>📜 История наказаний</b>\n" + "\n".join(lines))
+
+@router.message(Command("auditlog"))
+@router.message(F.text.regexp(r"(?i)^\s*аудит(?:\s|$)"))
+async def audit_search_cmd(message: Message) -> None:
+    if not await require_admin(message):
+        return
+    args = args_after_command(message)
+    moderator_id = int(args[0]) if args and args[0].isdigit() else None
+    hours = int(args[1]) if len(args) > 1 and args[1].isdigit() else 24
+    hours = max(1, min(hours, 720))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    rows = db_rows("bot_audit", limit=200, order="created_at", chat_id=message.chat.id)
+    result = []
+    for row in rows:
+        if moderator_id is not None and int(row.get("actor_id") or 0) != moderator_id:
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(row.get("created_at", "")).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            if stamp < cutoff:
+                continue
+        except Exception:
+            continue
+        result.append(row)
+    if not result:
+        await message.answer(f"🔎 За последние {hours} ч записей не найдено.")
+        return
+    lines = []
+    for row in result[:15]:
+        stamp = str(row.get("created_at") or "—")
+        try:
+            stamp = format_moscow_time(datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+        except Exception:
+            pass
+        detail = str(row.get("details") or "—").replace("<", "&lt;").replace(">", "&gt;")[:90]
+        lines.append(f"• <code>{stamp}</code> · {row.get('action','?')} · модератор <code>{row.get('actor_id','?')}</code> · цель <code>{row.get('target_id') or '—'}</code> · {detail}")
+    await message.answer("<b>🔎 Аудит действий</b>\n" + "\n".join(lines))
+
+@router.message(Command("report", "жалоба", "репорт"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:жалоба|репорт)\s+\S"))
+async def submit_report_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    body = " ".join(args_after_command(message)).strip()
+    target_id = message.reply_to_message.from_user.id if message.reply_to_message and message.reply_to_message.from_user else None
+    if not body and target_id is None:
+        await message.answer("Использование: <code>репорт описание</code> или ответьте на сообщение командой <code>репорт причина</code>.")
+        return
+    payload = {
+        "chat_id": message.chat.id, "user_id": message.from_user.id,
+        "target_id": target_id, "body": (body or "Жалоба на сообщение в ответе")[:2000],
+        "status": "open", "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    row = db_insert("bot_reports", payload)
+    if row:
+        audit(message.chat.id, message.from_user.id, "report_created", target_id, f"report_id={row.get('id')}")
+        await message.answer(f"📨 Жалоба принята. Номер: <code>{row.get('id','создан')}</code>.")
+    else:
+        await message.answer("Не удалось сохранить жалобу. Проверьте таблицу bot_reports из schema.sql.")
+
+@router.message(Command("appeal", "апелляция"))
+@router.message(F.text.regexp(r"(?i)^\s*апелляция\s+\S"))
+async def submit_appeal_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    body = " ".join(args_after_command(message)).strip()
+    if not body:
+        await message.answer("Использование: <code>апелляция Прошу пересмотреть наказание</code>.")
+        return
+    row = db_insert("bot_appeals", {
+        "chat_id": message.chat.id, "user_id": message.from_user.id,
+        "body": body[:2000], "status": "open",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    if row:
+        audit(message.chat.id, message.from_user.id, "appeal_created", message.from_user.id, f"appeal_id={row.get('id')}")
+        await message.answer(f"📨 Апелляция отправлена администрации. Номер: <code>{row.get('id','создан')}</code>.")
+    else:
+        await message.answer("Не удалось сохранить апелляцию. Проверьте таблицу bot_appeals из schema.sql.")
+
+@router.message(Command("reports", "жалобы"))
+@router.message(F.text.regexp(r"(?i)^\s*жалобы\s*$"))
+async def list_reports_cmd(message: Message) -> None:
+    if not await require_admin(message):
+        return
+    rows = db_rows("bot_reports", limit=20, order="created_at", chat_id=message.chat.id, status="open")
+    if not rows:
+        await message.answer("📭 Открытых жалоб нет или таблица bot_reports не настроена.")
+        return
+    lines = [f"• #{r.get('id')} · от <code>{r.get('user_id')}</code> · цель <code>{r.get('target_id') or '—'}</code>\n  {str(r.get('body',''))[:180]}" for r in rows]
+    await message.answer("<b>📨 Открытые жалобы</b>\n" + "\n".join(lines) + "\n\nЗакрыть: <code>/closereport ID причина</code>")
+
+@router.message(Command("appeals", "апелляции"))
+@router.message(F.text.regexp(r"(?i)^\s*апелляции\s*$"))
+async def list_appeals_cmd(message: Message) -> None:
+    if not await require_admin(message):
+        return
+    rows = db_rows("bot_appeals", limit=20, order="created_at", chat_id=message.chat.id, status="open")
+    if not rows:
+        await message.answer("📭 Открытых апелляций нет или таблица bot_appeals не настроена.")
+        return
+    lines = [f"• #{r.get('id')} · пользователь <code>{r.get('user_id')}</code>\n  {str(r.get('body',''))[:180]}" for r in rows]
+    await message.answer("<b>📨 Открытые апелляции</b>\n" + "\n".join(lines) + "\n\nЗакрыть: <code>/closeappeal ID причина</code>")
+
+async def close_case(message: Message, table: str, action: str) -> None:
+    if not await require_admin(message):
+        return
+    text_value = (message.text or "").strip()
+    phrase = r"(?:/close(?:report|appeal)|закрыть\s+(?:жалобу|апелляцию)|закрыть(?:жалобу|апелляцию))"
+    match = re.match(rf"(?is)^\s*{phrase}\s+(\d+)\s+(.+)$", text_value)
+    if not match:
+        args = args_after_command(message)
+        if len(args) < 2 or not args[0].isdigit():
+            await message.answer("Формат: <code>/closereport ID причина</code> или <code>закрыть жалобу ID причина</code>.")
+            return
+        case_id, reason = int(args[0]), " ".join(args[1:])[:500]
+    else:
+        case_id, reason = int(match.group(1)), match.group(2).strip()[:500]
+    # Supabase helper intentionally limits updates to a single matching row.
+    if db is None:
+        await message.answer("База данных недоступна.")
+        return
+    try:
+        result = db.table(table).update({
+            "status": "closed", "closed_by": message.from_user.id,
+            "closed_reason": reason, "closed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", case_id).eq("chat_id", message.chat.id).eq("status", "open").execute()
+        if not result.data:
+            await message.answer("Открытая запись с таким ID в этом чате не найдена.")
+            return
+        audit(message.chat.id, message.from_user.id, action, None, f"id={case_id}; reason={reason}")
+        await message.answer(f"✅ Обращение #{case_id} закрыто. Причина: {reason}")
+    except Exception as exc:
+        await safe_error(message, exc)
+
+@router.message(Command("closereport", "закрытьжалобу"))
+@router.message(F.text.regexp(r"(?i)^\s*закрыть жалобу(?:\s|$)"))
+async def close_report_cmd(message: Message) -> None:
+    await close_case(message, "bot_reports", "report_closed")
+
+@router.message(Command("closeappeal", "закрытьапелляцию"))
+@router.message(F.text.regexp(r"(?i)^\s*закрыть апелляцию(?:\s|$)"))
+async def close_appeal_cmd(message: Message) -> None:
+    await close_case(message, "bot_appeals", "appeal_closed")
+
+@router.message(Command("antiflood"))
+@router.message(F.text.regexp(r"(?i)^\s*антифлуд(?:\s|$)"))
+async def configure_antiflood_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    args = args_after_command(message)
+    settings = get_chat_settings(message.chat.id)
+    if args and args[0].lower() in ("вкл", "on", "включить"):
+        settings["antiflood"] = True
+    elif args and args[0].lower() in ("выкл", "off", "выключить"):
+        settings["antiflood"] = False
+    elif len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
+        settings["flood_limit"] = max(3, min(20, int(args[0])))
+        settings["flood_window"] = max(2, min(60, int(args[1])))
+        settings["antiflood"] = True
+    elif not args:
+        await message.answer(f"Антифлуд: {'вкл' if settings.get('antiflood') else 'выкл'}; лимит {settings.get('flood_limit',5)} сообщений за {settings.get('flood_window',10)} сек.\nПример: <code>антифлуд 5 10</code>, <code>антифлуд вкл</code>, <code>антифлуд выкл</code>.")
+        return
+    else:
+        await message.answer("Формат: <code>антифлуд 5 10</code> или <code>антифлуд вкл/выкл</code>.")
+        return
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id, "antiflood_settings", details=f"enabled={settings['antiflood']}; limit={settings.get('flood_limit')}; window={settings.get('flood_window')}")
+    await message.answer(f"✅ Антифлуд {'включён' if settings['antiflood'] else 'выключен'}. Лимит: {settings.get('flood_limit',5)} за {settings.get('flood_window',10)} сек.")
+
+@router.message(Command("antispam"))
+@router.message(F.text.regexp(r"(?i)^\s*антиспам(?:\s|$)"))
+async def configure_antispam_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    args = args_after_command(message)
+    settings = get_chat_settings(message.chat.id)
+    if args and args[0].lower() in ("вкл", "on", "включить"):
+        settings["antispam"] = True
+    elif args and args[0].lower() in ("выкл", "off", "выключить"):
+        settings["antispam"] = False
+    elif not args:
+        await message.answer(f"Антиспам: {'вкл' if settings.get('antispam') else 'выкл'}.\nПример: <code>антиспам вкл</code> или <code>антиспам выкл</code>.")
+        return
+    else:
+        await message.answer("Формат: <code>антиспам вкл/выкл</code>.")
+        return
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id, "antispam_settings", details=f"enabled={settings['antispam']}")
+    await message.answer(f"✅ Антиспам {'включён' if settings['antispam'] else 'выключен'}.")
+
+@router.message(Command("antiraid"))
+@router.message(F.text.regexp(r"(?i)^\s*антирейд(?:\s|$)"))
+async def configure_antiraid_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    args = args_after_command(message)
+    settings = get_chat_settings(message.chat.id)
+    if args and args[0].lower() in ("вкл", "on", "включить"):
+        settings["antiraid"] = True
+    elif args and args[0].lower() in ("выкл", "off", "выключить"):
+        settings["antiraid"] = False
+    elif len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
+        settings["raid_threshold"] = max(3, min(50, int(args[0])))
+        settings["raid_window"] = max(10, min(300, int(args[1])))
+        if len(args) >= 3 and args[2].isdigit():
+            settings["raid_restrict_minutes"] = max(1, min(30, int(args[2])))
+        settings["antiraid"] = True
+    elif not args:
+        await message.answer(f"Антирейд: {'вкл' if settings.get('antiraid') else 'выкл'}; порог {settings.get('raid_threshold',8)} вступлений за {settings.get('raid_window',30)} сек.; ограничение {settings.get('raid_restrict_minutes',2)} мин.\nПример: <code>антирейд 8 30 2</code> или <code>антирейд выкл</code>.")
+        return
+    else:
+        await message.answer("Формат: <code>антирейд 8 30 2</code> или <code>антирейд вкл/выкл</code>.")
+        return
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id, "antiraid_settings", details=f"enabled={settings['antiraid']}; threshold={settings.get('raid_threshold')}; window={settings.get('raid_window')}")
+    await message.answer(f"✅ Антирейд {'включён' if settings['antiraid'] else 'выключен'}.")
+
+@router.message(Command("checkrights", "проверкаправа"))
+@router.message(F.text.regexp(r"(?i)^\s*проверка прав\s*$"))
+async def check_rights_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Команда работает в группе.")
+        return
+    lines = ["<b>🔐 Проверка прав</b>"]
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(message.chat.id, me.id)
+        status = getattr(member, "status", "unknown")
+        lines.append(f"Бот: <b>{status}</b>")
+        if status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            lines.append("❌ Бот не администратор.")
+        else:
+            for field, label in [
+                ("can_delete_messages", "удалять сообщения"),
+                ("can_restrict_members", "муты и баны"),
+                ("can_pin_messages", "закреплять сообщения"),
+                ("can_invite_users", "приглашать пользователей"),
+            ]:
+                value = getattr(member, field, None)
+                lines.append(f"{'✅' if value else '❌'} {label}")
+    except Exception as exc:
+        lines.append(f"Не удалось получить права бота: {type(exc).__name__}")
+    if message.from_user:
+        try:
+            actor = await bot.get_chat_member(message.chat.id, message.from_user.id)
+            lines.append(f"Вы: <b>{getattr(actor, 'status', 'unknown')}</b>")
+        except Exception:
+            lines.append("Права вызывающего пользователя определить не удалось.")
+    await message.answer("\n".join(lines))
+
+async def apply_raid_protection(message: Message) -> None:
+    settings = get_chat_settings(message.chat.id)
+    if not settings.get("antiraid"):
+        return
+    now = time.monotonic()
+    joins = _RAID_JOINS[message.chat.id]
+    joins.extend([now] * len(message.new_chat_members))
+    window = max(10, min(300, int(settings.get("raid_window", 30))))
+    while joins and now - joins[0] > window:
+        joins.popleft()
+    threshold = max(3, min(50, int(settings.get("raid_threshold", 8))))
+    if len(joins) < threshold:
+        return
+    minutes = max(1, min(30, int(settings.get("raid_restrict_minutes", 2))))
+    restricted = 0
+    for user in message.new_chat_members:
+        if user.is_bot:
+            continue
+        try:
+            if await is_admin(bot, message.chat.id, user.id):
+                continue
+            await bot.restrict_chat_member(
+                chat_id=message.chat.id, user_id=user.id,
+                permissions=ChatPermissions(
+                    can_send_messages=False, can_send_audios=False, can_send_documents=False,
+                    can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+                    can_send_voice_notes=False, can_send_polls=False,
+                    can_send_other_messages=False, can_add_web_page_previews=False,
+                ),
+                until_date=datetime.now(timezone.utc) + timedelta(minutes=minutes),
+            )
+            restricted += 1
+            audit(message.chat.id, 0, "raid_restrict", user.id, f"threshold={threshold}; window={window}s; minutes={minutes}")
+        except Exception:
+            log.exception("Raid restriction failed")
+    joins.clear()
+    if restricted:
+        await message.answer(f"🛡 Обнаружен возможный рейд: временно ограничено новых участников: <b>{restricted}</b> на {minutes} мин. Проверьте настройки и права бота.")
+
+
+
+
+# ── Chat open/close commands (Russian Iris-style aliases) ────────────────────
+@router.message(Command("openchat", "unlockchat"))
+@router.message(F.text.regexp(r"(?i)^\s*\+чат\s*$"))
+async def open_chat_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Команда работает только в группе.")
+        return
+    if not await require_real_admin(message):
+        return
+    settings = get_chat_settings(message.chat.id)
+    saved = settings.get("chat_permissions_before_lock")
+    try:
+        if isinstance(saved, dict):
+            permissions = ChatPermissions(**saved)
+        else:
+            # If this bot did not save a prior permission set, restore the common
+            # group permissions without granting admin privileges.
+            permissions = ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            )
+        await bot.set_chat_permissions(message.chat.id, permissions=permissions)
+        settings.pop("chat_permissions_before_lock", None)
+        settings["chat_locked_by_bot"] = False
+        save_chat_settings(message.chat.id, settings)
+        audit(message.chat.id, message.from_user.id, "chat_open")
+        await message.answer("🔓 Чат открыт. Отправка сообщений снова разрешена согласно восстановленным настройкам.")
+    except Exception as exc:
+        await safe_error(message, exc)
+
+@router.message(Command("closechat", "lockchat"))
+@router.message(F.text.regexp(r"(?i)^\s*-чат\s*$"))
+async def close_chat_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Команда работает только в группе.")
+        return
+    if not await require_real_admin(message):
+        return
+    settings = get_chat_settings(message.chat.id)
+    try:
+        if not settings.get("chat_locked_by_bot"):
+            chat_info = await bot.get_chat(message.chat.id)
+            current = getattr(chat_info, "permissions", None)
+            if current is not None:
+                fields = (
+                    "can_send_messages", "can_send_audios", "can_send_documents",
+                    "can_send_photos", "can_send_videos", "can_send_video_notes",
+                    "can_send_voice_notes", "can_send_polls", "can_send_other_messages",
+                    "can_add_web_page_previews", "can_send_media_messages",
+                )
+                saved = {}
+                for field in fields:
+                    value = getattr(current, field, None)
+                    if value is not None:
+                        saved[field] = value
+                settings["chat_permissions_before_lock"] = saved
+            else:
+                settings["chat_permissions_before_lock"] = {
+                    "can_send_messages": True, "can_send_audios": True,
+                    "can_send_documents": True, "can_send_photos": True,
+                    "can_send_videos": True, "can_send_video_notes": True,
+                    "can_send_voice_notes": True, "can_send_polls": True,
+                    "can_send_other_messages": True, "can_add_web_page_previews": True,
+                }
+        await bot.set_chat_permissions(
+            message.chat.id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+                can_send_audios=False,
+                can_send_documents=False,
+                can_send_photos=False,
+                can_send_videos=False,
+                can_send_video_notes=False,
+                can_send_voice_notes=False,
+                can_send_polls=False,
+                can_send_other_messages=False,
+                can_add_web_page_previews=False,
+            ),
+        )
+        settings["chat_locked_by_bot"] = True
+        save_chat_settings(message.chat.id, settings)
+        audit(message.chat.id, message.from_user.id, "chat_close")
+        await message.answer("🔒 Чат закрыт. Обычные участники временно не могут отправлять сообщения. Открыть: <code>+чат</code>.")
+    except Exception as exc:
+        await safe_error(message, exc)
+
+
 router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)(auto_moderation_filters)
 
 
@@ -1570,6 +2036,7 @@ async def online_cmd(message: Message) -> None:
     await message.answer("<b>🟢 Недавно активные (это не список онлайн-статуса Telegram)</b>\n"+"\n".join(lines))
 
 
+
 # ── Global error handling / startup ──────────────────────────────────────────
 @dp.errors()
 async def global_error_handler(event) -> bool:
@@ -1607,6 +2074,20 @@ async def main() -> None:
         BotCommand(command="language", description="Язык интерфейса"),
         BotCommand(command="notifications", description="Настройки уведомлений"),
         BotCommand(command="online", description="Недавно активные участники"),
+        BotCommand(command="history", description="История наказаний"),
+        BotCommand(command="auditlog", description="Аудит по модератору и времени"),
+        BotCommand(command="report", description="Отправить жалобу"),
+        BotCommand(command="reports", description="Очередь жалоб (админы)"),
+        BotCommand(command="appeal", description="Апелляция на наказание"),
+        BotCommand(command="appeals", description="Очередь апелляций (админы)"),
+        BotCommand(command="closereport", description="Закрыть жалобу"),
+        BotCommand(command="closeappeal", description="Закрыть апелляцию"),
+        BotCommand(command="antiflood", description="Настроить антифлуд"),
+        BotCommand(command="antispam", description="Настроить антиспам"),
+        BotCommand(command="antiraid", description="Настроить защиту от рейдов"),
+        BotCommand(command="checkrights", description="Проверить права бота и модератора"),
+        BotCommand(command="openchat", description="Открыть чат"),
+        BotCommand(command="closechat", description="Закрыть чат"),
 
         BotCommand(command="help", description="Справка и команды"),
         BotCommand(command="profile", description="Мой профиль"),
