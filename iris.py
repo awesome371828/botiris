@@ -1164,72 +1164,77 @@ async def welcome_members(message: Message) -> None:
 # Activity events are batched by the background writer below so ordinary messages
 # never wait for Supabase writes.
 
-def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, str]]) -> None:
+def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, str, int]]) -> None:
+    """Persist only new Telegram messages; message_id makes retries idempotent."""
     if not items:
         return
-    grouped: dict[tuple[int, int], list[tuple[int, int, str | None, str, str]]] = defaultdict(list)
-    for item in items:
-        grouped[(item[0], item[1])].append(item)
+    if db is None:
+        raise RuntimeError("Supabase is not configured; activity batch remains queued")
+
+    events = [{
+        "chat_id": int(chat_id), "user_id": int(user_id), "message_id": int(message_id),
+        "username": username, "first_name": first_name or "Пользователь",
+        "created_at": created_at,
+    } for chat_id, user_id, username, first_name, created_at, message_id in items]
+
+    # Unique (chat_id, message_id) plus ignore_duplicates prevents retries from counting
+    # the same Telegram message twice after a timeout or a partially completed write.
+    result = db.table("bot_activity_events").upsert(
+        events, on_conflict="chat_id,message_id", ignore_duplicates=True
+    ).select("*").execute()
+    inserted = result.data or []
+    if not inserted:
+        return
+
     now = datetime.now(timezone.utc).isoformat()
-    events: list[dict[str, Any]] = []
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    daily: dict[tuple[int, int, str], dict[str, Any]] = {}
+    for event in inserted:
+        chat_id = int(event["chat_id"])
+        user_id = int(event["user_id"])
+        grouped[(chat_id, user_id)].append(event)
+        created_at = str(event.get("created_at") or now)
+        try:
+            stamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            day = stamp.astimezone(MOSCOW_TZ).date().isoformat()
+        except Exception:
+            day = moscow_now().date().isoformat()
+        key = (chat_id, user_id, day)
+        aggregate = daily.setdefault(key, {
+            "chat_id": chat_id, "user_id": user_id, "day": day,
+            "messages": 0, "username": event.get("username"),
+            "first_name": event.get("first_name") or "Пользователь",
+        })
+        aggregate["messages"] += 1
+        if event.get("username"):
+            aggregate["username"] = event["username"]
+        if event.get("first_name"):
+            aggregate["first_name"] = event["first_name"]
+
     for (chat_id, user_id), records in grouped.items():
-        _chat, _user, username, first_name, _created = records[-1]
-        user = ensure_user(user_id, chat_id, username, first_name)
-        db_upsert("bot_users", {
+        latest = records[-1]
+        current = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
+        saved = db_upsert("bot_users", {
             "user_id": user_id, "chat_id": chat_id,
-            "username": username, "first_name": first_name or "Пользователь",
-            "warns": int(user.get("warns", 0)), "rank": int(user.get("rank", 0)),
-            "messages": int(user.get("messages", 0)) + len(records),
+            "username": latest.get("username"),
+            "first_name": latest.get("first_name") or "Пользователь",
+            "warns": int(current.get("warns", 0) or 0),
+            "rank": max(0, min(5, int(current.get("rank", 0) or 0))),
+            "messages": int(current.get("messages", 0) or 0) + len(records),
             "last_seen": now,
         }, "user_id,chat_id")
-        for _chat, _user, event_username, event_first_name, created_at in records:
-            events.append({
-                "chat_id": chat_id, "user_id": user_id,
-                "username": event_username, "first_name": event_first_name or "Пользователь",
-                "created_at": created_at,
-            })
-    if db is not None and events:
-        try:
-            db.table("bot_activity_events").insert(events).execute()
-        except Exception:
-            log.exception("Batched activity-event insert failed for %s events", len(events))
+        if not saved:
+            raise RuntimeError(f"Could not update bot_users counter chat={chat_id} user={user_id}")
 
-        # Maintain compact per-chat/per-user/day counters in one atomic RPC call.
-        # Leaderboards read aggregates instead of scanning an unbounded event log.
-        daily: dict[tuple[int, int, str], dict[str, Any]] = {}
-        for event in events:
-            chat_id = int(event["chat_id"])
-            user_id = int(event["user_id"])
-            username = event.get("username")
-            first_name = event.get("first_name") or "Пользователь"
-            created_at = event.get("created_at") or now
-            try:
-                stamp = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-                if stamp.tzinfo is None:
-                    stamp = stamp.replace(tzinfo=timezone.utc)
-                day = stamp.astimezone(MOSCOW_TZ).date().isoformat()
-            except Exception:
-                day = moscow_now().date().isoformat()
-            key = (chat_id, user_id, day)
-            item = daily.setdefault(key, {
-                "chat_id": chat_id, "user_id": user_id, "day": day,
-                "messages": 0, "username": username, "first_name": first_name,
-            })
-            item["messages"] += 1
-            if username:
-                item["username"] = username
-            if first_name:
-                item["first_name"] = first_name
-        try:
-            db.rpc("increment_bot_activity_daily_batch", {"p_items": list(daily.values())}).execute()
-        except Exception:
-            # Raw events remain a fallback until schema.sql's aggregate migration is applied.
-            log.exception("Daily activity aggregate update failed for %s grouped records", len(daily))
+    # The RPC is atomic. Retrying the event upsert will not insert the same message again.
+    db.rpc("increment_bot_activity_daily_batch", {"p_items": list(daily.values())}).execute()
 
-_ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str]] = asyncio.Queue(maxsize=5000)
+_ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str, int]] = asyncio.Queue(maxsize=5000)
 # Temporary bounded overflow absorbs bursts while the database writer catches up.
 _ACTIVITY_OVERFLOW_MAX = 20000
-_ACTIVITY_OVERFLOW: deque[tuple[int, int, str | None, str, str]] = deque()
+_ACTIVITY_OVERFLOW: deque[tuple[int, int, str | None, str, str, int]] = deque()
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
 _ACTIVITY_WRITER_BUSY = False
 
@@ -1274,18 +1279,25 @@ async def _activity_writer_loop() -> None:
             except asyncio.TimeoutError:
                 if not _ACTIVITY_OVERFLOW:
                     break
+        persisted = False
         try:
             async with _ACTIVITY_WRITE_SEMAPHORE:
-                await asyncio.to_thread(_persist_activity_batch_sync, batch)
-        except Exception:
-            log.exception("Activity batch persistence failed (size=%s)", len(batch))
-            room = _ACTIVITY_OVERFLOW_MAX - len(_ACTIVITY_OVERFLOW)
-            if room > 0:
-                _ACTIVITY_OVERFLOW.extend(batch[:room])
-            if room < len(batch):
-                log.critical("Activity overflow buffer full; %s events could not be retained", len(batch) - max(room, 0))
+                for attempt in range(3):
+                    try:
+                        await asyncio.to_thread(_persist_activity_batch_sync, batch)
+                        persisted = True
+                        break
+                    except Exception:
+                        log.exception("Activity batch persistence failed (attempt %s/3; size=%s)", attempt + 1, len(batch))
+                        if attempt < 2:
+                            await asyncio.sleep(0.5 * (attempt + 1))
         finally:
-            # Overflow entries were never added to asyncio.Queue and must not call task_done().
+            if not persisted:
+                room = max(0, _ACTIVITY_OVERFLOW_MAX - len(_ACTIVITY_OVERFLOW))
+                if room:
+                    _ACTIVITY_OVERFLOW.extend(batch[:room])
+                if room < len(batch):
+                    log.critical("Activity overflow buffer full; %s events could not be retained", len(batch) - room)
             for _ in range(queued_count):
                 _ACTIVITY_QUEUE.task_done()
             _ACTIVITY_WRITER_BUSY = False
@@ -1305,6 +1317,7 @@ async def track_activity(message: Message) -> None:
     item = (
         message.chat.id, message.from_user.id, message.from_user.username,
         message.from_user.full_name, datetime.now(timezone.utc).isoformat(),
+        message.message_id,
     )
     try:
         _ACTIVITY_QUEUE.put_nowait(item)
