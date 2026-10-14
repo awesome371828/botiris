@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import difflib
 import json
 import platform
 import random
@@ -134,16 +135,17 @@ FILTER_DEFAULTS = {
     "antikripta": False, "antifishing": False, "antiall": False,
     "antibot": False, "antisticker": False, "antigif": False, "antispam": False, "antiraid": False,
     "antiphoto": False, "antivideo": False, "antivoice": False,
-    "antidocument": False, "flood_limit": 5, "flood_window": 10,
+    "antidocument": False, "flood_limit": 8, "flood_window": 10,
     "caps_percent": 70, "filter_mute_minutes": 10, "raid_threshold": 8, "raid_window": 30, "raid_restrict_minutes": 2,
-    "warn_3_action": "mute", "warn_3_time": "1ч",
-    "warn_5_action": "mute", "warn_5_time": "24ч",
+    "warn_3_action": "ban", "warn_3_time": "7д",
+    "warn_5_action": "ban", "warn_5_time": "7д",
     "warn_7_action": "ban", "warn_7_time": "7д",
     "warn_10_action": "ban", "warn_10_time": "навсегда",
 }
 _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
 _FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 _SPAM_LAST: dict[tuple[int, int], tuple[str, float]] = {}
+_SPAM_HISTORY: dict[tuple[int, int], deque[tuple[float, str, int]]] = defaultdict(lambda: deque(maxlen=30))
 _RAID_JOINS: dict[int, deque[float]] = defaultdict(deque)
 _RAID_RESTRICTED: dict[tuple[int, int], float] = {}
 BAD_WORDS = ("хуй", "пизд", "бляд", "ебал", "ебат", "сука", "мраз", "fuck", "shit", "bitch", "asshole")
@@ -260,6 +262,39 @@ def set_warns(chat_id: int, user_id: int, amount: int) -> int:
     db_upsert("bot_users", {**user, "user_id": user_id, "chat_id": chat_id, "warns": new_count}, "user_id,chat_id")
     return new_count
 
+def active_warn_count(chat_id: int, user_id: int) -> int:
+    """Count warnings from the last seven days; a clear/unwarn event adjusts the active ledger."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    rows = db_rows("bot_audit", limit=1000, order="created_at", chat_id=chat_id)
+    relevant = []
+    for row in rows:
+        if int(row.get("target_id") or 0) != user_id:
+            continue
+        action = str(row.get("action") or "").lower()
+        if action not in {"warn", "unwarn", "clearwarns"}:
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if stamp >= cutoff:
+            relevant.append((stamp, action))
+    if not relevant:
+        # Preserve compatibility if the audit table is not available or has no recent ledger.
+        row = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
+        return max(0, int(row.get("warns") or 0))
+    count = 0
+    for _, action in sorted(relevant):
+        if action == "warn":
+            count += 1
+        elif action == "unwarn":
+            count = max(0, count - 1)
+        elif action == "clearwarns":
+            count = 0
+    return count
+
 # ── Shared helpers ───────────────────────────────────────────────────────────
 def is_group(message: Message) -> bool:
     return message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
@@ -322,9 +357,22 @@ def _unit_seconds(unit: str) -> int | None:
     unit = unit.lower().strip().rstrip(".,")
     if unit in _TIME_UNITS:
         return _TIME_UNITS[unit]
-    # Resolve grammatical variants such as "минутой" and long words.
+    # Resolve Russian cases/plurals: секундами, минутами, часами, днями,
+    # неделями, месяцами, годами, годами/годах, and common English forms.
     for key, seconds in sorted(_TIME_UNITS.items(), key=lambda item: len(item[0]), reverse=True):
         if len(key) >= 3 and unit.startswith(key):
+            return seconds
+    stems = (
+        (("секунд", "секунд", "секунд"), 1),
+        (("минут", "минут", "минут"), 60),
+        (("час", "час", "час"), 3600),
+        (("дн", "день", "дня", "дней", "днями", "днях", "сут"), 86400),
+        (("недел", "недель", "неделями", "неделях"), 604800),
+        (("месяц", "месяц", "месяцами", "месяцах", "месяцев"), 2592000),
+        (("год", "года", "годами", "годах", "лет"), 31536000),
+    )
+    for prefixes, seconds in stems:
+        if any(unit.startswith(prefix) for prefix in prefixes):
             return seconds
     return None
 
@@ -913,10 +961,10 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\\s|$)"))
 async def warn_cmd(message: Message) -> None:
-    if not await require_admin(message):
+    if not await check_mod(message):
         return
     raw_args = args_after_command(message)
     target = await resolve_target(message, [] if message.reply_to_message else raw_args[:1])
@@ -926,48 +974,65 @@ async def warn_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("Нельзя выдать варн самому себе.")
         return
+    if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Нельзя выдать предупреждение владельцу бота.")
+        return
     reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
-    count = set_warns(message.chat.id, target[0], 1)
-    audit(message.chat.id, message.from_user.id, "warn", target[0], f"warns={count}; reason={reason}")
-    await message.answer(f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}</b> по причине: <b>{reason}</b>.")
-    settings = get_chat_settings(message.chat.id)
-    thresholds = [(10, "warn_10"), (7, "warn_7"), (5, "warn_5"), (3, "warn_3")]
-    for threshold, key in thresholds:
-        if count >= threshold:
-            action = str(settings.get(f"{key}_action", "mute"))
-            time_label = str(settings.get(f"{key}_time", "1ч"))
-            if action == "ban":
-                try:
-                    await bot.ban_chat_member(message.chat.id, target[0])
-                    audit(message.chat.id, message.from_user.id, "auto_ban", target[0], f"{count} warns; reason={reason}")
-                    await message.answer(f"⛔ Автобан {mention(target[0], target[1])}: {count} предупреждений.")
-                except Exception as exc:
-                    await safe_error(message, exc)
-            elif action == "mute" and await bot_can_restrict(message):
-                parsed = parse_duration(time_label)
-                until = datetime.now(timezone.utc) + (parsed or timedelta(days=365))
-                try:
-                    await bot.restrict_chat_member(message.chat.id, target[0], permissions=ChatPermissions(can_send_messages=False), until_date=until)
-                    audit(message.chat.id, message.from_user.id, "auto_mute", target[0], f"{count} warns; time={time_label}")
-                    await message.answer(f"🔇 Автомут {mention(target[0], target[1])} на {time_label}: {count} предупреждений.")
-                except Exception as exc:
-                    await safe_error(message, exc)
-            break
+    # Expire warnings older than seven days before adding the new one.
+    before = active_warn_count(message.chat.id, target[0])
+    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    db_upsert("bot_users", {
+        **user, "user_id": target[0], "chat_id": message.chat.id,
+        "warns": before + 1, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
+    }, "user_id,chat_id")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "warn", target[0],
+          f"warns={before + 1}; reason={reason}; expires_in_days=7")
+    count = before + 1
+    actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
+    await message.answer(
+        f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
+        f"Причина: <b>{escape(reason[:300])}</b>.\n👮 Модератор: {actor}. "
+        f"Варн действует 7 дней."
+    )
+    # Three active warnings trigger a ban. This is intentionally a single threshold
+    # to avoid multiple penalties firing for the same warning.
+    if count >= 3:
+        try:
+            target_member = await bot.get_chat_member(message.chat.id, target[0])
+            if target_member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
+                await message.answer("⚠️ Достигнут лимит варнов, но Telegram не позволяет банить администратора/создателя.")
+                return
+            await bot.ban_chat_member(message.chat.id, target[0])
+            audit(message.chat.id, message.from_user.id if message.from_user else 0, "auto_ban", target[0],
+                  f"3 active warnings in 7 days; reason={reason}")
+            await message.answer(
+                f"⛔ {mention(target[0], target[1])} забанен автоматически: 3 предупреждения за последние 7 дней."
+            )
+        except Exception as exc:
+            await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:анварн|снятьварн)(?:\\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
     target = await moderation_target(message, "unwarn")
     if not target:
         return
-    count = set_warns(message.chat.id, target[0], -1)
-    audit(message.chat.id, message.from_user.id, "unwarn", target[0], f"warns={count}")
-    await message.answer(f"✅ Предупреждений осталось: <b>{count}</b>.")
-
+    count = active_warn_count(message.chat.id, target[0])
+    if count <= 0:
+        await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
+        return
+    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    db_upsert("bot_users", {
+        **user, "user_id": target[0], "chat_id": message.chat.id,
+        "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
+    }, "user_id,chat_id")
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "unwarn", target[0], f"warns={max(0,count-1)}")
+    await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{max(0,count-1)}</b>.")
+    
 @router.message(Command("clearwarns"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\\s|$)"))
 async def clearwarns_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
@@ -979,7 +1044,7 @@ async def clearwarns_cmd(message: Message) -> None:
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": 0, "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
     }, "user_id,chat_id")
-    audit(message.chat.id, message.from_user.id, "clearwarns", target[0])
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
     await message.answer(f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.")
 
 # ── Message tools ─────────────────────────────────────────────────────────────
@@ -1460,103 +1525,126 @@ async def set_trigger_cmd(message: Message) -> None:
     await message.answer(f"✅ Триггер {threshold} варнов обновлён: {action}.")
 
 async def auto_moderation_filters(message: Message) -> None:
+    """Conservative opt-in moderation: never delete a message unless an enabled rule matches."""
     if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
-    # This handler is the catch-all for group messages, so activity is recorded
-    # here (a handler registered earlier would swallow updates in aiogram 3).
     await track_activity(message)
-    # In maintenance mode, suppress ordinary group messages but keep commands reachable.
+
+    # Only explicitly globally banned users are deleted here; maintenance mode never deletes.
     if message.from_user.id != OWNER_ID:
-        # Cached reads and worker threads prevent Supabase network waits from
-        # blocking the aiogram event loop for every incoming group message.
-        is_command = (message.text or "").lstrip().startswith(("/", "!", "."))
+        is_command = bool(re.match(r"^\\s*(?:/|[!.])", message.text or ""))
         if not is_command and str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower() == "on":
-            # Maintenance mode must never silently delete ordinary users' messages.
-            # Just skip bot-side processing until maintenance is disabled.
             return
         if not is_command and await asyncio.to_thread(_is_globally_banned, message.from_user.id):
-            try: await message.delete()
-            except Exception: pass
+            try:
+                await message.delete()
+                audit(message.chat.id, OWNER_ID, "globalban_delete", message.from_user.id, "global ban")
+            except Exception:
+                log.warning("Could not delete globally banned user's message chat=%s user=%s", message.chat.id, message.from_user.id)
             return
-    # Never filter commands; moderation/admin commands must remain reachable.
+
     text_value = message.text or message.caption or ""
-    if text_value and re.match(r"^\s*(?:[/!.+-]|мут(?:\s|$)|бан(?:\s|$)|кик(?:\s|$)|варн(?:\s|$)|размут(?:\s|$))", text_value, re.I):
+    # Never run content filters on commands or administrative commands.
+    if text_value and re.match(r"^\\s*(?:[/!.+-]|мут(?:\\s|$)|анмут(?:\\s|$)|размут(?:\\s|$)|бан(?:\\s|$)|разбан(?:\\s|$)|кик(?:\\s|$)|варн(?:\\s|$)|анварн(?:\\s|$)|снятьварн(?:\\s|$))", text_value, re.I):
         return
     if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
         return
+
     settings = get_chat_settings(message.chat.id)
     reason = None
-    # Duplicate-message anti-spam is scoped to this chat and user; no cross-chat bleed.
-    if settings.get("antispam") and text_value:
-        key = (message.chat.id, message.from_user.id)
-        normalized = re.sub(r"\s+", " ", text_value.lower()).strip()
-        previous = _SPAM_LAST.get(key)
-        now_mono = time.monotonic()
-        if previous and previous[0] == normalized and now_mono - previous[1] <= 30:
-            reason = "повторяющийся спам"
-        _SPAM_LAST[key] = (normalized[:1000], now_mono)
-    if settings.get("antibot") and message.new_chat_members and any(u.is_bot for u in message.new_chat_members):
-        reason = "добавление бота"
-    if text_value and not reason:
+    now = time.monotonic()
+    key = (message.chat.id, message.from_user.id)
+    normalized = re.sub(r"[^\\w\\s]", " ", text_value.lower(), flags=re.UNICODE)
+    normalized = re.sub(r"\\s+", " ", normalized).strip()
+
+    # Smart anti-spam is opt-in. Short conversational replies are excluded to prevent false positives.
+    if settings.get("antispam") and len(normalized) >= 12 and not message.new_chat_members:
+        history = _SPAM_HISTORY[key]
+        while history and now - history[0][0] > 25:
+            history.popleft()
+        similar_count = 1
+        for stamp, old_text, _old_id in history:
+            if old_text == normalized:
+                similar_count += 1
+            elif len(normalized) >= 24 and len(old_text) >= 24:
+                try:
+                    if difflib.SequenceMatcher(None, normalized, old_text).ratio() >= 0.94:
+                        similar_count += 1
+                except Exception:
+                    pass
+        history.append((now, normalized[:1000], message.message_id))
+        if similar_count >= 3:
+            reason = "повторяющийся/почти одинаковый спам (3 похожих сообщения за 25 секунд)"
+
+    # Flood detection only triggers at a conservative threshold and only if enabled.
+    if settings.get("antiflood") and not reason:
+        times = _FLOOD_TIMES[key]
+        times.append(now)
+        window = max(3, min(60, int(settings.get("flood_window", 10))))
+        while times and now - times[0] > window:
+            times.popleft()
+        limit = max(8, min(30, int(settings.get("flood_limit", 8))))
+        if len(times) >= limit:
+            reason = f"флуд ({len(times)} сообщений за {window} секунд)"
+            times.clear()
+
+    # Other filters are each opt-in and only act on a direct, explicit match.
+    if not reason and text_value:
         if settings.get("antiinvite") and INVITE_RE.search(text_value):
             reason = "пригласительная ссылка"
         elif settings.get("antilink") and URL_RE.search(text_value):
-            reason = "ссылка"
+            reason = "ссылка (фильтр антиссылок)"
         elif settings.get("antifishing") and FISHING_RE.search(text_value):
-            reason = "фишинг"
+            reason = "подозрительная/фишинговая ссылка"
         elif settings.get("antimat") and any(word in text_value.lower() for word in BAD_WORDS):
             reason = "нецензурная лексика"
         elif settings.get("antireklama") and any(word in text_value.lower() for word in AD_WORDS):
-            reason = "реклама"
+            reason = "реклама (совпадение с ключевым словом)"
         elif settings.get("antikripta") and any(word in text_value.lower() for word in ("bitcoin", "btc", "ethereum", "usdt", "крипта", "binance", "bybit", "кошелёк", "wallet")):
             reason = "криптореклама"
-        elif settings.get("antiall") and re.search(r"@(all|everyone|here)\b", text_value, re.I):
+        elif settings.get("antiall") and re.search(r"@(all|everyone|here)\\b", text_value, re.I):
             reason = "массовое упоминание"
         elif settings.get("anticaps"):
             letters = [c for c in text_value if c.isalpha()]
-            if len(letters) >= 8 and sum(c.isupper() for c in letters) / len(letters) * 100 >= int(settings.get("caps_percent", 70)):
-                reason = "капс"
-        if settings.get("antiflood") and not reason:
-            key = (message.chat.id, message.from_user.id)
-            now = time.monotonic()
-            times = _FLOOD_TIMES[key]
-            times.append(now)
-            window = max(2, min(60, int(settings.get("flood_window", 10))))
-            while times and now - times[0] > window:
-                times.popleft()
-            if len(times) >= max(3, min(20, int(settings.get("flood_limit", 5)))):
-                reason = "флуд"
-                times.clear()
+            if len(letters) >= 20 and sum(c.isupper() for c in letters) / len(letters) * 100 >= int(settings.get("caps_percent", 70)):
+                reason = "чрезмерный капс"
     if not reason:
-        if settings.get("antisticker") and message.sticker:
-            reason = "стикер запрещён"
+        if settings.get("antibot") and message.new_chat_members and any(u.is_bot for u in message.new_chat_members):
+            reason = "добавление бота запрещено"
+        elif settings.get("antisticker") and message.sticker:
+            reason = "стикеры запрещены"
         elif settings.get("antigif") and message.animation:
-            reason = "GIF запрещён"
+            reason = "GIF запрещены"
         elif settings.get("antiphoto") and message.photo:
-            reason = "фото запрещено"
+            reason = "фотографии запрещены"
         elif settings.get("antivideo") and (message.video or message.video_note):
-            reason = "видео запрещено"
+            reason = "видео запрещены"
         elif settings.get("antivoice") and (message.voice or message.audio):
             reason = "голосовые/аудио запрещены"
         elif settings.get("antidocument") and message.document:
             reason = "документы запрещены"
+
     if not reason:
         return
+
+    # Deletion is the only automatic action. No automatic mute is applied for a filter hit:
+    # this avoids turning a single false positive into a punitive cascade.
     try:
         await message.delete()
-    except Exception:
-        log.warning("Could not delete filtered message in %s", message.chat.id)
-    audit(message.chat.id, 0, "filter_delete", message.from_user.id, reason)
+    except TelegramBadRequest as exc:
+        log.info("Filtered message could not be deleted chat=%s message=%s: %s", message.chat.id, message.message_id, str(exc)[:200])
+        return
+    except TelegramForbiddenError:
+        log.warning("Filter matched but bot lacks delete permission chat=%s", message.chat.id)
+        return
+    audit(message.chat.id, 0, "filter_delete", message.from_user.id, f"{reason}; message_id={message.message_id}")
     try:
-        mute_minutes = max(1, min(1440, int(settings.get("filter_mute_minutes", 10))))
-        if await bot_can_restrict(message):
-            await bot.restrict_chat_member(message.chat.id, message.from_user.id,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=datetime.now(timezone.utc) + timedelta(minutes=mute_minutes))
-            audit(message.chat.id, 0, "filter_mute", message.from_user.id, f"reason={reason}; minutes={mute_minutes}")
-        await message.answer(f"🚫 {mention(message.from_user.id, message.from_user.full_name)}: сообщение удалено. Причина: <b>{reason}</b>.")
+        await message.answer(
+            f"🛡 Сообщение участника {mention(message.from_user.id, message.from_user.full_name)} удалено фильтром. "
+            f"Причина: <b>{escape(reason)}</b>. Автоматический мут не применялся."
+        )
     except Exception:
-        log.exception("Filter punishment failed")
+        log.debug("Could not send filter notice chat=%s", message.chat.id)
 
 # Important: the old track_activity catch-all handler was registered before
 # moderation and consumed ordinary group updates. Register it last so command
