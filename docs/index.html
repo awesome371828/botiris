@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0b1119">
+<title>Pear CM — приложение</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#0b1119;--panel:rgba(255,255,255,.065);--line:rgba(255,255,255,.105);--muted:#9ba9b8;--text:#f4f8fb;--mint:#8af0c2;--blue:#82b9ff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 85% 0%,rgba(52,117,128,.22),transparent 38%),radial-gradient(ellipse at 0% 38%,rgba(60,92,150,.17),transparent 38%),var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
+main{max-width:560px;margin:0 auto;padding:22px 17px 34px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.brand{display:flex;align-items:center;gap:11px;font-weight:800;letter-spacing:-.4px}.logo{width:43px;height:43px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(140deg,#a1f6d2,#63b6ad);color:#10251f;font-size:21px;box-shadow:0 8px 28px #71d9b82b}.badge{font-size:11px;color:var(--mint);border:1px solid #8af0c23d;background:#8af0c211;border-radius:99px;padding:6px 10px}
+h1{font-size:31px;line-height:1.12;letter-spacing:-1.2px;margin:0 0 12px}.gradient{background:linear-gradient(90deg,#b7ffdd,#85c9ff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{color:#aab7c6;margin:0 0 20px;max-width:420px}
+.hero{position:relative;overflow:hidden;padding:23px;border-radius:26px;background:linear-gradient(135deg,rgba(128,219,193,.13),rgba(121,163,230,.08));border:1px solid var(--line);box-shadow:0 20px 70px #0002}.hero:after{content:"";position:absolute;width:170px;height:170px;border-radius:50%;right:-80px;top:-85px;background:#8af0c218;filter:blur(3px);pointer-events:none}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}.btn{appearance:none;border:0;border-radius:14px;padding:13px 15px;font:700 14px inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:transform .15s,opacity .15s}.btn:active{transform:scale(.98)}.primary{background:var(--mint);color:#10251e;flex:1}.secondary{background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--text)}
+.section-head{display:flex;align-items:end;justify-content:space-between;margin:27px 2px 12px}.section-head h2{font-size:18px;margin:0;letter-spacing:-.3px}.hint{color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:19px;padding:16px;min-height:120px}.icon{font-size:22px;margin-bottom:11px}.card h3{font-size:14px;margin:0 0 5px}.card p{font-size:12px;color:var(--muted);margin:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:15px}.search{width:100%;padding:13px 14px;background:#ffffff0b;border:1px solid var(--line);border-radius:13px;color:var(--text);font:inherit;outline:none;margin-bottom:12px}.search:focus{border-color:#8af0c277}.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}.chip{border:1px solid var(--line);border-radius:99px;padding:7px 10px;background:#ffffff08;color:#b9c5d1;font-size:12px;cursor:pointer}.chip.active{background:#8af0c21b;border-color:#8af0c266;color:var(--mint)}.command{padding:12px 1px;border-bottom:1px solid #ffffff12}.command:last-child{border:0}.command code{color:var(--mint);font:600 13px ui-monospace,SFMono-Regular,monospace}.command p{margin:4px 0 0;font-size:12px;color:var(--muted)}
+.vpn{margin-top:14px;padding:18px;border-radius:21px;background:linear-gradient(130deg,rgba(112,160,245,.13),rgba(138,240,194,.09));border:1px solid #8ab8f52b}.vpn h3{margin:0 0 6px;font-size:17px}.vpn p{margin:0;color:#adbac8;font-size:13px}.vpn .btn{width:100%;margin-top:14px;background:#f1f6ff;color:#172234}
+footer{text-align:center;color:#6f7f90;font-size:11px;padding:25px 0 0}.hidden{display:none!important}
+@media(min-width:480px){main{padding-top:30px}.hero{padding:28px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><div class="brand"><div class="logo">✳</div><div>Pear CM<div style="font-size:11px;font-weight:500;color:var(--muted);letter-spacing:0">Чат-менеджер</div></div></div><div class="badge">● MINI APP</div></div>
+  <section class="hero">
+    <h1>Управляй чатом.<br><span class="gradient">Без лишней суеты.</span></h1>
+    <p class="lead">Полезные команды, быстрый старт и всё важное о Pear CM — в одном месте.</p>
+    <div class="actions"><button class="btn primary" id="commandsJump">⌕ Найти команду</button><button class="btn secondary" id="addBot">＋ Добавить бота</button></div>
+  </section>
+  <div class="section-head"><h2>Что умеет Pear CM</h2><span class="hint">Коротко о главном</span></div>
+  <div class="grid">
+    <div class="card"><div class="icon">🛡️</div><h3>Модерация</h3><p>Муты, баны, предупреждения и порядок в группе.</p></div>
+    <div class="card"><div class="icon">🧹</div><h3>Чистота чата</h3><p>Удаление сообщений и инструменты против спама.</p></div>
+    <div class="card"><div class="icon">⚙️</div><h3>Управление</h3><p>Настройки чата и полезные инструменты администраторов.</p></div>
+    <div class="card"><div class="icon">📊</div><h3>Активность</h3><p>Профили участников, статистика и топы.</p></div>
+  </div>
+  <div class="section-head" id="commandsTitle"><h2>Команды</h2><span class="hint">Найди нужную</span></div>
+  <section class="panel" id="commandPanel">
+    <input id="search" class="search" placeholder="🔎  Например, мут, бан, профиль…" autocomplete="off">
+    <div class="chips"><button class="chip active" data-filter="all">Все</button><button class="chip" data-filter="moderation">Модерация</button><button class="chip" data-filter="chat">Чат</button><button class="chip" data-filter="user">Пользователю</button></div>
+    <div id="commandList"></div>
+  </section>
+  <section class="vpn">
+    <div style="font-size:23px;margin-bottom:8px">💚</div><h3>Поддержи проект и попробуй VPN</h3>
+    <p>Если Pear CM оказался полезен, загляни в мой VPN-бот. Тарифы, подключение и оплата доступны внутри него.</p>
+    <button class="btn" id="vpnButton">Открыть @awesomeproxyvpn_bot ↗</button>
+  </section>
+  <footer>Pear CM · Сделано с заботой о вашем чате</footer>
+</main>
+<script>
+const tg=window.Telegram?.WebApp;
+try{tg?.ready();tg?.expand();if(tg?.themeParams?.bg_color)document.documentElement.style.setProperty('--bg',tg.themeParams.bg_color)}catch(e){}
+const commands=[
+{c:'-смс 100',d:'Удалить последние сообщения (до 100 за раз).',k:'moderation'},
+{c:'-чат / +чат',d:'Закрыть или снова открыть чат для сообщений.',k:'chat'},
+{c:'/mute',d:'Ограничить участнику возможность писать.',k:'moderation'},
+{c:'/unmute',d:'Снять ограничение на отправку сообщений.',k:'moderation'},
+{c:'/ban',d:'Заблокировать участника в группе.',k:'moderation'},
+{c:'/kick',d:'Исключить участника из группы.',k:'moderation'},
+{c:'/warn',d:'Выдать участнику предупреждение.',k:'moderation'},
+{c:'/admins',d:'Посмотреть список администраторов чата.',k:'chat'},
+{c:'/help',d:'Открыть список возможностей и команд.',k:'chat'},
+{c:'/profile',d:'Посмотреть профиль и активность.',k:'user'},
+{c:'/top',d:'Открыть рейтинг активных участников.',k:'user'},
+{c:'/warns',d:'Проверить свои предупреждения.',k:'user'}
+];
+let filter='all';const list=document.getElementById('commandList'),search=document.getElementById('search');
+function render(){const q=search.value.trim().toLowerCase();const found=commands.filter(x=>(filter==='all'||x.k===filter)&&(!q||(x.c+' '+x.d).toLowerCase().includes(q)));list.innerHTML=found.length?found.map(x=>'<div class="command"><code>'+x.c.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</code><p>'+x.d+'</p></div>').join(''):'<div class="command"><p>Ничего не найдено. Попробуй другое слово.</p></div>'}
+search.addEventListener('input',render);document.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;render()}));render();
+document.getElementById('commandsJump').onclick=()=>{document.getElementById('commandsTitle').scrollIntoView({behavior:'smooth'});setTimeout(()=>search.focus(),250)};
+document.getElementById('vpnButton').onclick=()=>{if(tg?.openTelegramLink)tg.openTelegramLink('https://t.me/awesomeproxyvpn_bot');else window.open('https://t.me/awesomeproxyvpn_bot','_blank','noopener')};
+document.getElementById('addBot').onclick=()=>{const url='https://t.me/pear_cm_bot?startgroup=true';if(tg?.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')};
+</script>
+</body></html>
