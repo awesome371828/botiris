@@ -1330,6 +1330,34 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
                 return None
     return target
 
+async def ensure_moderation_target_safe(
+    message: Message, target: tuple[int, str], action: str, *, protect_admins: bool = True
+) -> bool:
+    """Fail closed for the chat creator, protected bot owner, self-actions and Telegram admins."""
+    target_id, _target_name = target
+    actor_id = message.from_user.id if message.from_user else 0
+    if target_id == actor_id:
+        await message.answer("Нельзя применить это действие к самому себе.")
+        return False
+    if target_id == OWNER_ID and actor_id != OWNER_ID:
+        await message.answer("⛔ Нельзя применять это действие к владельцу бота.")
+        return False
+    try:
+        member = await get_chat_member_cached(bot, message.chat.id, target_id)
+    except Exception:
+        log.exception("Could not verify moderation target status chat=%s target=%s action=%s",
+                      message.chat.id, target_id, action)
+        await message.answer("⚠️ Не удалось проверить статус участника. Ничего не применено; попробуй ещё раз.")
+        return False
+    if member and member.status == ChatMemberStatus.CREATOR:
+        await message.answer("⛔ Нельзя применять это действие к создателю чата.")
+        return False
+    if protect_admins and member and member.status == ChatMemberStatus.ADMINISTRATOR:
+        await message.answer("⛔ Telegram не позволяет боту применять это действие к администратору чата.")
+        return False
+    return True
+
+
 async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool = True) -> bool:
     if not await require_admin(message, min_rank=min_rank):
         return False
@@ -1382,8 +1410,7 @@ async def mute_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("Нельзя замутить самого себя.")
         return
-    if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
-        await message.answer("⛔ Нельзя замутить владельца бота.")
+    if not await ensure_moderation_target_safe(message, target, "mute"):
         return
 
     duration_tokens = list(raw_args)
@@ -1494,6 +1521,8 @@ async def ban_cmd(message: Message) -> None:
     target = await moderation_target(message, "ban")
     if not target:
         return
+    if not await ensure_moderation_target_safe(message, target, "ban"):
+        return
     raw_args = args_after_command(message)
     reason = _reason_from_preset(message.chat.id, "ban", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     try:
@@ -1531,6 +1560,8 @@ async def kick_cmd(message: Message) -> None:
     target = await moderation_target(message, "kick")
     if not target:
         return
+    if not await ensure_moderation_target_safe(message, target, "kick"):
+        return
     raw_args = args_after_command(message)
     reason = _reason_from_preset(message.chat.id, "kick", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     try:
@@ -1557,9 +1588,13 @@ async def warn_cmd(message: Message) -> None:
     if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя выдать предупреждение владельцу бота.")
         return
+    if not await ensure_moderation_target_safe(message, target, "warn", protect_admins=False):
+        return
     if message.from_user and target[0] != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
-        actor_rank = user_rank(message.chat.id, message.from_user.id)
-        target_rank = user_rank(message.chat.id, target[0])
+        actor_rank, target_rank = await asyncio.gather(
+            asyncio.to_thread(user_rank, message.chat.id, message.from_user.id),
+            asyncio.to_thread(user_rank, message.chat.id, target[0]),
+        )
         if target_rank >= actor_rank and target_rank > 0:
             await message.answer("⛔ Нельзя выдавать предупреждения участнику с равным или более высоким внутренним рангом.")
             return
