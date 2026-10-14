@@ -222,3 +222,5 @@ create index if not exists bot_notes_chat_user_created_idx
 
 alter table public.bot_trusted_users enable row level security;
 revoke all on public.bot_trusted_users from anon, authenticated;
+
+grant all on public.bot_trusted_users to service_role;
