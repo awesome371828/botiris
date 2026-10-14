@@ -44,7 +44,7 @@ SUPABASE_KEY = (
 )
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-3"
+MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-4"
 
 def moscow_now() -> datetime:
     """Current aware Moscow time (MSK, UTC+3), updated from system time."""
