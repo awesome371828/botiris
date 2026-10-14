@@ -679,7 +679,8 @@ async def my_warns(message: Message) -> None:
         display = f'<a href="https://t.me/{username}">@{username}</a>'
     else:
         display = mention(message.from_user.id, message.from_user.full_name)
-    await message.answer(f"⚠️ {display}, у вас <b>{int(user.get('warns', 0))}</b> предупреждений.")
+    active = active_warn_count(message.chat.id, message.from_user.id)
+    await message.answer(f"⚠️ {display}, у вас <b>{active}</b> действующих предупреждений. Срок каждого — 7 дней.")
 
 @router.message(F.text == "💍 Брак")
 async def marriage_menu(message: Message) -> None:
@@ -958,7 +959,6 @@ async def unban_cmd(message: Message) -> None:
 
 @router.message(Command("kick"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?кик(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?кик(?:\s|$)"))
 async def kick_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -977,7 +977,6 @@ async def kick_cmd(message: Message) -> None:
 
 @router.message(Command("warn"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^[.!/!]?варн(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
