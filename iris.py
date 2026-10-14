@@ -1469,11 +1469,7 @@ async def unwarn_cmd(message: Message) -> None:
     if count <= 0:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
         return
-    user, actor_rank_loaded = await asyncio.gather(
-        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
-        asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0),
-    )
-    user = user or {}
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     await asyncio.to_thread(db_upsert, "bot_users", {
         **user, "user_id": target[0], "chat_id": message.chat.id,
         "warns": max(0, count - 1), "rank": int(user.get("rank", 0)), "messages": int(user.get("messages", 0)),
@@ -2125,7 +2121,11 @@ async def demote_rank_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    user, actor_rank_loaded = await asyncio.gather(
+        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
+        asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0),
+    )
+    user = user or {}
     try:
         current = 5 if target[0] == OWNER_ID else max(0, min(5, int(user.get("rank", 0) or 0)))
     except (TypeError, ValueError):
