@@ -1231,12 +1231,13 @@ _ACTIVITY_QUEUE: asyncio.Queue[tuple[int, int, str | None, str, str]] = asyncio.
 _ACTIVITY_OVERFLOW_MAX = 20000
 _ACTIVITY_OVERFLOW: deque[tuple[int, int, str | None, str, str]] = deque()
 _ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
+_ACTIVITY_WRITER_BUSY = False
 
 async def _drain_activity_queue(timeout: float = 15.0) -> bool:
     """Give queued and overflow activity events a chance to persist before shutdown."""
     deadline = time.monotonic() + max(0.1, timeout)
     while time.monotonic() < deadline:
-        if _ACTIVITY_QUEUE.empty() and not _ACTIVITY_OVERFLOW:
+        if _ACTIVITY_QUEUE.empty() and not _ACTIVITY_OVERFLOW and not _ACTIVITY_WRITER_BUSY:
             try:
                 await asyncio.wait_for(_ACTIVITY_QUEUE.join(), timeout=max(0.1, deadline - time.monotonic()))
                 return True
@@ -1248,6 +1249,7 @@ async def _drain_activity_queue(timeout: float = 15.0) -> bool:
     return False
 
 async def _activity_writer_loop() -> None:
+    global _ACTIVITY_WRITER_BUSY
     while True:
         if _ACTIVITY_OVERFLOW:
             first = _ACTIVITY_OVERFLOW.popleft()
@@ -1255,6 +1257,7 @@ async def _activity_writer_loop() -> None:
         else:
             first = await _ACTIVITY_QUEUE.get()
             queued_count = 1
+        _ACTIVITY_WRITER_BUSY = True
         batch = [first]
         deadline = time.monotonic() + 0.75
         while len(batch) < 100:
@@ -1285,6 +1288,7 @@ async def _activity_writer_loop() -> None:
             # Overflow entries were never added to asyncio.Queue and must not call task_done().
             for _ in range(queued_count):
                 _ACTIVITY_QUEUE.task_done()
+            _ACTIVITY_WRITER_BUSY = False
 
 async def track_activity(message: Message) -> None:
     if not message.from_user or message.from_user.is_bot or not is_group(message):
