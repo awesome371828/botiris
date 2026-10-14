@@ -2706,12 +2706,19 @@ def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
         "chat_id": chat_id, "settings": snapshot,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    async def persist() -> None:
+        try:
+            saved = await asyncio.to_thread(db_upsert, "bot_chat_settings", payload, "chat_id")
+            if not saved:
+                log.error("Could not persist chat settings chat=%s keys=%s", chat_id, sorted(snapshot.keys()))
+        except Exception:
+            log.exception("Could not persist chat settings chat=%s", chat_id)
     try:
-        asyncio.get_running_loop().create_task(
-            asyncio.to_thread(db_upsert, "bot_chat_settings", payload, "chat_id")
-        )
+        asyncio.get_running_loop().create_task(persist())
     except RuntimeError:
-        db_upsert("bot_chat_settings", payload, "chat_id")
+        saved = db_upsert("bot_chat_settings", payload, "chat_id")
+        if not saved:
+            log.error("Could not persist chat settings outside event loop chat=%s", chat_id)
 
 FILTER_ALIASES = {
     "антиссылка": "antilink", "антилинк": "antilink",
@@ -2735,7 +2742,7 @@ async def filter_toggle_cmd(message: Message) -> None:
     key = FILTER_ALIASES.get(alias)
     if not key:
         return
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     settings[key] = enabled
     save_chat_settings(message.chat.id, settings)
     await message.answer(f"{'✅ Включён' if enabled else '🛑 Выключен'} фильтр <b>{alias}</b>.")
@@ -3069,7 +3076,7 @@ async def command_rank_rule_cmd(message: Message) -> None:
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:настройки фильтров|фильтры|filters)(?:\s|$)"))
 async def filters_status_cmd(message: Message) -> None:
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     enabled = [name for name, key in FILTER_ALIASES.items() if settings.get(key)]
     await message.answer("🛡 <b>Фильтры чата</b>\n" + ("\n".join(f"• {name}: включён" for name in sorted(set(enabled))) if enabled else "Нет включённых фильтров.") + "\n\nВкл: <code>+антиссылка</code>; выкл: <code>-антиссылка</code>.")
 
@@ -3085,7 +3092,7 @@ async def set_trigger_cmd(message: Message) -> None:
     if action == "mute" and len(parts) < 3:
         await message.answer("Для триггера mute укажи срок, например <code>/settrigger 3 mute 1ч</code>.")
         return
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     settings[f"warn_{threshold}_action"] = "off" if action == "off" else action
     if action != "off" and len(parts) >= 3:
         settings[f"warn_{threshold}_time"] = " ".join(parts[2:])
@@ -3449,7 +3456,7 @@ async def configure_antiflood_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     args = args_after_command(message)
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     if args and args[0].lower() in ("вкл", "on", "включить"):
         settings["antiflood"] = True
     elif args and args[0].lower() in ("выкл", "off", "выключить"):
@@ -3551,7 +3558,7 @@ async def check_rights_cmd(message: Message) -> None:
 
 async def apply_raid_protection(message: Message) -> None:
     """Detect a possible raid, but never automatically restrict or delete anyone."""
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     if not settings.get("antiraid") or not message.new_chat_members:
         return
     now = time.monotonic()
@@ -4320,6 +4327,13 @@ def _is_globally_banned(user_id: int) -> bool:
     row = db_one("bot_global_bans", user_id=user_id, active=True)
     value = bool(row and row.get("active"))
     _GLOBAL_BAN_CACHE[user_id] = (value, now + _GLOBAL_BAN_TTL)
+    if len(_GLOBAL_BAN_CACHE) > 20000:
+        for cached_id, (_, expires_at) in list(_GLOBAL_BAN_CACHE.items()):
+            if expires_at <= now:
+                _GLOBAL_BAN_CACHE.pop(cached_id, None)
+        if len(_GLOBAL_BAN_CACHE) > 20000:
+            for cached_id in list(_GLOBAL_BAN_CACHE)[:5000]:
+                _GLOBAL_BAN_CACHE.pop(cached_id, None)
     return value
 
 def _operator_active(user_id: int) -> bool:
@@ -4521,14 +4535,17 @@ async def owner_maintenance(message: Message) -> None:
     elif action in {"off", "выкл", "выключить"}:
         value="off"
     elif action in {"status", "статус"}:
-        value=str(_global_setting("maintenance", "off")).lower()
+        value=str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower()
     else:
         await message.answer("Формат: <code>/maintenance on</code> или <code>/maintenance off</code>.")
         return
     if action not in {"status", "статус"}:
-        _set_global_setting("maintenance", value)
-        audit(message.chat.id, message.from_user.id, "maintenance", None, value)
-    await message.answer(f"🛠 Техобслуживание: <b>{'включено' if value == 'on' else 'выключено'}</b>.\n<i>Флаг сохраняется в Supabase, если таблица bot_global_settings создана; иначе действует до перезапуска.</i>")
+        persisted = await asyncio.to_thread(_set_global_setting, "maintenance", value)
+        if not persisted:
+            await message.answer("⚠️ Флаг техобслуживания изменён в памяти, но не подтверждён базой. Проверь таблицу bot_global_settings.")
+            return
+        await audit_wait(message.chat.id, message.from_user.id, "maintenance", None, value)
+    await message.answer(f"🛠 Техобслуживание: <b>{'включено' if value == 'on' else 'выключено'}</b>.")
 
 @router.message(Command("operator"))
 @router.message(F.text.regexp(r"(?i)^\s*выдать доступ\s+\d+\s*$"))
