@@ -2306,7 +2306,7 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
 async def logs_cmd(message: Message) -> None:
     # In private chat, allow the configured owner to inspect global audit logs.
     if message.chat.type == ChatType.PRIVATE and message.from_user and message.from_user.id == OWNER_ID:
-        rows = db_rows("bot_audit", limit=15, order="created_at")
+        rows = await asyncio.to_thread(db_rows, "bot_audit", limit=15, order="created_at")
         if not rows:
             await message.answer("📒 Глобальные логи пусты или bot_audit недоступна.")
             return
@@ -2323,7 +2323,7 @@ async def logs_cmd(message: Message) -> None:
         return
     if not await require_admin(message):
         return
-    rows = db_rows("bot_audit", limit=10, order="created_at", chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_audit", limit=10, order="created_at", chat_id=message.chat.id)
     if not rows:
         await message.answer("📒 Логов пока нет.")
         return
@@ -2574,7 +2574,7 @@ async def marriage_status_cmd(message: Message) -> None:
 async def divorce_cmd(message: Message) -> None:
     if not message.from_user:
         return
-    rows = db_rows("bot_marriages", limit=100, chat_id=message.chat.id)
+    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=100, chat_id=message.chat.id)
     for row in rows:
         if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
             try:
@@ -3209,7 +3209,7 @@ async def submit_appeal_cmd(message: Message) -> None:
 async def list_reports_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
-    rows = db_rows("bot_reports", limit=20, order="created_at", chat_id=message.chat.id, status="open")
+    rows = await asyncio.to_thread(db_rows, "bot_reports", limit=20, order="created_at", chat_id=message.chat.id, status="open")
     if not rows:
         await message.answer("📭 Открытых жалоб нет или таблица bot_reports не настроена.")
         return
@@ -3221,7 +3221,7 @@ async def list_reports_cmd(message: Message) -> None:
 async def list_appeals_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
-    rows = db_rows("bot_appeals", limit=20, order="created_at", chat_id=message.chat.id, status="open")
+    rows = await asyncio.to_thread(db_rows, "bot_appeals", limit=20, order="created_at", chat_id=message.chat.id, status="open")
     if not rows:
         await message.answer("📭 Открытых апелляций нет или таблица bot_appeals не настроена.")
         return
@@ -4247,8 +4247,8 @@ async def owner_diagnostics(message: Message) -> None:
 async def owner_global_stats(message: Message) -> None:
     if not await _owner_or_operator(message):
         return
-    rows = db_rows("bot_users", limit=1000)
-    audits = db_rows("bot_audit", limit=1000)
+    rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
+    audits = await asyncio.to_thread(db_rows, "bot_audit", limit=1000)
     chats = {r.get("chat_id") for r in rows if r.get("chat_id") is not None}
     messages = sum(int(r.get("messages") or 0) for r in rows)
     warns = sum(int(r.get("warns") or 0) for r in rows)
@@ -4485,7 +4485,7 @@ async def date_cmd(message: Message) -> None:
 @router.message(Command("activity", "актив"))
 @router.message(F.text.regexp(r"(?i)^\s*актив\s*$"))
 async def activity_cmd(message: Message) -> None:
-    rows=db_rows("bot_users",limit=10,order="messages",chat_id=message.chat.id)
+    rows=await asyncio.to_thread(db_rows,"bot_users",limit=10,order="messages",chat_id=message.chat.id)
     if not rows:
         await message.answer("Пока нет статистики активности в этой группе."); return
     lines=[]
@@ -4533,7 +4533,7 @@ async def favorites_cmd(message: Message) -> None:
 async def achievements_cmd(message: Message) -> None:
     if not message.from_user:
         return
-    row=db_one("bot_users",user_id=message.from_user.id,chat_id=message.chat.id) or {}
+    row=await asyncio.to_thread(db_one,"bot_users",user_id=message.from_user.id,chat_id=message.chat.id) or {}
     msgs=int(row.get("messages") or 0); warns=int(row.get("warns") or 0)
     badges=[]
     if msgs>=1: badges.append("🌱 Первое сообщение")
@@ -4555,7 +4555,7 @@ async def notifications_cmd(message: Message) -> None:
 @router.message(Command("online", "ктоонлайн"))
 @router.message(F.text.regexp(r"(?i)^\s*кто онлайн\s*$"))
 async def online_cmd(message: Message) -> None:
-    rows=db_rows("bot_users",limit=20,order="last_seen",chat_id=message.chat.id)
+    rows=await asyncio.to_thread(db_rows,"bot_users",limit=20,order="last_seen",chat_id=message.chat.id)
     if not rows:
         await message.answer("Нет сохранённой активности."); return
     lines=[]
