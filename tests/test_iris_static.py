@@ -125,6 +125,18 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("bot_users_chat_last_seen_idx", schema)
         self.assertIn("bot_marriages_chat_status_created_idx", schema)
 
+    def test_activity_counters_are_idempotent_and_retryable(self):
+        self.assertIn('"message_id": int(message_id)', self.source)
+        self.assertIn('on_conflict="chat_id,message_id", ignore_duplicates=True', self.source)
+        self.assertIn("Activity batch persistence failed (attempt %s/3; size=%s)", self.source)
+        schema = SCHEMA.read_text(encoding="utf-8").lower()
+        self.assertIn("alter table public.bot_activity_events add column if not exists message_id bigint", schema)
+        self.assertIn("bot_activity_events_chat_message_uidx", schema)
+
+    def test_warning_updates_check_database_write_results(self):
+        self.assertIn("Не удалось сохранить снятие варна", self.source)
+        self.assertIn("Не удалось сбросить предупреждения", self.source)
+
     def test_chat_lock_restores_saved_telegram_permissions(self):
         self.assertIn("current_permissions = getattr(chat_info, \"permissions\", None)", self.source)
         self.assertIn("current_permissions.model_dump(exclude_none=True)", self.source)
