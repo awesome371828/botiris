@@ -326,6 +326,27 @@ create index if not exists bot_activity_daily_day_idx
 create index if not exists bot_activity_daily_chat_user_idx
     on public.bot_activity_daily (chat_id, user_id, day desc);
 
+-- Backfill activity already observed by Pear CM before this aggregate table existed.
+-- GREATEST keeps rerunning this migration idempotent and never double-counts messages.
+insert into public.bot_activity_daily
+    (chat_id, user_id, day, username, first_name, messages, updated_at)
+select
+    chat_id,
+    user_id,
+    (created_at at time zone 'Europe/Moscow')::date as day,
+    max(username) as username,
+    coalesce(max(first_name), 'Пользователь') as first_name,
+    count(*)::bigint as messages,
+    now()
+from public.bot_activity_events
+group by chat_id, user_id, (created_at at time zone 'Europe/Moscow')::date
+on conflict (chat_id, user_id, day)
+do update set
+    messages = greatest(public.bot_activity_daily.messages, excluded.messages),
+    username = coalesce(excluded.username, public.bot_activity_daily.username),
+    first_name = coalesce(excluded.first_name, public.bot_activity_daily.first_name),
+    updated_at = now();
+
 alter table public.bot_activity_daily enable row level security;
 revoke all on public.bot_activity_daily from anon, authenticated;
 grant all on public.bot_activity_daily to service_role;
