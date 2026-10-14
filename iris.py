@@ -83,6 +83,7 @@ router = Router()
 dp.include_router(router)
 
 # Rate-limit only rapid repeats of the SAME command. Different commands remain usable back-to-back.
+_COMMAND_LATENCIES: deque[tuple[float, str]] = deque(maxlen=2000)
 _COMMAND_LAST: dict[tuple[int, int, str], float] = {}
 _COMMAND_NOTICE_LAST: dict[tuple[int, int, str], float] = {}
 
@@ -1026,7 +1027,16 @@ async def welcome_members(message: Message) -> None:
                 log.info("Bot joined chat=%s user=%s; antibot is monitor-only", message.chat.id, user.id)
             continue
         await asyncio.to_thread(ensure_user, user.id, message.chat.id, user.username, user.full_name)
-        await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
+        if settings.get("welcome_enabled", True):
+            template = str(settings.get("welcome_message") or "👋 Добро пожаловать, {name}!")[:1500]
+            safe_template = escape(template)
+            safe_template = safe_template.replace("{name}", escape(user.full_name or "участник"))
+            safe_template = safe_template.replace("{username}", escape("@" + user.username if user.username else user.full_name or "участник"))
+            safe_template = safe_template.replace("{id}", str(user.id))
+            try:
+                await message.answer(safe_template)
+            except Exception:
+                await message.answer(f"👋 Добро пожаловать, {mention(user.id, user.full_name)}!")
     # Process anti-raid after welcoming; this is called directly because aiogram stops at the first matching service-message handler.
     await apply_raid_protection(message)
 
@@ -1213,7 +1223,7 @@ async def mute_cmd(message: Message) -> None:
     else:
         until = issued_at + duration
 
-    reason = escape(reason or "не указана")
+    reason = escape(_reason_from_preset(message.chat.id, "mute", reason or "не указана"))
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     try:
         # Telegram cannot restrict a chat creator or administrator.
@@ -1296,7 +1306,7 @@ async def ban_cmd(message: Message) -> None:
     if not target:
         return
     raw_args = args_after_command(message)
-    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
+    reason = _reason_from_preset(message.chat.id, "ban", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         audit(message.chat.id, message.from_user.id, "ban", target[0], f"reason={reason}")
@@ -1333,7 +1343,7 @@ async def kick_cmd(message: Message) -> None:
     if not target:
         return
     raw_args = args_after_command(message)
-    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
+    reason = _reason_from_preset(message.chat.id, "kick", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
@@ -1376,7 +1386,7 @@ async def warn_cmd(message: Message) -> None:
         for key, stamp in list(_WARN_RECENT.items()):
             if now_mono - stamp > 60:
                 _WARN_RECENT.pop(key, None)
-    reason = " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана"
+    reason = _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     # Each warning expires after seven days.
     # Fetch the current warning ledger and user row concurrently; neither depends on the other.
     before, user = await asyncio.gather(
@@ -2202,6 +2212,8 @@ async def auto_moderation_filters(message: Message) -> None:
         return
     if message.from_user.id == OWNER_ID:
         return
+    if await asyncio.to_thread(_is_trusted_user, message.chat.id, message.from_user.id):
+        return
     # Monitor-only: avoid per-message Telegram admin calls and blocking DB rank lookups.
     try:
         settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
@@ -2686,6 +2698,557 @@ async def close_chat_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 
+
+# ── Advanced chat administration: temporary bans, notes, trusted users, settings ──
+_TRUSTED_CACHE: dict[tuple[int, int], tuple[bool, float]] = {}
+_TRUSTED_CACHE_TTL = 30.0
+
+def _is_trusted_user(chat_id: int, user_id: int) -> bool:
+    key = (chat_id, user_id)
+    now = time.monotonic()
+    cached = _TRUSTED_CACHE.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
+    row = db_one("bot_trusted_users", chat_id=chat_id, user_id=user_id, active=True)
+    value = bool(row and row.get("active"))
+    _TRUSTED_CACHE[key] = (value, now + _TRUSTED_CACHE_TTL)
+    if len(_TRUSTED_CACHE) > 10000:
+        for old_key, (_, expiry) in list(_TRUSTED_CACHE.items()):
+            if expiry < now:
+                _TRUSTED_CACHE.pop(old_key, None)
+    return value
+
+def _invalidate_trusted(chat_id: int, user_id: int) -> None:
+    _TRUSTED_CACHE.pop((chat_id, user_id), None)
+
+def _reason_from_preset(chat_id: int, action: str, raw_reason: str | None) -> str:
+    reason = (raw_reason or "").strip()
+    if not reason or reason.lower() in {"не указана", "не указано", "нет"}:
+        return reason or "не указана"
+    settings = get_chat_settings(chat_id)
+    presets = settings.get("punishment_reasons", {})
+    if not isinstance(presets, dict):
+        return reason
+    action_presets = presets.get(action, {})
+    if not isinstance(action_presets, dict):
+        return reason
+    key = reason.removeprefix("причина:").removeprefix("причина=").strip().casefold()
+    return str(action_presets.get(key, reason))[:500]
+
+def _settings_exportable(settings: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in settings.items():
+        if key in FILTER_DEFAULTS or key.startswith(("modrank_", "warn_")) or key in {
+            "welcome_message", "welcome_enabled", "schedule_enabled", "schedule_open",
+            "schedule_close", "schedule_timezone", "punishment_reasons", "command_cooldown",
+            "flood_limit", "flood_window", "caps_percent", "filter_mute_minutes",
+            "raid_threshold", "raid_window", "raid_restrict_minutes", "warn_3_action",
+            "warn_3_time", "warn_5_action", "warn_5_time", "warn_7_action", "warn_7_time",
+            "warn_10_action", "warn_10_time",
+        }:
+            safe[key] = value
+    # Runtime lock snapshots are intentionally excluded from portable settings.
+    safe.pop("chat_locked_by_bot", None)
+    safe.pop("chat_permissions_before_lock", None)
+    return safe
+
+def _validate_imported_settings(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or len(raw) > 200:
+        return None
+    result: dict[str, Any] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or len(key) > 80:
+            return None
+        allowed = key in FILTER_DEFAULTS or key.startswith(("modrank_", "warn_")) or key in {
+            "welcome_message", "welcome_enabled", "schedule_enabled", "schedule_open",
+            "schedule_close", "schedule_timezone", "punishment_reasons", "command_cooldown",
+            "flood_limit", "flood_window", "caps_percent", "filter_mute_minutes",
+            "raid_threshold", "raid_window", "raid_restrict_minutes",
+        }
+        if not allowed:
+            continue
+        if key.startswith("modrank_"):
+            try:
+                value = max(1, min(5, int(value)))
+            except (TypeError, ValueError):
+                return None
+        elif key in {"welcome_enabled", "schedule_enabled"} or key in FILTER_DEFAULTS and isinstance(FILTER_DEFAULTS[key], bool):
+            if not isinstance(value, bool):
+                return None
+        elif key == "punishment_reasons":
+            if not isinstance(value, dict) or len(value) > 20:
+                return None
+            for action, items in value.items():
+                if action not in {"mute", "ban", "kick", "warn", "unmute", "unban"} or not isinstance(items, dict) or len(items) > 50:
+                    return None
+                if any(not isinstance(k, str) or not isinstance(v, str) or len(k) > 40 or len(v) > 500 for k, v in items.items()):
+                    return None
+        elif key == "welcome_message":
+            if not isinstance(value, str) or len(value) > 1500:
+                return None
+        elif key in {"schedule_open", "schedule_close"}:
+            if not isinstance(value, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+                return None
+        elif key == "schedule_timezone":
+            if not isinstance(value, str) or len(value) > 80:
+                return None
+            try:
+                ZoneInfo(value)
+            except Exception:
+                return None
+        elif key.startswith("warn_"):
+            if not isinstance(value, (str, int, bool)) or len(str(value)) > 100:
+                return None
+        elif isinstance(value, (int, float)):
+            if abs(value) > 100000:
+                return None
+        elif isinstance(value, str):
+            if len(value) > 500:
+                return None
+        elif not isinstance(value, (bool, list, dict)):
+            return None
+        result[key] = value
+    return result
+
+@router.message(Command("tempban", "врембан"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:врембан|временный бан|tempban)(?:\s|$)"))
+async def temporary_ban_cmd(message: Message) -> None:
+    if not await check_mod(message, min_rank=3):
+        return
+    raw = (message.text or "").strip()
+    rest = re.sub(r"(?i)^\s*(?:/tempban(?:@\w+)?|/врембан|врембан|временный бан|tempban)\s*", "", raw).strip()
+    tokens = rest.split()
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user = message.reply_to_message.from_user
+        if target_user.is_bot:
+            await message.answer("Ответьте на сообщение обычного участника.")
+            return
+        target = (target_user.id, f"@{target_user.username}" if target_user.username else target_user.full_name)
+        duration_tokens = tokens
+    else:
+        if not tokens:
+            await message.answer("Формат: ответьте на участника <code>врембан 2д причина</code> или напишите <code>врембан @username 2д причина</code>.")
+            return
+        target = await resolve_target(message, tokens[:1])
+        if not target:
+            await message.answer("Не удалось найти пользователя. Ответьте на его сообщение или укажите известный чату @username/ID.")
+            return
+        duration_tokens = tokens[1:]
+    parsed = parse_duration_prefix(duration_tokens)
+    if not parsed:
+        await message.answer("Укажите срок временного бана: <code>врембан 2ч причина</code>, <code>врембан 3д причина</code> или <code>врембан 1н причина</code>.")
+        return
+    duration, consumed, duration_label = parsed
+    reason = _reason_from_preset(message.chat.id, "ban", " ".join(duration_tokens[consumed:]).strip() or "не указана")
+    until = datetime.now(timezone.utc) + duration
+    try:
+        target_member = await bot.get_chat_member(message.chat.id, target[0])
+        if target_member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
+            await message.answer("⛔ Нельзя временно забанить администратора или создателя Telegram-чата.")
+            return
+        await bot.ban_chat_member(message.chat.id, target[0], until_date=until)
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "tempban", target[0],
+              f"duration={duration_label}; reason={reason}; until={until.isoformat()}")
+        actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
+        await message.answer(
+            f"⛔ {mention(target[0], target[1])} временно забанен на <b>{escape(duration_label)}</b>.\n"
+            f"Причина: <b>{escape(reason[:300])}</b>\n"
+            f"⏳ До: <code>{format_moscow_time(until)}</code>\n👮 Модератор: {actor}."
+        )
+    except Exception as exc:
+        await safe_error(message, exc)
+
+@router.message(Command("note", "заметка"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:заметка|заметки|/note)(?:\s|$)"))
+async def admin_notes_cmd(message: Message) -> None:
+    if not await require_admin(message, min_rank=2):
+        return
+    raw = (message.text or "").strip()
+    match = re.match(r"(?i)^\s*(?:/note(?:@\w+)?|заметка|заметки)\s*(.*)$", raw)
+    rest = (match.group(1) if match else "").strip()
+    if not rest:
+        if not message.reply_to_message or not message.reply_to_message.from_user:
+            await message.answer("Форматы: ответьте на участника <code>заметка текст</code>; <code>заметки @username</code> — посмотреть заметки.")
+            return
+        target = message.reply_to_message.from_user
+        rest = ""
+    else:
+        parts = rest.split()
+        target = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target = message.reply_to_message.from_user
+        else:
+            target = await resolve_target(message, parts[:1])
+            if target:
+                rest = rest[len(parts[0]):].strip()
+        if not target:
+            await message.answer("Укажите участника ответом на сообщение или через @username/ID.")
+            return
+    target_id = target.id if hasattr(target, "id") else target[0]
+    target_name = (f"@{target.username}" if getattr(target, "username", None) else getattr(target, "full_name", None)) if hasattr(target, "id") else target[1]
+    if rest:
+        payload = {
+            "user_id": int(target_id), "chat_id": int(message.chat.id),
+            "actor_id": int(message.from_user.id if message.from_user else 0),
+            "content": rest[:1500], "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        saved = await asyncio.to_thread(db_insert, "bot_notes", payload)
+        if not saved:
+            await message.answer("⚠️ Не удалось сохранить заметку. Проверь таблицу bot_notes и подключение базы.")
+            return
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "note_add", target_id, rest[:300])
+        await message.answer(f"📝 Заметка для {mention(target_id, target_name)} сохранена.")
+        return
+    rows = await asyncio.to_thread(db_rows, "bot_notes", 100, "created_at", user_id=target_id, chat_id=message.chat.id)
+    rows = [row for row in rows if row.get("chat_id") in (None, message.chat.id)]
+    if not rows:
+        await message.answer(f"📝 У {mention(target_id, target_name)} пока нет заметок в этом чате.")
+        return
+    lines = []
+    for row in rows[:15]:
+        content = escape(str(row.get("content") or "")[:300])
+        stamp = escape(str(row.get("created_at") or ""))
+        lines.append(f"• <code>#{row.get('id','?')}</code> · <code>{stamp}</code>\n  {content}")
+    await message.answer(f"<b>📝 Заметки: {mention(target_id, target_name)}</b>\n" + "\n".join(lines))
+
+@router.message(Command("trusted", "доверенные"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:доверенный|доверенные|недоверенный)(?:\s|$)"))
+async def trusted_users_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    raw = (message.text or "").strip()
+    match = re.match(r"(?i)^\s*(?:/trusted(?:@\w+)?|доверенный|доверенные|недоверенный)\s*(.*)$", raw)
+    rest = (match.group(1) if match else "").strip()
+    command = re.sub(r"(?i)^\s*(?:/trusted(?:@\w+)?|доверенный|доверенные|недоверенный)", "", raw).strip().lower()
+    if not rest and not message.reply_to_message:
+        rows = await asyncio.to_thread(db_rows, "bot_trusted_users", 100, "created_at", chat_id=message.chat.id, active=True)
+        if not rows:
+            await message.answer("🛡 Список доверенных участников пуст.")
+            return
+        lines = []
+        for row in rows[:30]:
+            uid = int(row.get("user_id") or 0)
+            urow = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id) or {}
+            uname = ("@" + str(urow.get("username")).lstrip("@")) if urow.get("username") else str(urow.get("first_name") or f"ID {uid}")
+            lines.append(f"• {escape(uname)} · <code>{uid}</code>")
+        await message.answer("<b>🛡 Доверенные участники</b>\n" + "\n".join(lines))
+        return
+    target = None
+    if message.reply_to_message and message.reply_to_message.from_user:
+        u = message.reply_to_message.from_user
+        target = (u.id, f"@{u.username}" if u.username else u.full_name)
+    else:
+        target = await resolve_target(message, rest.split()[:1])
+    if not target:
+        await message.answer("Ответьте на сообщение или укажите известный чату @username/ID.")
+        return
+    remove = raw.lower().lstrip().startswith("недоверенный")
+    payload = {"chat_id": message.chat.id, "user_id": target[0], "active": not remove,
+               "actor_id": message.from_user.id if message.from_user else 0,
+               "created_at": datetime.now(timezone.utc).isoformat()}
+    saved = await asyncio.to_thread(db_upsert, "bot_trusted_users", payload, "chat_id,user_id")
+    if not saved:
+        await message.answer("⚠️ Не удалось сохранить доверенный список. Проверь новую таблицу bot_trusted_users.")
+        return
+    _invalidate_trusted(message.chat.id, target[0])
+    audit(message.chat.id, message.from_user.id if message.from_user else 0,
+          "untrust" if remove else "trust", target[0])
+    await message.answer(f"{'➖ Убран из доверенных' if remove else '🛡 Добавлен в доверенные'}: {mention(target[0], target[1])}.")
+
+@router.message(Command("reasons", "причины"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:причины|причина)(?:\s|$)"))
+async def punishment_reasons_cmd(message: Message) -> None:
+    if not await require_admin(message, min_rank=2):
+        return
+    raw = (message.text or "").strip()
+    match = re.match(r"(?i)^\s*(?:/reasons(?:@\w+)?|причины|причина)\s*(.*)$", raw)
+    rest = (match.group(1) if match else "").strip()
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    presets = settings.get("punishment_reasons", {})
+    if rest.lower().startswith("добавить "):
+        parts = rest.split(maxsplit=3)
+        if len(parts) < 4:
+            await message.answer("Формат: <code>причина добавить мут спам Спам и ссылки запрещены</code>")
+            return
+        action_alias = parts[1].lower()
+        action = {"мут":"mute", "бан":"ban", "кик":"kick", "варн":"warn", "предупреждение":"warn"}.get(action_alias, action_alias)
+        key = parts[2].casefold()
+        if action not in {"mute", "ban", "kick", "warn"} or not re.fullmatch(r"[\w-]{1,40}", key):
+            await message.answer("Действие: мут, бан, кик или варн; ключ — одно короткое слово.")
+            return
+        if not isinstance(presets, dict):
+            presets = {}
+        action_presets = presets.setdefault(action, {})
+        if not isinstance(action_presets, dict):
+            action_presets = {}; presets[action] = action_presets
+        action_presets[key] = parts[3][:500]
+        settings["punishment_reasons"] = presets
+        save_chat_settings(message.chat.id, settings)
+        await message.answer(f"✅ Причина <code>{escape(key)}</code> для действия <b>{escape(action_alias)}</b> сохранена.")
+        return
+    if rest.lower().startswith("удалить "):
+        parts = rest.split()
+        if len(parts) != 3:
+            await message.answer("Формат: <code>причина удалить мут спам</code>")
+            return
+        action = {"мут":"mute", "бан":"ban", "кик":"kick", "варн":"warn"}.get(parts[1].lower(), parts[1].lower())
+        key = parts[2].casefold()
+        if isinstance(presets, dict) and isinstance(presets.get(action), dict):
+            presets[action].pop(key, None)
+            settings["punishment_reasons"] = presets
+            save_chat_settings(message.chat.id, settings)
+        await message.answer(f"🗑 Шаблон причины <code>{escape(key)}</code> удалён, если существовал.")
+        return
+    lines = []
+    if isinstance(presets, dict):
+        for action, items in presets.items():
+            if isinstance(items, dict):
+                for key, value in items.items():
+                    lines.append(f"• <b>{escape(action)}</b> · <code>{escape(str(key))}</code> — {escape(str(value)[:160])}")
+    await message.answer(
+        "<b>📚 Шаблоны причин наказаний</b>\n" +
+        ("\n".join(lines[:40]) if lines else "Пока нет шаблонов.") +
+        "\n\nДобавить: <code>причина добавить мут спам Текст причины</code>\nУдалить: <code>причина удалить мут спам</code>"
+    )
+
+@router.message(Command("modrights", "права"))
+@router.message(F.text.regexp(r"(?i)^\s*права(?:\s|$)"))
+async def granular_permissions_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    aliases = {
+        "мут":"mute", "бан":"ban", "врембан":"ban", "кик":"kick", "варн":"warn",
+        "анварн":"unwarn", "размут":"unmute", "разбан":"unban", "повысить":"promote",
+        "понизить":"demote", "очистить":"purge", "-смс":"delete", "пин":"pin", "анпин":"unpin",
+    }
+    raw = (message.text or "").strip()
+    rest = re.sub(r"(?i)^\s*(?:/modrights(?:@\w+)?|/права|права)\s*", "", raw).strip()
+    if not rest:
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        lines = [f"• <b>{escape(key[7:])}</b>: ранг <b>{value}</b>" for key, value in settings.items()
+                 if key.startswith("modrank_") and str(value).isdigit()]
+        await message.answer("<b>🔐 Права команд</b>\n" + ("\n".join(lines) if lines else "Для всех команд действуют стандартные пороги.") +
+                             "\n\nНастроить: <code>права мут 3</code> (ранг 1–5).")
+        return
+    parts = rest.split()
+    if len(parts) != 2 or parts[0].lower() not in aliases or not parts[1].isdigit() or not 1 <= int(parts[1]) <= 5:
+        await message.answer("Формат: <code>права мут 3</code>. Доступные действия: мут, бан, кик, варн, анварн, размут, разбан, повысить, понизить, очистить, пин.")
+        return
+    key, rank = aliases[parts[0].lower()], int(parts[1])
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    settings[f"modrank_{key}"] = rank
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "permission_change", None, f"{key}={rank}")
+    await message.answer(f"✅ Для команды <b>{escape(parts[0])}</b> установлен минимальный ранг <b>{rank} — {role_name(rank)}</b>.")
+
+@router.message(Command("exportsettings", "экспортнастроек"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:экспорт настроек|экспорт настроек чата)\s*$"))
+async def export_chat_settings_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id, True)
+    data = {"format": "pear-cm-chat-settings", "version": 1, "settings": _settings_exportable(settings)}
+    raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    await message.answer_document(BufferedInputFile(raw, filename=f"pear_cm_settings_{message.chat.id}.json"),
+                                 caption="Экспорт настроек Pear CM. Секреты и текущая блокировка чата не включены.")
+
+@router.message(Command("importsettings", "импортнастроек"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:импорт настроек|импорт настроек чата)\s*$"))
+async def import_chat_settings_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    doc = message.reply_to_message.document if message.reply_to_message else None
+    if not doc:
+        await message.answer("Сначала отправьте JSON-файл экспорта, затем ответьте на него командой <code>импорт настроек</code>.")
+        return
+    if doc.file_size and doc.file_size > 128 * 1024:
+        await message.answer("Файл слишком большой. Максимальный размер — 128 КБ.")
+        return
+    try:
+        buffer = BytesIO()
+        await bot.download(doc.file_id, destination=buffer)
+        parsed = json.loads(buffer.getvalue().decode("utf-8"))
+        if not isinstance(parsed, dict) or parsed.get("format") != "pear-cm-chat-settings" or parsed.get("version") != 1:
+            raise ValueError("неподдерживаемый формат")
+        imported = _validate_imported_settings(parsed.get("settings"))
+        if imported is None:
+            raise ValueError("проверка значений не пройдена")
+        current = await asyncio.to_thread(get_chat_settings, message.chat.id, True)
+        current.update(imported)
+        save_chat_settings(message.chat.id, current)
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "settings_import", None, f"keys={len(imported)}")
+        await message.answer(f"✅ Импортировано настроек: <b>{len(imported)}</b>. Права чата и секреты не импортировались.")
+    except Exception as exc:
+        log.warning("Settings import failed: %s", type(exc).__name__)
+        await message.answer("⚠️ Не удалось импортировать JSON. Проверьте файл экспорта Pear CM и его целостность.")
+
+@router.message(Command("welcome", "приветствие"))
+@router.message(F.text.regexp(r"(?i)^\s*приветствие(?:\s|$)"))
+async def configure_welcome_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    raw = (message.text or "").strip()
+    rest = re.sub(r"(?i)^\s*(?:/welcome(?:@\w+)?|приветствие)\s*", "", raw).strip()
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    if not rest:
+        enabled = settings.get("welcome_enabled", True)
+        template = settings.get("welcome_message", "👋 Добро пожаловать, {name}!")
+        await message.answer(f"<b>👋 Приветствие</b>: {'включено' if enabled else 'выключено'}\nШаблон: <code>{escape(str(template))}</code>\n\nУстановить: <code>приветствие Добро пожаловать, {{name}}!</code>\nВыключить: <code>приветствие выкл</code>\nВключить: <code>приветствие вкл</code>")
+        return
+    if rest.lower() in {"выкл", "выключить", "off", "disable"}:
+        settings["welcome_enabled"] = False
+    elif rest.lower() in {"вкл", "включить", "on", "enable"}:
+        settings["welcome_enabled"] = True
+    else:
+        settings["welcome_enabled"] = True
+        settings["welcome_message"] = rest[:1500]
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "welcome_settings", None, rest[:200])
+    await message.answer("✅ Настройки приветствия обновлены.")
+
+@router.message(Command("modstats", "статистикамодераторов"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:статистика модераторов|статистика модераторов)(?:\s|$)"))
+async def moderator_stats_cmd(message: Message) -> None:
+    if not await require_admin(message, min_rank=2):
+        return
+    raw = (message.text or "").strip().lower()
+    match = re.search(r"(день|сегодня|неделя|месяц|24ч|7д|30д)", raw)
+    days = 1 if match and match.group(1) in {"день", "сегодня", "24ч"} else 7 if match and match.group(1) in {"неделя", "7д"} else 30
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = await asyncio.to_thread(db_rows, "bot_audit", 1000, "created_at", chat_id=message.chat.id)
+    counts: dict[int, int] = defaultdict(int)
+    for row in rows:
+        try:
+            stamp = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            actor_id = int(row.get("actor_id") or 0)
+        except Exception:
+            continue
+        if stamp >= cutoff and actor_id > 0:
+            counts[actor_id] += 1
+    if not counts:
+        await message.answer(f"📊 За последние {days} дн. действий модераторов не найдено.")
+        return
+    lines = []
+    for actor_id, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:15]:
+        user = await asyncio.to_thread(db_one, "bot_users", user_id=actor_id, chat_id=message.chat.id) or {}
+        label = ("@" + str(user.get("username")).lstrip("@")) if user.get("username") else str(user.get("first_name") or f"ID {actor_id}")
+        lines.append(f"• {escape(label)} — <b>{count}</b> действий")
+    await message.answer(f"<b>📊 Статистика модераторов за {days} дн.</b>\n" + "\n".join(lines))
+
+async def _apply_scheduled_chat_lock(chat_id: int, settings: dict[str, Any], should_lock: bool) -> bool:
+    currently_locked = bool(settings.get("chat_locked_by_bot"))
+    if currently_locked == should_lock:
+        return False
+    try:
+        if should_lock:
+            settings.setdefault("chat_permissions_before_lock", {
+                "can_send_messages": True, "can_send_audios": True, "can_send_documents": True,
+                "can_send_photos": True, "can_send_videos": True, "can_send_video_notes": True,
+                "can_send_voice_notes": True, "can_send_polls": True, "can_send_other_messages": True,
+                "can_add_web_page_previews": True,
+            })
+            await bot.set_chat_permissions(chat_id, permissions=ChatPermissions(
+                can_send_messages=False, can_send_audios=False, can_send_documents=False,
+                can_send_photos=False, can_send_videos=False, can_send_video_notes=False,
+                can_send_voice_notes=False, can_send_polls=False, can_send_other_messages=False,
+                can_add_web_page_previews=False,
+            ))
+            settings["chat_locked_by_bot"] = True
+        else:
+            saved = settings.get("chat_permissions_before_lock")
+            permissions = ChatPermissions(**saved) if isinstance(saved, dict) else ChatPermissions(
+                can_send_messages=True, can_send_audios=True, can_send_documents=True,
+                can_send_photos=True, can_send_videos=True, can_send_video_notes=True,
+                can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            )
+            await bot.set_chat_permissions(chat_id, permissions=permissions)
+            settings.pop("chat_permissions_before_lock", None)
+            settings["chat_locked_by_bot"] = False
+        save_chat_settings(chat_id, settings)
+        audit(chat_id, 0, "scheduled_chat_close" if should_lock else "scheduled_chat_open")
+        return True
+    except Exception:
+        log.exception("Scheduled chat lock change failed chat=%s lock=%s", chat_id, should_lock)
+        return False
+
+async def _schedule_worker() -> None:
+    """Apply configured daily chat open/close times. A per-day marker prevents duplicate actions."""
+    while True:
+        try:
+            rows = await asyncio.to_thread(db_rows, "bot_chat_settings", 1000, "updated_at")
+            for row in rows:
+                try:
+                    chat_id = int(row.get("chat_id"))
+                    settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
+                    if not settings.get("schedule_enabled"):
+                        continue
+                    tz = ZoneInfo(str(settings.get("schedule_timezone") or "Europe/Moscow"))
+                    now_local = datetime.now(tz)
+                    hhmm = now_local.strftime("%H:%M")
+                    date_key = now_local.strftime("%Y-%m-%d")
+                    for mode, key, lock in (("close", "schedule_close", True), ("open", "schedule_open", False)):
+                        if str(settings.get(key) or "") != hhmm or settings.get(f"_schedule_{mode}_date") == date_key:
+                            continue
+                        changed = await _apply_scheduled_chat_lock(chat_id, dict(settings), lock)
+                        settings[f"_schedule_{mode}_date"] = date_key
+                        if changed:
+                            try:
+                                await bot.send_message(chat_id, "🔒 Чат автоматически закрыт по расписанию." if lock else "🔓 Чат автоматически открыт по расписанию.")
+                            except Exception:
+                                pass
+                        save_chat_settings(chat_id, settings)
+                except Exception:
+                    log.exception("Invalid chat schedule record")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Schedule worker failed")
+        await asyncio.sleep(30)
+
+@router.message(Command("schedule", "расписание"))
+@router.message(F.text.regexp(r"(?i)^\s*расписание(?:\s|$)"))
+async def chat_schedule_cmd(message: Message) -> None:
+    if not await require_real_admin(message):
+        return
+    raw = (message.text or "").strip()
+    rest = re.sub(r"(?i)^\s*(?:/schedule(?:@\w+)?|расписание)\s*", "", raw).strip()
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    if not rest:
+        enabled = bool(settings.get("schedule_enabled"))
+        await message.answer(
+            f"<b>🕒 Расписание чата</b>: {'включено' if enabled else 'выключено'}\n"
+            f"Закрытие: <code>{escape(str(settings.get('schedule_close') or 'не задано'))}</code>\n"
+            f"Открытие: <code>{escape(str(settings.get('schedule_open') or 'не задано'))}</code>\n"
+            f"Часовой пояс: <code>{escape(str(settings.get('schedule_timezone') or 'Europe/Moscow'))}</code>\n\n"
+            "Настроить: <code>расписание 23:00 08:00</code>\nОтключить: <code>расписание выкл</code>"
+        )
+        return
+    if rest.lower() in {"выкл", "выключить", "off"}:
+        settings["schedule_enabled"] = False
+        save_chat_settings(message.chat.id, settings)
+        await message.answer("🛑 Автоматическое расписание выключено.")
+        return
+    parts = rest.split()
+    if len(parts) not in (2, 3) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", parts[0]) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", parts[1]):
+        await message.answer("Формат: <code>расписание 23:00 08:00</code> или <code>расписание 23:00 08:00 Europe/Moscow</code>.")
+        return
+    tz_name = parts[2] if len(parts) == 3 else "Europe/Moscow"
+    try:
+        ZoneInfo(tz_name)
+    except Exception:
+        await message.answer("Неизвестный часовой пояс. Пример: <code>Europe/Moscow</code>.")
+        return
+    settings.update({"schedule_enabled": True, "schedule_close": parts[0], "schedule_open": parts[1], "schedule_timezone": tz_name})
+    settings.pop("_schedule_close_date", None)
+    settings.pop("_schedule_open_date", None)
+    save_chat_settings(message.chat.id, settings)
+    audit(message.chat.id, message.from_user.id if message.from_user else 0, "schedule_settings", None, f"close={parts[0]};open={parts[1]};tz={tz_name}")
+    await message.answer(f"✅ Расписание включено: закрытие <b>{parts[0]}</b>, открытие <b>{parts[1]}</b> ({escape(tz_name)}).")
+
+
 router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)(auto_moderation_filters)
 
 
@@ -2829,6 +3392,11 @@ async def owner_diagnostics(message: Message) -> None:
                 lines.append(f"• {table}: <b>OK</b>")
             except Exception:
                 lines.append(f"• {table}: <b>нет доступа/таблица не создана</b>")
+    recent_latencies = [elapsed for elapsed, _kind in list(_COMMAND_LATENCIES)[-100:]]
+    if recent_latencies:
+        ordered = sorted(recent_latencies)
+        p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+        lines.append(f"• Обработчики: p50={ordered[len(ordered)//2]*1000:.0f} мс; p95={p95*1000:.0f} мс (последние {len(ordered)} обновлений)")
     await message.answer("<b>🧪 Диагностика</b>\n" + "\n".join(lines) + "\n\nСекретные значения не выводятся.")
 
 @router.message(Command("globalstats", "глобальнаястатистика"))
@@ -3260,14 +3828,17 @@ async def main() -> None:
     await bot.delete_webhook(drop_pending_updates=False)
     log.info("Bot started")
     activity_writer = asyncio.create_task(_activity_writer_loop(), name="pear-activity-writer")
+    schedule_worker = asyncio.create_task(_schedule_worker(), name="pear-chat-scheduler")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         activity_writer.cancel()
-        try:
-            await activity_writer
-        except asyncio.CancelledError:
-            pass
+        schedule_worker.cancel()
+        for task in (activity_writer, schedule_worker):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await bot.session.close()
 
 if __name__ == "__main__":
