@@ -79,6 +79,16 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Track real message IDs observed during this process. Telegram Bot API has no history endpoint.
+_RECENT_MESSAGE_IDS: dict[int, deque[int]] = defaultdict(lambda: deque(maxlen=5000))
+
+async def _remember_message_id(handler, event: Message, data):
+    if isinstance(event, Message):
+        _RECENT_MESSAGE_IDS[event.chat.id].append(event.message_id)
+    return await handler(event, data)
+
+router.message.outer_middleware(_remember_message_id)
+
 # Runtime cache is used if Supabase is temporarily unavailable. Settings are also
 # persisted in bot_chat_settings when the table from schema.sql exists.
 FILTER_DEFAULTS = {
@@ -456,7 +466,8 @@ async def my_warns(message: Message) -> None:
     if not message.from_user:
         return
     user = ensure_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
-    await message.answer(f"⚠️ У вас <b>{int(user.get('warns', 0))}</b> предупреждений.")
+    display = f"@{message.from_user.username}" if message.from_user.username else mention(message.from_user.id, message.from_user.full_name)
+    await message.answer(f"⚠️ {display}, у вас <b>{int(user.get('warns', 0))}</b> предупреждений.")
 
 @router.message(F.text == "💍 Брак")
 async def marriage_menu(message: Message) -> None:
@@ -496,8 +507,7 @@ async def welcome_members(message: Message) -> None:
     await apply_raid_protection(message)
 
 async def track_activity(message: Message) -> None:
-    # This handler is registered last and only records regular messages.
-    if not message.from_user or message.from_user.is_bot or not message.text:
+    if not message.from_user or message.from_user.is_bot or not message.text or not is_group(message):
         return
     user = ensure_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
     db_upsert("bot_users", {
@@ -507,6 +517,11 @@ async def track_activity(message: Message) -> None:
         "messages": int(user.get("messages", 0)) + 1,
         "last_seen": datetime.now(timezone.utc).isoformat(),
     }, "user_id,chat_id")
+    db_insert("bot_activity_events", {
+        "chat_id": message.chat.id, "user_id": message.from_user.id,
+        "username": message.from_user.username, "first_name": message.from_user.full_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 # ── Moderation: shared command implementation ─────────────────────────────────
 async def moderation_target(message: Message, command: str) -> tuple[int, str] | None:
@@ -723,31 +738,31 @@ async def clearwarns_cmd(message: Message) -> None:
 
 # ── Message tools ─────────────────────────────────────────────────────────────
 @router.message(Command("del"))
-@router.message(F.text.regexp(r"(?i)^-смс(?:\s+\d+)?$"))
+@router.message(F.text.regexp(r"(?i)^\s*-смс(?:\s+\d+)?\s*$"))
 async def delete_message_cmd(message: Message) -> None:
     if not await require_admin(message):
         return
-
     raw = (message.text or "").strip()
-    match = re.fullmatch(r"(?i)-смс(?:\s+(\d+))?", raw)
-
-    # -смс N удаляет N последних сообщений ДО команды. Саму команду удаляем отдельно.
-    # Telegram не предоставляет историю сообщений боту, поэтому проверяем предыдущие
-    # message_id и пропускаем удалённые/недоступные сообщения, пока не наберём N.
+    match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
     if match and match.group(1):
-        try:
-            requested = int(match.group(1))
-        except ValueError:
-            requested = 10
-        count = max(1, min(100, requested))
+        count = max(1, min(100, int(match.group(1))))
+        # Delete actual recent IDs seen by the bot, newest first, excluding this command.
+        seen = list(_RECENT_MESSAGE_IDS.get(message.chat.id, ()))
+        candidates = list(dict.fromkeys(mid for mid in reversed(seen) if mid < message.message_id))[:count]
+        # Probe older IDs only if the bot has not observed enough recent messages.
+        if len(candidates) < count:
+            known = set(candidates)
+            mid = message.message_id - 1
+            scanned = 0
+            while len(candidates) < count and mid > 0 and scanned < 5000:
+                if mid not in known:
+                    candidates.append(mid)
+                    known.add(mid)
+                mid -= 1
+                scanned += 1
         deleted = 0
         forbidden = False
-        scanned = 0
-        scan_limit = min(2000, max(100, count * 20))
-        mid = message.message_id - 1
-
-        while mid >= 1 and deleted < count and scanned < scan_limit:
-            scanned += 1
+        for mid in candidates:
             try:
                 await bot.delete_message(chat_id=message.chat.id, message_id=mid)
                 deleted += 1
@@ -755,54 +770,35 @@ async def delete_message_cmd(message: Message) -> None:
                 forbidden = True
                 break
             except TelegramBadRequest:
-                # ID может относиться к уже удалённому или недоступному сообщению.
-                pass
+                continue
             except Exception:
-                log.exception("Ошибка удаления сообщения %s в чате %s", mid, message.chat.id)
-            mid -= 1
-
+                log.exception("Failed to delete message_id=%s chat_id=%s", mid, message.chat.id)
         try:
             await message.delete()
-        except TelegramForbiddenError:
-            forbidden = True
-        except Exception:
-            log.debug("Не удалось удалить команду -смс", exc_info=True)
-
-        audit(
-            message.chat.id, message.from_user.id, "purge_recent",
-            details=f"requested={count};deleted={deleted};scanned={scanned};forbidden={forbidden}",
-        )
-        if forbidden:
-            response = await message.answer(
-                "⛔ Не хватает прав на удаление сообщений. Назначьте бота администратором "
-                "и включите право «Удаление сообщений»."
-            )
-        else:
-            response = await message.answer(
-                f"🧹 Удалено предыдущих сообщений: <b>{deleted}</b> из {count}."
-                + (" Не все сообщения доступны для удаления." if deleted < count else "")
-            )
-        await asyncio.sleep(4)
-        try:
-            await response.delete()
         except Exception:
             pass
+        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted}")
+        if forbidden:
+            await message.answer("⛔ У бота нет права «Удаление сообщений».")
+        else:
+            response = await message.answer(
+                f"🧹 Удалено сообщений: <b>{deleted}</b> из {count}."
+                + (" Некоторые сообщения уже удалены или недоступны." if deleted < count else "")
+            )
+            await asyncio.sleep(3)
+            try:
+                await response.delete()
+            except Exception:
+                pass
         return
-
     target_message = message.reply_to_message
     if not target_message:
-        await message.answer(
-            "Ответьте на сообщение командой <code>/del</code> или напишите "
-            "<code>-смс 10</code>, чтобы удалить 10 последних сообщений."
-        )
+        await message.answer("Ответьте на сообщение командой <code>/del</code> или напишите <code>-смс 10</code>.")
         return
     try:
         await target_message.delete()
         await message.delete()
-        audit(
-            message.chat.id, message.from_user.id, "delete",
-            target_message.from_user.id if target_message.from_user else None,
-        )
+        audit(message.chat.id, message.from_user.id, "delete", target_message.from_user.id if target_message.from_user else None)
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -893,13 +889,51 @@ async def info_cmd(message: Message) -> None:
 @router.message(Command("top"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
-    rows = db_rows("bot_users", limit=10, order="messages", chat_id=message.chat.id)
+    raw = (message.text or "").strip().lower()
+    arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip()
+    aliases = {
+        "день":"day", "дня":"day", "сегодня":"day", "за день":"day",
+        "неделя":"week", "неделю":"week", "недели":"week", "за неделю":"week",
+        "месяц":"month", "месяца":"month", "за месяц":"month",
+        "год":"year", "года":"year", "за год":"year",
+        "вся":"all", "все":"all", "всё":"all", "всё время":"all", "все время":"all",
+        "за всё время":"all", "за все время":"all", "all":"all", "alltime":"all",
+        "day":"day", "week":"week", "month":"month", "year":"year",
+    }
+    period = aliases.get(arg, "all")
+    labels = {"all":"за всё время", "day":"за день", "week":"за неделю", "month":"за месяц", "year":"за год"}
+    if period == "all":
+        rows = db_rows("bot_users", limit=10, order="messages", chat_id=message.chat.id)
+    else:
+        if db is None:
+            await message.answer("⚠️ Для топа по периодам нужна подключённая Supabase и таблица bot_activity_events.")
+            return
+        delta = {"day":timedelta(days=1), "week":timedelta(days=7), "month":timedelta(days=30), "year":timedelta(days=365)}[period]
+        try:
+            events = (db.table("bot_activity_events").select("user_id,username,first_name")
+                      .eq("chat_id", message.chat.id)
+                      .gte("created_at", (datetime.now(timezone.utc)-delta).isoformat())
+                      .order("created_at", desc=True).limit(10000).execute().data or [])
+            grouped = {}
+            for event in events:
+                uid = int(event["user_id"])
+                if uid not in grouped:
+                    grouped[uid] = {"user_id":uid, "username":event.get("username"),
+                                    "first_name":event.get("first_name") or "Участник", "messages":0}
+                grouped[uid]["messages"] += 1
+            rows = sorted(grouped.values(), key=lambda row: row["messages"], reverse=True)[:10]
+        except Exception:
+            log.exception("Period top query failed")
+            await message.answer("⚠️ Не найдена таблица bot_activity_events. Примените обновлённый schema.sql в Supabase.")
+            return
     if not rows:
-        await message.answer("Пока нет данных для топа. Сообщения начнут учитываться после настройки Supabase.")
+        await message.answer(f"🏆 Пока нет данных для топа {labels[period]}.")
         return
-    lines = ["🏆 <b>Топ участников по сообщениям</b>"]
+    lines = [f"🏆 <b>Топ участников {labels[period]}</b>"]
     for index, row in enumerate(rows, 1):
-        lines.append(f"{index}. {mention(int(row['user_id']), row.get('first_name') or 'Участник')} — {int(row.get('messages', 0))} 💬")
+        uid = int(row["user_id"])
+        name = f"@{row['username']}" if row.get("username") else mention(uid, row.get("first_name") or "Участник")
+        lines.append(f"{index}. {name} — <b>{int(row.get('messages', 0))}</b> 💬")
     await message.answer("\n".join(lines))
 
 @router.message(Command("logs"))
@@ -2096,27 +2130,15 @@ async def main() -> None:
         BotCommand(command="help", description="Справка по командам чата"),
         BotCommand(command="admins", description="Администраторы чата"),
         BotCommand(command="warns", description="Мои предупреждения"),
-        BotCommand(command="top", description="Топ участников"),
-        BotCommand(command="mute", description="Мут участника (ответом)"),
+        BotCommand(command="top", description="Топ за период"),
+        BotCommand(command="mute", description="Мут (ответом)"),
         BotCommand(command="unmute", description="Снять мут (ответом)"),
-        BotCommand(command="ban", description="Забанить (ответом)"),
+        BotCommand(command="ban", description="Бан (ответом)"),
         BotCommand(command="kick", description="Исключить (ответом)"),
         BotCommand(command="warn", description="Предупреждение (ответом)"),
-        BotCommand(command="pin", description="Закрепить сообщение (ответом)"),
-        BotCommand(command="del", description="Удалить сообщение (ответом)"),
-        BotCommand(command="purge", description="Очистить сообщения (ответом)"),
+        BotCommand(command="del", description="Удалить сообщения"),
         BotCommand(command="openchat", description="Открыть чат"),
         BotCommand(command="closechat", description="Закрыть чат"),
-        BotCommand(command="antiflood", description="Настроить антифлуд"),
-        BotCommand(command="antispam", description="Настроить антиспам"),
-        BotCommand(command="antiraid", description="Настроить антирейд"),
-        BotCommand(command="checkrights", description="Проверить права бота"),
-        BotCommand(command="history", description="История наказаний"),
-        BotCommand(command="report", description="Отправить жалобу"),
-        BotCommand(command="appeal", description="Апелляция"),
-        BotCommand(command="calc", description="Калькулятор"),
-        BotCommand(command="random", description="Случайное число"),
-        BotCommand(command="dice", description="Бросить кубик"),
     ]
     private_commands = [
         BotCommand(command="start", description="Открыть меню бота"),
