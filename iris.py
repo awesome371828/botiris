@@ -1082,11 +1082,20 @@ async def marriage_menu(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:админы|кто админ)(?:\s|$)"))
 async def admins(message: Message) -> None:
     try:
-        # Show only roles assigned inside Pear CM; Telegram admin status is separate.
-        ranked_users_result = await asyncio.to_thread(
-            db_rows, "bot_users", limit=1000, chat_id=message.chat.id
+        # Show Pear CM roles plus the real Telegram chat creator.
+        ranked_users_result, telegram_admins_result = await asyncio.gather(
+            asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id),
+            bot.get_chat_administrators(message.chat.id),
+            return_exceptions=True,
         )
         ranked_users = ranked_users_result if isinstance(ranked_users_result, list) else []
+        chat_creators: dict[int, str] = {}
+        if isinstance(telegram_admins_result, BaseException):
+            log.info("Could not fetch Telegram chat creator for chat %s: %s", message.chat.id, telegram_admins_result)
+        else:
+            for member in telegram_admins_result:
+                if member.status == ChatMemberStatus.CREATOR:
+                    chat_creators[member.user.id] = member.user.full_name or f"ID {member.user.id}"
         ranks: dict[int, tuple[int, str, str | None]] = {}
         for row in ranked_users:
             try:
@@ -1114,10 +1123,17 @@ async def admins(message: Message) -> None:
             1: "⭐ Модераторы",
         }
         grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
-        # This list is intentionally limited to Pear CM roles from bot_users.
+        creator_ids = set(chat_creators)
+        # The chat creator is listed separately and never duplicated in Pear CM ranks.
         for uid, entry in ranks.items():
-            grouped[entry[0]].append((uid, entry[1], entry[2]))
+            if uid not in creator_ids:
+                grouped[entry[0]].append((uid, entry[1], entry[2]))
         lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", ""]
+        if chat_creators:
+            lines.append("<b>👑 Создатели чата</b>")
+            for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
+                lines.append(f"👑 {escape(str(name))} · создатель чата")
+            lines.append("")
         for rank in (5, 4, 3, 2, 1):
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
             if not members:
@@ -1125,12 +1141,12 @@ async def admins(message: Message) -> None:
             lines.append(f"<b>{rank_titles[rank]} · Pear CM</b>")
             icon = "🎾" if rank == 3 else "🏐"
             for uid, name, username in members:
-                display = escape(str(name or "Участник"))
-                link = f"https://t.me/{username}" if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else f"tg://user?id={uid}"
-                lines.append(f"{icon} <a href=\"{link}\">{display}</a>")
+                # Names are intentionally plain text, not clickable links.
+                display = escape(str(name or (f"@{username}" if username else f"ID {uid}")))
+                lines.append(f"{icon} {display}")
             lines.append("")
         if len(lines) <= 2:
-            lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока нет назначенных администраторов или модераторов Pear CM."]
+            lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока не найдены создатели чата или назначенные роли Pear CM."]
         await message.answer("\n".join(lines).strip())
     except Exception:
         log.exception("Could not build Pear CM internal admin list")
@@ -1641,6 +1657,8 @@ async def unwarn_cmd(message: Message) -> None:
     target = await moderation_target(message, "unwarn")
     if not target:
         return
+    if not await ensure_moderation_target_safe(message, target, "unwarn"):
+        return
     count = await asyncio.to_thread(active_warn_count, message.chat.id, target[0])
     if count <= 0:
         await message.answer(f"ℹ️ У {mention(target[0], target[1])} нет действующих предупреждений за последние 7 дней.")
@@ -1667,6 +1685,8 @@ async def clearwarns_cmd(message: Message) -> None:
         return
     target = await moderation_target(message, "clearwarns")
     if not target:
+        return
+    if not await ensure_moderation_target_safe(message, target, "clearwarns"):
         return
     ledger_saved = await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0, "clearwarns", target[0])
     if not ledger_saved:
@@ -2811,11 +2831,11 @@ async def rank_cmd(message: Message) -> None:
     await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\s+ранг|promote)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить(?:\s*[- ]?\s*ранг)?|повышени(?:е|я|ю|ем|и)|повышай|повышайся|продвинуть|поднять(?:\s+ранг)?|назначить\s+(?:ранг|чин)|присвоить\s+ранг|promote)(?:\s|$)"))
 async def promote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    remainder = re.sub(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\s+ранг|promote)\s*", "", (message.text or "").strip(), count=1).strip()
+    remainder = re.sub(r"(?i)^[.!/]?(?:повысить(?:\s*[- ]?\s*ранг)?|повышени(?:е|я|ю|ем|и)|повышай|повышайся|продвинуть|поднять(?:\s+ранг)?|назначить\s+(?:ранг|чин)|присвоить\s+ранг|promote)\s*", "", (message.text or "").strip(), count=1).strip()
     tokens = remainder.split()
     explicit = None
     for token in tokens:
@@ -2882,11 +2902,11 @@ async def promote_rank_cmd(message: Message) -> None:
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\s+(?:ранг|чин|админа|администратора|модератора)|убрать\s+(?:ранг|чин)|разжаловать|лишить\s+ранга|понизить\s+в\s+должности|demote)(?:\s|$)"))
 async def demote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    remainder = re.sub(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)\s*", "", (message.text or "").strip(), count=1).strip()
+    remainder = re.sub(r"(?i)^[.!/]?(?:понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\s+(?:ранг|чин|админа|администратора|модератора)|убрать\s+(?:ранг|чин)|разжаловать|лишить\s+ранга|понизить\s+в\s+должности|demote)\s*", "", (message.text or "").strip(), count=1).strip()
     tokens = remainder.split()
     explicit = None
     for token in tokens:
