@@ -1666,11 +1666,23 @@ async def delete_message_cmd(message: Message) -> None:
             return
 
         count = max(1, requested)
-        # Bot API has no getChatHistory method. Message IDs in a chat are monotonic,
-        # so target the immediately preceding ID range instead of only IDs observed
-        # by this process. This includes messages sent by the bot and by other users.
+        # Bot API has no getChatHistory endpoint. Prefer real message IDs observed
+        # by the middleware (including bot and user messages), then fill any gaps from
+        # the preceding ID range so old messages can still be attempted.
         first_id = max(1, message.message_id - count)
-        candidates = list(range(first_id, message.message_id))
+        observed = [
+            mid for mid in _RECENT_MESSAGE_IDS.get(message.chat.id, ())
+            if first_id <= mid < message.message_id
+        ]
+        candidates = list(dict.fromkeys(reversed(observed)) )[:count]
+        candidate_set = set(candidates)
+        if len(candidates) < count:
+            for mid in range(message.message_id - 1, first_id - 1, -1):
+                if mid not in candidate_set:
+                    candidates.append(mid)
+                    candidate_set.add(mid)
+                    if len(candidates) >= count:
+                        break
         forbidden = False
         individually_deleted = 0
         semaphore = asyncio.Semaphore(5)
