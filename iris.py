@@ -2105,6 +2105,7 @@ async def owner_global_ban(message: Message) -> None:
         await message.answer("Нельзя заблокировать овнера."); return
     row=db_upsert("bot_global_bans", {"user_id":uid,"active":True,"reason":reason,"actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
+        _GLOBAL_BAN_CACHE[uid] = (True, time.monotonic() + _GLOBAL_BAN_TTL)
         audit(message.chat.id, OWNER_ID, "globalban", uid, reason)
         await message.answer(f"🚫 Глобальный запрет включён для ID <code>{uid}</code>. Это блокировка внутри бота, не Telegram-wide бан.")
     else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
@@ -2119,6 +2120,7 @@ async def owner_global_unban(message: Message) -> None:
     uid=int(match.group(1))
     row=db_upsert("bot_global_bans", {"user_id":uid,"active":False,"reason":"","actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
+        _GLOBAL_BAN_CACHE[uid] = (False, time.monotonic() + _GLOBAL_BAN_TTL)
         audit(message.chat.id, OWNER_ID, "globalunban", uid, "global ban removed")
         await message.answer(f"✅ Глобальный запрет для ID <code>{uid}</code> снят.")
     else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
