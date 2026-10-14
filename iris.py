@@ -791,51 +791,88 @@ async def delete_message_cmd(message: Message) -> None:
                 pass
             await message.answer("⚠️ За один раз можно удалить максимум <b>100 сообщений</b>. Используй: <code>-смс 100</code>.")
             return
+
         count = max(1, requested)
-        # Telegram Bot API не даёт читать историю чата: идём назад по ID и считаем
-        # только реально удалённые сообщения. Большой запас покрывает пропуски ID.
-        deleted = 0
-        scanned = 0
+        # Telegram's deleteMessages API removes up to 100 IDs in one request.
+        # Use IDs actually observed by this process instead of probing thousands
+        # of nonexistent IDs one-by-one (which made the command painfully slow).
+        recent_ids = _RECENT_MESSAGE_IDS.get(message.chat.id, ())
+        candidates: list[int] = []
+        seen: set[int] = set()
+        for mid in reversed(recent_ids):
+            if mid >= message.message_id or mid in seen:
+                continue
+            seen.add(mid)
+            candidates.append(mid)
+            if len(candidates) >= count:
+                break
+
+        deleted_request_count = len(candidates)
         forbidden = False
-        mid = message.message_id - 1
-        max_scan = 10000
-        while mid > 0 and deleted < count and scanned < max_scan:
+        if candidates:
             try:
-                await bot.delete_message(chat_id=message.chat.id, message_id=mid)
-                deleted += 1
+                await bot.delete_messages(
+                    chat_id=message.chat.id,
+                    message_ids=candidates,
+                )
             except TelegramForbiddenError:
                 forbidden = True
-                break
             except TelegramRetryAfter as exc:
-                # Если Telegram ограничит частоту запросов, ждём указанный срок и
-                # повторяем тот же ID, а не считаем его обработанным.
                 await asyncio.sleep(float(exc.retry_after) + 0.1)
-                continue
+                try:
+                    await bot.delete_messages(
+                        chat_id=message.chat.id,
+                        message_ids=candidates,
+                    )
+                except TelegramForbiddenError:
+                    forbidden = True
+                except Exception as exc2:
+                    log.warning("Bulk delete failed for chat=%s: %s", message.chat.id, exc2)
+                    # Rare fallback: try IDs individually only after bulk API failure.
+                    for mid in candidates:
+                        try:
+                            await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                        except TelegramRetryAfter as retry:
+                            await asyncio.sleep(float(retry.retry_after) + 0.1)
+                            try:
+                                await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
             except TelegramBadRequest as exc:
-                # Пропускаем отсутствующие/служебные сообщения и сообщения старше 48 часов.
-                log.debug("Cannot delete chat=%s message=%s: %s", message.chat.id, mid, exc)
-            except Exception:
-                log.exception("Failed to delete message_id=%s chat_id=%s", mid, message.chat.id)
-            mid -= 1
-            scanned += 1
+                log.warning("Bulk delete rejected for chat=%s: %s", message.chat.id, exc)
+                # Fallback handles API/server versions that reject the bulk method.
+                for mid in candidates:
+                    try:
+                        await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                    except TelegramRetryAfter as retry:
+                        await asyncio.sleep(float(retry.retry_after) + 0.1)
+                        try:
+                            await bot.delete_message(chat_id=message.chat.id, message_id=mid)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            except Exception as exc:
+                log.exception("Bulk delete failed for chat=%s: %s", message.chat.id, exc)
+
         try:
             await message.delete()
         except Exception:
             pass
-        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};deleted={deleted};scanned={scanned}")
+        audit(message.chat.id, message.from_user.id, "purge_recent", details=f"requested={count};candidate_ids={deleted_request_count}")
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
+        elif not candidates:
+            await message.answer("ℹ️ Пока нечего удалять: бот не видел предыдущие сообщения в этом чате. Проверь, что бот работает и имеет доступ к сообщениям.")
         else:
-            response = await message.answer(
-                f"🧹 Удалено предыдущих сообщений: <b>{deleted}</b> из {count}."
-                + ("\nЧасть старых сообщений недоступна для удаления через Telegram API." if deleted < count else "")
+            await message.answer(
+                f"🧹 Запрос на удаление последних сообщений выполнен: <b>{deleted_request_count}</b>."
+                "\nTelegram автоматически пропускает уже удалённые и недоступные сообщения."
             )
-            await asyncio.sleep(4)
-            try:
-                await response.delete()
-            except Exception:
-                pass
         return
+
     target_message = message.reply_to_message
     if not target_message:
         await message.answer("Ответьте на сообщение командой <code>/del</code> или напишите <code>-смс 10</code>.")
@@ -1637,6 +1674,8 @@ async def apply_raid_protection(message: Message) -> None:
 
 
 # ── Chat open/close commands (Russian Iris-style aliases) ────────────────────
+_CHAT_ACTION_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
 @router.message(Command("openchat", "unlockchat"))
 @router.message(F.text.regexp(r"(?i)^\s*\+\s*чат\s*$"))
 async def open_chat_cmd(message: Message) -> None:
@@ -1645,34 +1684,31 @@ async def open_chat_cmd(message: Message) -> None:
         return
     if not await require_real_admin(message):
         return
-    settings = get_chat_settings(message.chat.id)
-    saved = settings.get("chat_permissions_before_lock")
-    try:
-        if isinstance(saved, dict):
-            permissions = ChatPermissions(**saved)
-        else:
-            # If this bot did not save a prior permission set, restore the common
-            # group permissions without granting admin privileges.
-            permissions = ChatPermissions(
-                can_send_messages=True,
-                can_send_audios=True,
-                can_send_documents=True,
-                can_send_photos=True,
-                can_send_videos=True,
-                can_send_video_notes=True,
-                can_send_voice_notes=True,
-                can_send_polls=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True,
-            )
-        await bot.set_chat_permissions(message.chat.id, permissions=permissions)
-        settings.pop("chat_permissions_before_lock", None)
-        settings["chat_locked_by_bot"] = False
-        save_chat_settings(message.chat.id, settings)
-        audit(message.chat.id, message.from_user.id, "chat_open")
-        await message.answer("🔓 Чат открыт. Отправка сообщений снова разрешена согласно восстановленным настройкам.")
-    except Exception as exc:
-        await safe_error(message, exc)
+    async with _CHAT_ACTION_LOCKS[message.chat.id]:
+        settings = get_chat_settings(message.chat.id)
+        if not settings.get("chat_locked_by_bot"):
+            await message.answer("ℹ️ Чат уже открыт.")
+            return
+        saved = settings.get("chat_permissions_before_lock")
+        try:
+            if isinstance(saved, dict):
+                permissions = ChatPermissions(**saved)
+            else:
+                permissions = ChatPermissions(
+                    can_send_messages=True, can_send_audios=True,
+                    can_send_documents=True, can_send_photos=True,
+                    can_send_videos=True, can_send_video_notes=True,
+                    can_send_voice_notes=True, can_send_polls=True,
+                    can_send_other_messages=True, can_add_web_page_previews=True,
+                )
+            await bot.set_chat_permissions(message.chat.id, permissions=permissions)
+            settings.pop("chat_permissions_before_lock", None)
+            settings["chat_locked_by_bot"] = False
+            save_chat_settings(message.chat.id, settings)
+            audit(message.chat.id, message.from_user.id, "chat_open")
+            await message.answer("🔓 Чат открыт.")
+        except Exception as exc:
+            await safe_error(message, exc)
 
 @router.message(Command("closechat", "lockchat"))
 @router.message(F.text.regexp(r"(?i)^\s*-\s*чат\s*$"))
@@ -1682,39 +1718,36 @@ async def close_chat_cmd(message: Message) -> None:
         return
     if not await require_real_admin(message):
         return
-    settings = get_chat_settings(message.chat.id)
-    try:
-        # Первым сетевым действием сразу закрываем отправку сообщений — без get_chat
-        # и без промежуточного сообщения, чтобы не задерживать блокировку.
-        if not settings.get("chat_locked_by_bot") and not settings.get("chat_permissions_before_lock"):
-            settings["chat_permissions_before_lock"] = {
-                "can_send_messages": True, "can_send_audios": True,
-                "can_send_documents": True, "can_send_photos": True,
-                "can_send_videos": True, "can_send_video_notes": True,
-                "can_send_voice_notes": True, "can_send_polls": True,
-                "can_send_other_messages": True, "can_add_web_page_previews": True,
-            }
-        await bot.set_chat_permissions(
-            message.chat.id,
-            permissions=ChatPermissions(
-                can_send_messages=False,
-                can_send_audios=False,
-                can_send_documents=False,
-                can_send_photos=False,
-                can_send_videos=False,
-                can_send_video_notes=False,
-                can_send_voice_notes=False,
-                can_send_polls=False,
-                can_send_other_messages=False,
-                can_add_web_page_previews=False,
-            ),
-        )
-        settings["chat_locked_by_bot"] = True
-        save_chat_settings(message.chat.id, settings)
-        audit(message.chat.id, message.from_user.id, "chat_close")
-        await message.answer("🔒 Чат закрыт. Открыть: <code>+чат</code>.")
-    except Exception as exc:
-        await safe_error(message, exc)
+    async with _CHAT_ACTION_LOCKS[message.chat.id]:
+        settings = get_chat_settings(message.chat.id)
+        if settings.get("chat_locked_by_bot"):
+            await message.answer("ℹ️ Чат уже закрыт. Открыть: <code>+чат</code>.")
+            return
+        try:
+            if not settings.get("chat_permissions_before_lock"):
+                settings["chat_permissions_before_lock"] = {
+                    "can_send_messages": True, "can_send_audios": True,
+                    "can_send_documents": True, "can_send_photos": True,
+                    "can_send_videos": True, "can_send_video_notes": True,
+                    "can_send_voice_notes": True, "can_send_polls": True,
+                    "can_send_other_messages": True, "can_add_web_page_previews": True,
+                }
+            await bot.set_chat_permissions(
+                message.chat.id,
+                permissions=ChatPermissions(
+                    can_send_messages=False, can_send_audios=False,
+                    can_send_documents=False, can_send_photos=False,
+                    can_send_videos=False, can_send_video_notes=False,
+                    can_send_voice_notes=False, can_send_polls=False,
+                    can_send_other_messages=False, can_add_web_page_previews=False,
+                ),
+            )
+            settings["chat_locked_by_bot"] = True
+            save_chat_settings(message.chat.id, settings)
+            audit(message.chat.id, message.from_user.id, "chat_close")
+            await message.answer("🔒 Чат закрыт. Открыть: <code>+чат</code>.")
+        except Exception as exc:
+            await safe_error(message, exc)
 
 
 router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_user)(auto_moderation_filters)
