@@ -200,10 +200,15 @@ def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: st
     return row or {"user_id": user_id, "chat_id": chat_id, "warns": 0, "rank": 0, "messages": 0}
 
 def audit(chat_id: int, actor_id: int, action: str, target_id: int | None = None, details: str = "") -> None:
-    db_insert("bot_audit", {
+    # Audit persistence must not block the bot's asyncio event loop.
+    payload = {
         "chat_id": chat_id, "actor_id": actor_id, "action": action,
         "target_id": target_id, "details": details[:1000],
-    })
+    }
+    try:
+        asyncio.get_running_loop().create_task(asyncio.to_thread(db_insert, "bot_audit", payload))
+    except RuntimeError:
+        db_insert("bot_audit", payload)
 
 def set_warns(chat_id: int, user_id: int, amount: int) -> int:
     user = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {
@@ -1160,11 +1165,20 @@ def get_chat_settings(chat_id: int) -> dict[str, Any]:
     return settings
 
 def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
-    _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-    db_upsert("bot_chat_settings", {
-        "chat_id": chat_id, "settings": settings,
+    # Update the in-memory state immediately; persist in a worker thread so a
+    # slow Supabase response cannot stall commands or other chat updates.
+    snapshot = dict(settings)
+    _CHAT_SETTINGS_CACHE[chat_id] = snapshot
+    payload = {
+        "chat_id": chat_id, "settings": snapshot,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    }, "chat_id")
+    }
+    try:
+        asyncio.get_running_loop().create_task(
+            asyncio.to_thread(db_upsert, "bot_chat_settings", payload, "chat_id")
+        )
+    except RuntimeError:
+        db_upsert("bot_chat_settings", payload, "chat_id")
 
 FILTER_ALIASES = {
     "антиссылка": "antilink", "антилинк": "antilink",
@@ -1685,7 +1699,7 @@ async def open_chat_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     async with _CHAT_ACTION_LOCKS[message.chat.id]:
-        settings = get_chat_settings(message.chat.id)
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
         if not settings.get("chat_locked_by_bot"):
             await message.answer("ℹ️ Чат уже открыт.")
             return
@@ -1719,7 +1733,7 @@ async def close_chat_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     async with _CHAT_ACTION_LOCKS[message.chat.id]:
-        settings = get_chat_settings(message.chat.id)
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
         if settings.get("chat_locked_by_bot"):
             await message.answer("ℹ️ Чат уже закрыт. Открыть: <code>+чат</code>.")
             return
