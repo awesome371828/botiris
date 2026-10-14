@@ -620,6 +620,11 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
             continue
         raw = re.sub(r"^(?:https?://)?t\.me/", "", raw, flags=re.I)
         candidates.append(raw.lstrip("@").casefold())
+    # Exact full-name match supports display names containing spaces, without
+    # treating arbitrary reason text as a target unless it matches a real user.
+    joined = " ".join(str(value).strip().strip(",;:") for value in args).strip()
+    if joined and not joined.isdigit():
+        candidates.append(joined.lstrip("@").casefold())
     if not candidates:
         return None
 
@@ -974,6 +979,8 @@ async def admins(message: Message) -> None:
 
         owner_row = next((r for r in ranked_users if int(r.get("user_id", 0) or 0) == OWNER_ID), {})
         owner_username = str(owner_row.get("username") or "").lstrip("@") or None
+        if message.from_user and message.from_user.id == OWNER_ID:
+            owner_username = owner_username or message.from_user.username
         owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
         ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
@@ -998,7 +1005,7 @@ async def admins(message: Message) -> None:
             lines.append(f"• <b>{escape(name)}</b> — <b>{role_name(rank)}</b> · ранг {rank}")
         if len(lines) == 1:
             lines.append("Пока никто не назначен администраторами Pear CM.")
-        await message.answer("\\n".join(lines))
+        await message.answer("\n".join(lines))
     except Exception:
         log.exception("Could not build Pear CM internal admin list")
         await message.answer("Не удалось получить список администраторов Pear CM. Попробуйте ещё раз.")
@@ -1996,7 +2003,11 @@ async def promote_rank_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    current = await asyncio.to_thread(user_rank, message.chat.id, target[0])
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    try:
+        current = 5 if target[0] == OWNER_ID else max(0, min(5, int(user.get("rank", 0) or 0)))
+    except (TypeError, ValueError):
+        current = 0
     new_rank = explicit if explicit is not None else current + 1
     if new_rank <= current:
         await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для повышения выберите ранг выше.")
@@ -2017,10 +2028,15 @@ async def promote_rank_cmd(message: Message) -> None:
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Изменять ранг создателя может только создатель чата или владелец Pear CM.")
         return
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
-        "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
-        "messages": int(user.get("messages", 0)), "rank": new_rank}
+    recent = _RECENT_CHAT_USERS.get((message.chat.id, target[0]))
+    recent_username = recent[0] if recent else None
+    recent_first_name = recent[1] if recent else None
+    fallback_username = target[1][1:] if target[1].startswith("@") else None
+    fallback_first_name = target[1][1:] if target[1].startswith("@") else target[1]
+    payload = {**user, "user_id": target[0], "chat_id": message.chat.id,
+        "username": user.get("username") or recent_username or fallback_username,
+        "first_name": user.get("first_name") or recent_first_name or fallback_first_name,
+        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}
     saved = await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
     if not saved:
         await message.answer("⚠️ Не удалось сохранить повышение ранга. Проверь подключение Supabase и таблицу bot_users.")
@@ -2052,7 +2068,11 @@ async def demote_rank_cmd(message: Message) -> None:
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    current = await asyncio.to_thread(user_rank, message.chat.id, target[0])
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    try:
+        current = 5 if target[0] == OWNER_ID else max(0, min(5, int(user.get("rank", 0) or 0)))
+    except (TypeError, ValueError):
+        current = 0
     new_rank = explicit if explicit is not None else current - 1
     if new_rank >= current:
         await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для понижения выберите ранг ниже.")
@@ -2070,10 +2090,15 @@ async def demote_rank_cmd(message: Message) -> None:
     if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
         await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
         return
-    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
-        "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
-        "messages": int(user.get("messages", 0)), "rank": new_rank}
+    recent = _RECENT_CHAT_USERS.get((message.chat.id, target[0]))
+    recent_username = recent[0] if recent else None
+    recent_first_name = recent[1] if recent else None
+    fallback_username = target[1][1:] if target[1].startswith("@") else None
+    fallback_first_name = target[1][1:] if target[1].startswith("@") else target[1]
+    payload = {**user, "user_id": target[0], "chat_id": message.chat.id,
+        "username": user.get("username") or recent_username or fallback_username,
+        "first_name": user.get("first_name") or recent_first_name or fallback_first_name,
+        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}
     saved = await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
     if not saved:
         await message.answer("⚠️ Не удалось сохранить понижение ранга. Проверь подключение Supabase и таблицу bot_users.")
