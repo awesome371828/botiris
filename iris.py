@@ -4568,6 +4568,41 @@ async def clan_cmd(message: Message) -> None:
         return
     await message.answer("Команды: <code>клан создать Название</code>, <code>клан вступить Название</code>, <code>клан выйти</code>, <code>клан распустить</code>, <code>клан передать</code>, <code>клан инфо</code>, <code>клан участники</code>, <code>клан помощь</code>.")
 
+
+@router.message(Command("choose"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:выбери участника|случайный участник|рандом участника|рандом участник|жребий|да или нет|шипперинг)(?:\s|$)"))
+async def random_community_cmd(message: Message) -> None:
+    raw = _feature_normalize(message.text or "")
+    if raw.startswith("/choose"):
+        raw = raw[len("/choose"):].strip() or "выбери участника"
+    if raw == "да или нет":
+        await message.answer("🎲 " + random.choice(["Да! ✅","Нет! ❌","Возможно 🤔","Спроси позже 🔮"]))
+        return
+    rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
+    unique = {}
+    for row in rows:
+        try:
+            uid = int(row.get("user_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if uid > 0 and uid != (message.from_user.id if message.from_user else 0):
+            unique[uid] = row
+    members = list(unique.values())
+    if raw == "шипперинг":
+        if len(members) < 2:
+            await message.answer("Для шипперинга пока недостаточно участников, которых бот знает.")
+            return
+        pair = random.sample(members, 2)
+        names = [p.get("first_name") or p.get("username") or f"ID {p.get('user_id')}" for p in pair]
+        await message.answer(f"💞 Случайная пара дня: {mention(int(pair[0]['user_id']),str(names[0]))} ❤️ {mention(int(pair[1]['user_id']),str(names[1]))}")
+        return
+    if not members:
+        await message.answer("Пока некого выбирать: бот ещё не видел участников в этом чате.")
+        return
+    picked = random.choice(members)
+    name = picked.get("first_name") or picked.get("username") or f"ID {picked.get('user_id')}"
+    await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
+
 # A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
 @router.message(Command("gather"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
