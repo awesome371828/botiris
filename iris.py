@@ -2298,7 +2298,18 @@ async def main() -> None:
         BotCommand(command="closereport", description="Закрыть жалобу"),
         BotCommand(command="closeappeal", description="Закрыть апелляцию"),
     ]
-    # Set a versioned Mini App URL so Telegram WebView does not keep showing a stale cached page.\n    try:\n        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Открыть Pear CM", web_app=WebAppInfo(url=MINI_APP_URL)))\n        log.info("Telegram Mini App menu button configured: %s", MINI_APP_URL)\n    except Exception:\n        log.exception("Не удалось обновить кнопку Mini App в меню Telegram")\n    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    # Set a versioned Mini App URL so Telegram WebView does not keep showing a stale cached page.
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Открыть Pear CM",
+                web_app=WebAppInfo(url=MINI_APP_URL),
+            )
+        )
+        log.info("Telegram Mini App menu button configured: %s", MINI_APP_URL)
+    except Exception:
+        log.exception("Не удалось обновить кнопку Mini App в меню Telegram")
+    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
     await bot.set_my_commands(private_commands + owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     await bot.delete_webhook(drop_pending_updates=False)
