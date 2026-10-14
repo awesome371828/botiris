@@ -179,15 +179,43 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             self.assertIn("current >= actor_rank or new_rank >= actor_rank", body)
             self.assertNotIn("new_rank >= max(3, actor_rank)", body)
 
-    def test_admin_listing_shows_only_internal_pear_cm_roles(self):
+    def test_admin_listing_includes_chat_creator_and_uses_plain_names(self):
         start = self.source.index("async def admins")
         end = self.source.index("# ── Activity tracking and welcome", start)
         body = self.source[start:end]
         self.assertIn('db_rows, "bot_users"', body)
-        self.assertIn("Администраторы и модераторы Pear CM", body)
-        self.assertIn("This list is intentionally limited to Pear CM roles", body)
-        self.assertNotIn("get_chat_administrators", body)
+        self.assertIn("bot.get_chat_administrators(message.chat.id)", body)
+        self.assertIn("ChatMemberStatus.CREATOR", body)
+        self.assertIn("Создатели чата", body)
+        self.assertIn("This list is intentionally limited", body)
         self.assertNotIn("Администраторы Telegram", body)
+        self.assertNotIn('<a href=', body)
+        self.assertNotIn("https://t.me/", body)
+        self.assertNotIn("tg://user?id=", body)
+
+    def test_chat_creator_is_protected_from_warning_removal_and_reset(self):
+        helper_start = self.source.index("async def ensure_moderation_target_safe")
+        helper_end = self.source.index("async def check_mod", helper_start)
+        helper = self.source[helper_start:helper_end]
+        self.assertIn("member.status == ChatMemberStatus.CREATOR", helper)
+        for function, action in (
+            ("unwarn_cmd", "unwarn"),
+            ("clearwarns_cmd", "clearwarns"),
+        ):
+            start = self.source.index(f"async def {function}")
+            end = self.source.find("\\n@router.message", start + 1)
+            body = self.source[start:end if end >= 0 else len(self.source)]
+            self.assertIn(f'ensure_moderation_target_safe(message, target, "{action}")', body)
+
+    def test_rank_change_aliases_include_common_russian_forms(self):
+        for fragment in (
+            "поднять(?:\\\\s+ранг)?",
+            "назначить\\\\s+(?:ранг|чин)",
+            "понизить\\\\s+в\\\\s+должности",
+            "снять\\\\s+(?:ранг|чин",
+            "разжаловать",
+        ):
+            self.assertIn(fragment, self.source)
 
     def test_warning_removal_requires_audit_ledger_write(self):
         unwarn_start = self.source.index("async def unwarn_cmd")
