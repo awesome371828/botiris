@@ -1,6 +1,8 @@
 import ast
 import pathlib
+import re
 import unittest
+from datetime import timedelta
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "iris.py"
@@ -60,6 +62,43 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             "bot_notes_chat_user_created_idx",
         ):
             self.assertIn(fragment, schema.lower())
+
+    def test_natural_temporary_ban_duration_phrases(self):
+        selected = []
+        for node in self.tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "_TIME_UNITS"
+                for target in node.targets
+            ):
+                selected.append(node)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
+                "_unit_seconds", "parse_duration_prefix"
+            }:
+                selected.append(node)
+        namespace = {"re": re, "timedelta": timedelta}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), namespace)
+        parse = namespace["parse_duration_prefix"]
+
+        cases = [
+            (["1", "день"], timedelta(days=1), 2),
+            (["день"], timedelta(days=1), 1),
+            (["один", "день", "спам"], timedelta(days=1), 2),
+            (["на", "одну", "неделю", "спам"], timedelta(days=7), 3),
+            (["1", "месяц"], timedelta(days=30), 2),
+            (["год"], timedelta(days=365), 1),
+            (["2", "дня", "и", "3", "часа", "флуд"], timedelta(days=2, hours=3), 5),
+        ]
+        for tokens, expected_duration, expected_consumed in cases:
+            with self.subTest(tokens=tokens):
+                result = parse(tokens)
+                self.assertIsNotNone(result)
+                self.assertEqual(result[0], expected_duration)
+                self.assertEqual(result[1], expected_consumed)
+        self.assertIsNone(parse(["2", "года"]))
+
+    def test_top_defaults_to_current_chat_in_groups(self):
+        self.assertIn("chat_only = is_group(message) and not global_scope", self.source)
+        self.assertIn('global_scope = arg.startswith(("все чаты"', self.source)
 
 
 if __name__ == "__main__":
