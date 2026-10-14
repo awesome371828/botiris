@@ -937,7 +937,7 @@ async def mute_cmd(message: Message) -> None:
         # Prefer @username over numbers so «мут 1 час @user» never treats 1 as a user ID.
         username_arg = next((x for x in raw_args if x.startswith("@")), None)
         id_arg = next((x for x in raw_args if x.isdigit() and len(x) >= 7), None)
-        target = await resolve_target(message, [username_arg] if username_arg else ([id_arg] if id_arg else [])
+        target = await resolve_target(message, [username_arg] if username_arg else ([id_arg] if id_arg else []))
     if not target:
         await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
