@@ -2291,9 +2291,11 @@ async def marry_cmd(message: Message) -> None:
         ids = {int(row.get("user1_id") or 0), int(row.get("user2_id") or 0)}
         if message.from_user.id in ids or partner.id in ids:
             if row.get("status") == "married":
-                spouse_id = int(row.get("user2_id") or 0) if int(row.get("user1_id") or 0) in ids else int(row.get("user1_id") or 0)
-                spouse_name = str(row.get("user2_name") or "пользователь") if spouse_id == int(row.get("user2_id") or 0) else str(row.get("user1_name") or "пользователь")
-                if message.from_user.id in ids:
+                row_one = int(row.get("user1_id") or 0)
+                row_two = int(row.get("user2_id") or 0)
+                if message.from_user.id in (row_one, row_two):
+                    spouse_id = row_two if message.from_user.id == row_one else row_one
+                    spouse_name = str(row.get("user2_name") or "пользователь") if spouse_id == row_two else str(row.get("user1_name") or "пользователь")
                     await message.answer(f"📝 Вы уже состоите в браке с {mention(spouse_id, spouse_name)}. Сначала разведитесь командой «развод».")
                 else:
                     await message.answer(f"📝 К сожалению, {escape(partner.full_name)} уже состоит в браке. Сначала ему нужно развестись.")
@@ -2353,7 +2355,7 @@ async def marriage_proposal_callback(callback: CallbackQuery) -> None:
             lambda: db.table("bot_marriages").update({
                 "status": new_status,
                 "accepted_at": datetime.now(timezone.utc).isoformat() if new_status == "married" else None,
-            }).eq("id", marriage_id).eq("status", "pending").execute()
+            }).eq("id", marriage_id).eq("status", "pending").select("*").execute()
         )
         if not result.data:
             await callback.answer("Предложение уже обработано.", show_alert=True)
@@ -2410,7 +2412,7 @@ async def _finish_marriage_by_command(message: Message, row: dict, accept: bool)
         result = await asyncio.to_thread(lambda: db.table("bot_marriages").update({
             "status": status,
             "accepted_at": datetime.now(timezone.utc).isoformat() if accept else None,
-        }).eq("id", row["id"]).eq("status", "pending").execute())
+        }).eq("id", row["id"]).eq("status", "pending").select("*").execute())
         if not result.data:
             await message.answer("Это предложение уже обработано.")
             return
