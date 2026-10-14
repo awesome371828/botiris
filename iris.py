@@ -1800,21 +1800,29 @@ async def rank_cmd(message: Message) -> None:
     await message.answer(f"🏅 Ранг {mention(target[0], target[1])} установлен: <b>{rank} — {role_name(rank)}</b>.")
 
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить|повыситьранг|promote)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\\s+ранг|promote)(?:\\s|$)"))
 async def promote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    args = args_after_command(message)
-    explicit = next((int(x) for x in args if x.isdigit() and 0 <= int(x) <= 5), None)
-    target_args = [x for x in args if not (x.isdigit() and 0 <= int(x) <= 5)]
+    remainder = re.sub(r"(?i)^[.!/]?(?:повысить(?:ранг|-ранг)?|повышение|повышай|продвинуть|назначить\\s+ранг|promote)\\s*", "", (message.text or "").strip(), count=1).strip()
+    tokens = remainder.split()
+    explicit = None
+    for token in tokens:
+        if token.isdigit():
+            if not 0 <= int(token) <= 5:
+                await message.answer("⛔ Ранг должен быть числом от 0 до 5.")
+                return
+            explicit = int(token)
+            break
+    target_args = [token for token in tokens if not (token.isdigit() and explicit is not None and int(token) == explicit)]
     target = await resolve_target(message, target_args)
     if not target:
-        await message.answer("Ответьте на сообщение участника: <code>повысить</code> — на один ранг, <code>повысить 5</code> — назначить ранг 5.")
+        await message.answer("Ответьте на сообщение участника: <code>повысить</code> — на один ранг; <code>повысить 4</code> — назначить 4-й ранг.")
         return
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    current = user_rank(message.chat.id, target[0])
+    current = await asyncio.to_thread(user_rank, message.chat.id, target[0])
     new_rank = explicit if explicit is not None else current + 1
     if new_rank <= current:
         await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для повышения выберите ранг выше.")
@@ -1831,36 +1839,46 @@ async def promote_rank_cmd(message: Message) -> None:
     if new_rank == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else user_rank(message.chat.id, message.from_user.id if message.from_user else 0)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0)
     if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
         await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
         return
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Изменять ранг создателя может только создатель чата или владелец Pear CM.")
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
-        "username": user.get("username"), "first_name": user.get("first_name") or target[1],
-        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
+        "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
+        "messages": int(user.get("messages", 0)), "rank": new_rank}
+    await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
     invalidate_user_rank(message.chat.id, target[0])
-    audit(message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
+    await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "promote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬆️ <b>{escape(target[1])}</b> был повышен до роли <b>{role_name(new_rank)}</b>.")
 
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить|понизитьранг|demote)(?:\s|$)"))
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)(?:\\s|$)"))
 async def demote_rank_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
-    args = args_after_command(message)
-    explicit = next((int(x) for x in args if x.isdigit() and 0 <= int(x) <= 5), None)
-    target_args = [x for x in args if not (x.isdigit() and 0 <= int(x) <= 5)]
+    remainder = re.sub(r"(?i)^[.!/]?(?:понизить(?:ранг|-ранг)?|понижение|понижай|понизь|demote)\\s*", "", (message.text or "").strip(), count=1).strip()
+    tokens = remainder.split()
+    explicit = None
+    for token in tokens:
+        if token.isdigit():
+            if not 0 <= int(token) <= 5:
+                await message.answer("⛔ Ранг должен быть числом от 0 до 5.")
+                return
+            explicit = int(token)
+            break
+    target_args = [token for token in tokens if not (token.isdigit() and explicit is not None and int(token) == explicit)]
     target = await resolve_target(message, target_args)
     if not target:
-        await message.answer("Ответьте на сообщение участника: <code>понизить</code> — на один ранг, <code>понизить 2</code> — назначить ранг 2.")
+        await message.answer("Ответьте на сообщение участника: <code>понизить</code> — на один ранг; <code>понизить 3</code> — назначить 3-й ранг.")
         return
     if message.from_user and target[0] == message.from_user.id:
         await message.answer("⛔ Нельзя менять собственный ранг.")
         return
-    current = user_rank(message.chat.id, target[0])
+    current = await asyncio.to_thread(user_rank, message.chat.id, target[0])
     new_rank = explicit if explicit is not None else current - 1
     if new_rank >= current:
         await message.answer(f"ℹ️ У участника уже ранг {current} — {role_name(current)}. Для понижения выберите ранг ниже.")
@@ -1877,17 +1895,19 @@ async def demote_rank_cmd(message: Message) -> None:
     if current == 5 and not (actor_is_owner or actor_is_creator):
         await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
         return
-    actor_rank = 5 if (actor_is_owner or actor_is_creator) else user_rank(message.chat.id, message.from_user.id if message.from_user else 0)
+    actor_rank = 5 if (actor_is_owner or actor_is_creator) else await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id if message.from_user else 0)
     if not (actor_is_owner or actor_is_creator) and new_rank >= max(3, actor_rank):
         await message.answer("⛔ Вы можете назначить только ранг ниже своего.")
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
-    db_upsert("bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
-        "username": user.get("username"), "first_name": user.get("first_name") or target[1],
-        "warns": int(user.get("warns", 0)), "messages": int(user.get("messages", 0)), "rank": new_rank}, "user_id,chat_id")
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    payload = {**user, "user_id": target[0], "chat_id": message.chat.id, "username": user.get("username"),
+        "first_name": user.get("first_name") or target[1], "warns": int(user.get("warns", 0)),
+        "messages": int(user.get("messages", 0)), "rank": new_rank}
+    await asyncio.to_thread(db_upsert, "bot_users", payload, "user_id,chat_id")
     invalidate_user_rank(message.chat.id, target[0])
-    audit(message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
+    await asyncio.to_thread(audit, message.chat.id, message.from_user.id if message.from_user else 0, "demote", target[0], f"rank={current}->{new_rank}")
     await message.answer(f"⬇️ <b>{escape(target[1])}</b> был понижен до роли <b>{role_name(new_rank)}</b>.")
+
 
 @router.message(F.text.regexp(r"(?i)^\.дк\s+"))
 async def command_rank_rule_cmd(message: Message) -> None:
