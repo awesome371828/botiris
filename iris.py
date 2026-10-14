@@ -1810,7 +1810,7 @@ async def info_cmd(message: Message) -> None:
     if not target:
         await message.answer("Ответьте на сообщение или укажите ID.")
         return
-    user = db_one("bot_users", user_id=target[0], chat_id=message.chat.id) or {}
+    user = await asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id) or {}
     try:
         member = await bot.get_chat_member(message.chat.id, target[0])
         status = str(member.status).replace("ChatMemberStatus.", "")
@@ -3177,7 +3177,7 @@ async def submit_report_cmd(message: Message) -> None:
         "target_id": target_id, "body": (body or "Жалоба на сообщение в ответе")[:2000],
         "status": "open", "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    row = db_insert("bot_reports", payload)
+    row = await asyncio.to_thread(db_insert, "bot_reports", payload)
     if row:
         audit(message.chat.id, message.from_user.id, "report_created", target_id, f"report_id={row.get('id')}")
         await message.answer(f"📨 Жалоба принята. Номер: <code>{row.get('id','создан')}</code>.")
@@ -3193,7 +3193,7 @@ async def submit_appeal_cmd(message: Message) -> None:
     if not body:
         await message.answer("Использование: <code>апелляция Прошу пересмотреть наказание</code>.")
         return
-    row = db_insert("bot_appeals", {
+    row = await asyncio.to_thread(db_insert, "bot_appeals", {
         "chat_id": message.chat.id, "user_id": message.from_user.id,
         "body": body[:2000], "status": "open",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -4271,7 +4271,7 @@ async def owner_logs(message: Message) -> None:
     match = re.search(r"(?:логи|/logs)\s+(\d+)", message.text or "", re.I)
     if match:
         count = max(1, min(20, int(match.group(1))))
-    rows = db_rows("bot_audit", limit=count, order="created_at")
+    rows = await asyncio.to_thread(db_rows, "bot_audit", limit=count, order="created_at")
     if not rows:
         await message.answer("Логи пока пусты или таблица bot_audit недоступна.")
         return
@@ -4297,7 +4297,7 @@ async def owner_audit_user(message: Message) -> None:
         await message.answer("Формат: <code>/audit USER_ID</code> или <code>аудит USER_ID</code>")
         return
     uid=int(match.group(1))
-    rows=db_rows("bot_audit", limit=20, order="created_at", target_id=uid)
+    rows=await asyncio.to_thread(db_rows, "bot_audit", limit=20, order="created_at", target_id=uid)
     if not rows:
         await message.answer("По этому ID записей аудита не найдено.")
         return
@@ -4357,7 +4357,7 @@ async def owner_add_operator(message: Message) -> None:
     uid=int(match.group(1))
     if uid == OWNER_ID:
         await message.answer("Этот ID уже является овнером."); return
-    row=db_upsert("bot_operators", {"user_id":uid,"active":True,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    row=await asyncio.to_thread(db_upsert, "bot_operators", {"user_id":uid,"active":True,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
         audit(message.chat.id, OWNER_ID, "operator_add", uid, "operator granted")
         await message.answer(f"✅ Доступ оператора выдан ID <code>{uid}</code>.")
@@ -4372,7 +4372,7 @@ async def owner_revoke_operator(message: Message) -> None:
     if not match:
         await message.answer("Формат: <code>/revokeoperator USER_ID</code> или <code>отозвать доступ USER_ID</code>"); return
     uid=int(match.group(1))
-    row=db_upsert("bot_operators", {"user_id":uid,"active":False,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    row=await asyncio.to_thread(db_upsert, "bot_operators", {"user_id":uid,"active":False,"created_by":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
         audit(message.chat.id, OWNER_ID, "operator_revoke", uid, "operator revoked")
         await message.answer(f"🔒 Доступ ID <code>{uid}</code> отозван.")
@@ -4381,7 +4381,7 @@ async def owner_revoke_operator(message: Message) -> None:
 @router.message(Command("operators", "операторы"))
 async def owner_list_operators(message: Message) -> None:
     if not await _owner_only(message): return
-    rows=db_rows("bot_operators", limit=100, order="created_at")
+    rows=await asyncio.to_thread(db_rows, "bot_operators", limit=100, order="created_at")
     if not rows:
         await message.answer("Список пуст или таблица bot_operators не создана."); return
     await message.answer("<b>Операторы</b>\n" + "\n".join(f"• <code>{r.get('user_id')}</code> — {'активен' if r.get('active') else 'отозван'}" for r in rows))
@@ -4396,7 +4396,7 @@ async def owner_global_ban(message: Message) -> None:
     uid=int(match.group(1)); reason=(match.group(2) or "причина не указана")[:500]
     if uid == OWNER_ID:
         await message.answer("Нельзя заблокировать овнера."); return
-    row=db_upsert("bot_global_bans", {"user_id":uid,"active":True,"reason":reason,"actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    row=await asyncio.to_thread(db_upsert, "bot_global_bans", {"user_id":uid,"active":True,"reason":reason,"actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
         _GLOBAL_BAN_CACHE[uid] = (True, time.monotonic() + _GLOBAL_BAN_TTL)
         audit(message.chat.id, OWNER_ID, "globalban", uid, reason)
@@ -4411,7 +4411,7 @@ async def owner_global_unban(message: Message) -> None:
     if not match:
         await message.answer("Формат: <code>/globalunban USER_ID</code>"); return
     uid=int(match.group(1))
-    row=db_upsert("bot_global_bans", {"user_id":uid,"active":False,"reason":"","actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
+    row=await asyncio.to_thread(db_upsert, "bot_global_bans", {"user_id":uid,"active":False,"reason":"","actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
     if row:
         _GLOBAL_BAN_CACHE[uid] = (False, time.monotonic() + _GLOBAL_BAN_TTL)
         audit(message.chat.id, OWNER_ID, "globalunban", uid, "global ban removed")
@@ -4422,7 +4422,7 @@ async def owner_global_unban(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^\s*экспорт статистики\s*$"))
 async def owner_export_stats(message: Message) -> None:
     if not await _owner_only(message): return
-    rows=db_rows("bot_users", limit=1000)
+    rows=await asyncio.to_thread(db_rows, "bot_users", limit=1000)
     data={"generated_at_moscow":format_moscow_time(moscow_now()),"sample_limit":1000,"rows":rows}
     raw=json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
     await message.answer_document(BufferedInputFile(raw, filename="pear_cm_stats.json"), caption="Экспорт статистики (до 1000 записей; секреты не включены).")
@@ -4503,7 +4503,7 @@ async def suggestion_cmd(message: Message) -> None:
     text_value=re.sub(r"^(?:/suggest(?:@\w+)?|/предложение|предложение)\s*", "", raw, flags=re.I).strip()
     if not text_value:
         await message.answer("Формат: <code>/suggest идея</code>"); return
-    row=db_insert("bot_reports", {"chat_id":message.chat.id,"reporter_id":message.from_user.id,"message_id":None,"details":"ПРЕДЛОЖЕНИЕ: "+text_value[:1400],"status":"suggestion","created_at":datetime.now(timezone.utc).isoformat()})
+    row=await asyncio.to_thread(db_insert, "bot_reports", {"chat_id":message.chat.id,"reporter_id":message.from_user.id,"message_id":None,"details":"ПРЕДЛОЖЕНИЕ: "+text_value[:1400],"status":"suggestion","created_at":datetime.now(timezone.utc).isoformat()})
     await message.answer("💡 Предложение сохранено." if row else "Таблица bot_reports недоступна. Примените schema.sql.")
 
 @router.message(Command("quote", "цитата"))
@@ -4525,7 +4525,7 @@ async def favorites_cmd(message: Message) -> None:
         await message.answer("Ответь на сообщение командой <code>/favorites</code>, чтобы сохранить его в избранное."); return
     src=message.reply_to_message
     text_value=(src.text or src.caption or f"message_id={src.message_id}")[:2500]
-    row=db_insert("bot_notes", {"user_id":message.from_user.id,"content":f"ИЗБРАННОЕ · chat={src.chat.id} · message={src.message_id}\n{text_value}","created_at":datetime.now(timezone.utc).isoformat()})
+    row=await asyncio.to_thread(db_insert, "bot_notes", {"user_id":message.from_user.id,"content":f"ИЗБРАННОЕ · chat={src.chat.id} · message={src.message_id}\n{text_value}","created_at":datetime.now(timezone.utc).isoformat()})
     await message.answer("⭐ Сообщение сохранено в личные заметки." if row else "Не удалось сохранить: проверь таблицу bot_notes из schema.sql.")
 
 @router.message(Command("achievements", "достижения"))
