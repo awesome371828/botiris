@@ -219,3 +219,6 @@ create index if not exists bot_trusted_users_chat_active_idx
 
 create index if not exists bot_notes_chat_user_created_idx
     on public.bot_notes (chat_id, user_id, created_at desc);
+
+alter table public.bot_trusted_users enable row level security;
+revoke all on public.bot_trusted_users from anon, authenticated;
