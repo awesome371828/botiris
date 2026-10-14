@@ -1501,40 +1501,58 @@ async def info_cmd(message: Message) -> None:
     )
 
 @router.message(Command("top"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?топ(?:\\s|$)"))
 async def top_cmd(message: Message) -> None:
     raw = (message.text or "").strip().lower()
-    arg = re.sub(r"^(?:/top(?:@\w+)?|[.!/]?топ)\s*", "", raw, flags=re.I).strip()
+    arg = re.sub(r"^(?:/top(?:@\\w+)?|[.!/]?топ)\\s*", "", raw, flags=re.I).strip().replace("ё", "е")
+    chat_only = arg.startswith(("чат ", "чата ", "в чате ", "по чату "))
+    if chat_only:
+        arg = re.sub(r"^(?:чат|чата|в чате|по чату)\\s*", "", arg).strip()
     aliases = {
-        # День
-        "день":"day", "дня":"day", "дне":"day", "сегодня":"day", "за день":"day",
-        "топ дня":"day", "топ за день":"day", "топ сегодня":"day", "сутки":"day", "24 часа":"day",
-        # Неделя
-        "неделя":"week", "неделю":"week", "недели":"week", "за неделю":"week",
-        "топ недели":"week", "топ неделю":"week", "топ за неделю":"week", "7 дней":"week",
-        # Месяц
-        "месяц":"month", "месяца":"month", "месяце":"month", "за месяц":"month",
-        "топ месяца":"month", "топ месяц":"month", "топ за месяц":"month", "30 дней":"month",
-        # Год
-        "год":"year", "года":"year", "году":"year", "за год":"year",
-        "топ года":"year", "топ год":"year", "топ за год":"year", "365 дней":"year",
-        # Всё время
-        "вся":"all", "все":"all", "всё":"all", "всё время":"all", "все время":"all",
-        "топ вся":"all", "топ все":"all", "топ всё":"all", "топ всё время":"all", "топ все время":"all",
-        "за всё время":"all", "за все время":"all", "навсегда":"all", "общий":"all", "общий топ":"all",
+        "день":"day", "дня":"day", "дню":"day", "дне":"day", "днем":"day", "дневной":"day",
+        "сегодня":"day", "сегодняшний":"day", "сегодняшняя":"day", "за сегодня":"day", "за день":"day",
+        "топ дня":"day", "топ за день":"day", "топ сегодня":"day", "топ за сегодня":"day",
+        "сутки":"day", "суток":"day", "сутками":"day", "суточный":"day", "24 часа":"day",
+        "неделя":"week", "неделю":"week", "недели":"week", "неделе":"week", "неделей":"week",
+        "недельный":"week", "недельная":"week", "за неделю":"week", "нед":"week", "7 дней":"week",
+        "топ недели":"week", "топ неделю":"week", "топ за неделю":"week", "топ недельный":"week",
+        "месяц":"month", "месяца":"month", "месяцу":"month", "месяце":"month", "месяцем":"month",
+        "месячный":"month", "месячная":"month", "за месяц":"month", "30 дней":"month",
+        "топ месяца":"month", "топ месяц":"month", "топ за месяц":"month", "топ месячный":"month",
+        "год":"year", "года":"year", "году":"year", "годом":"year", "годовой":"year",
+        "за год":"year", "365 дней":"year", "топ года":"year", "топ год":"year", "топ за год":"year",
+        "вся":"all", "все":"all", "все время":"all", "все времена":"all", "за все время":"all",
+        "топ вся":"all", "топ все":"all", "топ все время":"all", "топ все времена":"all",
+        "навсегда":"all", "общий":"all", "общий топ":"all", "в целом":"all",
         "all":"all", "alltime":"all", "day":"day", "week":"week", "month":"month", "year":"year",
     }
-    # Разрешаем варианты «топ за месяц», «топ месяц», «за месяц», «месячный» и т. п.
-    normalized_arg = re.sub(r"^(?:за|топ|топ за)\s+", "", arg).strip()
-    period = aliases.get(arg, aliases.get(normalized_arg, "all"))
-    labels = {"all":"за всё время", "day":"за день", "week":"за неделю", "month":"за месяц", "year":"за год"}
-    if period == "all":
-        rows = db_rows("bot_users", limit=10, order="messages", chat_id=message.chat.id)
-    else:
-        if db is None:
-            await message.answer("⚠️ Для топа по периодам нужна подключённая Supabase и таблица bot_activity_events.")
-            return
-        # Calendar periods in Moscow time: today, this week (Mon-Sun), month, year.
+    compact = re.sub(r"\\s+", " ", arg).strip(" .,!?:;")
+    normalized = re.sub(r"^(?:за|топ|топ за)\\s+", "", compact).strip()
+    period = aliases.get(compact, aliases.get(normalized, "all"))
+    labels = {"all":"за всё время", "day":"за сегодня", "week":"за эту неделю", "month":"за этот месяц", "year":"за этот год"}
+
+    def query_top() -> list[dict]:
+        if period == "all":
+            records = db_rows("bot_users", limit=10000, order="messages")
+            grouped: dict[int, dict] = {}
+            for row in records:
+                try:
+                    uid, count = int(row.get("user_id") or 0), int(row.get("messages") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if uid <= 0:
+                    continue
+                item = grouped.setdefault(uid, {"user_id": uid, "username": row.get("username"), "first_name": row.get("first_name") or "Участник", "messages": 0})
+                item["messages"] += count
+                if row.get("username"):
+                    item["username"] = row["username"]
+                if row.get("first_name"):
+                    item["first_name"] = row["first_name"]
+            if chat_only:
+                local_rows = db_rows("bot_users", limit=10000, order="messages", chat_id=message.chat.id)
+                grouped = {int(r["user_id"]): {**r, "messages": int(r.get("messages") or 0)} for r in local_rows if r.get("user_id") is not None}
+            return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:10]
+
         now_local = moscow_now()
         if period == "day":
             period_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1544,32 +1562,45 @@ async def top_cmd(message: Message) -> None:
             period_start = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
             period_start = now_local.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        try:
-            events = (db.table("bot_activity_events").select("user_id,username,first_name")
-                      .eq("chat_id", message.chat.id)
-                      .gte("created_at", period_start.astimezone(timezone.utc).isoformat())
-                      .order("created_at", desc=True).limit(10000).execute().data or [])
-            grouped = {}
-            for event in events:
-                uid = int(event["user_id"])
-                if uid not in grouped:
-                    grouped[uid] = {"user_id":uid, "username":event.get("username"),
-                                    "first_name":event.get("first_name") or "Участник", "messages":0}
-                grouped[uid]["messages"] += 1
-            rows = sorted(grouped.values(), key=lambda row: row["messages"], reverse=True)[:10]
-        except Exception:
-            log.exception("Period top query failed")
-            await message.answer("⚠️ Не найдена таблица bot_activity_events. Примените обновлённый schema.sql в Supabase.")
-            return
+        query = db.table("bot_activity_events").select("user_id,username,first_name,chat_id").gte("created_at", period_start.astimezone(timezone.utc).isoformat())
+        if chat_only:
+            query = query.eq("chat_id", message.chat.id)
+        events = query.order("created_at", desc=True).limit(10000).execute().data or []
+        grouped: dict[int, dict] = {}
+        for event in events:
+            try:
+                uid = int(event.get("user_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if uid <= 0:
+                continue
+            item = grouped.setdefault(uid, {"user_id": uid, "username": event.get("username"), "first_name": event.get("first_name") or "Участник", "messages": 0})
+            item["messages"] += 1
+            if event.get("username"):
+                item["username"] = event["username"]
+            if event.get("first_name"):
+                item["first_name"] = event["first_name"]
+        return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:10]
+
+    if period != "all" and db is None:
+        await message.answer("⚠️ Для топа за период нужна подключённая Supabase и таблица bot_activity_events.")
+        return
+    try:
+        rows = await asyncio.to_thread(query_top)
+    except Exception:
+        log.exception("Leaderboard query failed")
+        await message.answer("⚠️ Не удалось получить топ. Проверьте подключение к Supabase и таблицу bot_activity_events.")
+        return
     if not rows:
         await message.answer(f"🏆 Пока нет данных для топа {labels[period]}.")
         return
-    lines = [f"🏆 <b>Топ участников {labels[period]}</b>"]
+    scope = "этого чата" if chat_only else "всех чатов Pear CM"
+    lines = [f"🏆 <b>Топ участников {labels[period]}</b>", f"<i>Общий рейтинг: {scope}</i>"]
     for index, row in enumerate(rows, 1):
-        uid = int(row["user_id"])
-        name = f"@{row['username']}" if row.get("username") else mention(uid, row.get("first_name") or "Участник")
+        name = f"@{escape(str(row['username']))}" if row.get("username") else escape(str(row.get("first_name") or "Участник"))
         lines.append(f"{index}. {name} — <b>{int(row.get('messages', 0))}</b> 💬")
-    await message.answer("\n".join(lines))
+    await message.answer("\\n".join(lines))
+
 
 @router.message(Command("logs"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?логи(?:\s|$)"))
