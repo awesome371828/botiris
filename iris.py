@@ -1690,22 +1690,22 @@ async def delete_message_cmd(message: Message) -> None:
             return
 
         count = max(1, requested)
-        # Bot API has no getChatHistory endpoint. Prefer real message IDs observed
-        # by the middleware (including bot and user messages), then fill any gaps from
-        # the preceding ID range so old messages can still be attempted.
-        first_id = max(1, message.message_id - count)
+        # The requested limit includes the command message itself. Delete count-1
+        # preceding messages, then delete this command, for a true maximum of count.
+        previous_count = max(0, count - 1)
+        first_id = max(1, message.message_id - previous_count)
         observed = [
             mid for mid in _RECENT_MESSAGE_IDS.get(message.chat.id, ())
             if first_id <= mid < message.message_id
         ]
-        candidates = list(dict.fromkeys(reversed(observed)) )[:count]
+        candidates = list(dict.fromkeys(reversed(observed)))[:previous_count]
         candidate_set = set(candidates)
-        if len(candidates) < count:
+        if len(candidates) < previous_count:
             for mid in range(message.message_id - 1, first_id - 1, -1):
                 if mid not in candidate_set:
                     candidates.append(mid)
                     candidate_set.add(mid)
-                    if len(candidates) >= count:
+                    if len(candidates) >= previous_count:
                         break
         forbidden = False
         individually_deleted = 0
@@ -1746,21 +1746,24 @@ async def delete_message_cmd(message: Message) -> None:
         # bulk delete endpoint returns only True/False and can silently skip IDs.
         results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
         individually_deleted = sum(1 for result in results if result)
-        # Remove the command itself as well, so it doesn't remain in the chat.
+        # Count the command itself only if Telegram confirmed its deletion.
+        command_deleted = False
         try:
             await message.delete()
-        except Exception:
-            pass
+            command_deleted = True
+        except Exception as exc:
+            log.debug("Could not delete purge command chat=%s message=%s: %s", message.chat.id, message.message_id, exc)
+        deleted_total = individually_deleted + int(command_deleted)
 
         audit(
             message.chat.id, message.from_user.id, "purge_recent",
-            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={individually_deleted}",
+            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={deleted_total}",
         )
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
         else:
             await message.answer(
-                f"🧹 Удалено сообщений: <b>{individually_deleted}</b> из последних {count}."
+                f"🧹 Удалено сообщений: <b>{deleted_total}</b> из последних {count}."
                 "\nУже удалённые, старые и служебные сообщения могут не учитываться."
             )
         return
