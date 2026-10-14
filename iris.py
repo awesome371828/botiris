@@ -448,9 +448,16 @@ async def require_admin(message: Message, min_rank: int = 1) -> bool:
         per_command = personal.get(key, {}) if isinstance(personal, dict) and key else {}
         personal_rule = per_command.get(str(message.from_user.id)) if isinstance(per_command, dict) else None
         if personal_rule == "deny":
+            if message.from_user.id == OWNER_ID:
+                return True
+            denied_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+            if denied_member and denied_member.status == ChatMemberStatus.CREATOR:
+                return True
             await message.answer("⛔ Для тебя отдельно запрещена эта команда администратором.")
             return False
         if personal_rule == "allow":
+            if message.from_user.id == OWNER_ID:
+                return True
             return True
         if custom_rank is not None:
             min_rank = max(1, min(5, int(custom_rank)))
