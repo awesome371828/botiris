@@ -644,7 +644,7 @@ async def profile(message: Message) -> None:
     user = ensure_user(message.from_user.id, chat_id, message.from_user.username, message.from_user.full_name)
     messages = int(user.get("messages", 0))
     rank = int(user.get("rank", 0))
-    warns = int(user.get("warns", 0))
+    warns = active_warn_count(message.chat.id, message.from_user.id)
     level_name = "Новичок" if messages < 25 else "Участник" if messages < 100 else "Активный" if messages < 500 else "Легенда чата"
     next_goal = next((goal for goal in (25, 100, 500, 1000) if messages < goal), None)
     progress = f"📈 До следующего рубежа: <b>{next_goal - messages}</b> сообщ." if next_goal else "✨ Достигнут высокий рубеж активности!"
