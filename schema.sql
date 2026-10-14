@@ -154,6 +154,8 @@ create index if not exists bot_audit_chat_created_idx
     on public.bot_audit (chat_id, created_at desc);
 create index if not exists bot_audit_created_idx
     on public.bot_audit (created_at desc);
+create index if not exists bot_audit_chat_target_created_idx
+    on public.bot_audit (chat_id, target_id, created_at desc);
 create index if not exists bot_activity_events_chat_created_idx
     on public.bot_activity_events (chat_id, created_at desc);
 create index if not exists bot_activity_events_chat_user_created_idx
