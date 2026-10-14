@@ -1952,7 +1952,7 @@ async def top_cmd(message: Message) -> None:
                 q = q.eq("chat_id", message.chat.id)
             offset = 0
             while True:
-                page = q.order("day").range(offset, offset + 999).execute().data or []
+                page = q.order("day").order("chat_id").order("user_id").range(offset, offset + 999).execute().data or []
                 for row in page:
                     try:
                         uid, n = int(row.get("user_id") or 0), max(0, int(row.get("messages") or 0))
