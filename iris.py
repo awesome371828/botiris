@@ -1998,6 +1998,7 @@ async def top_cmd(message: Message) -> None:
                             "user_id": uid,
                             "username": uname,
                             "first_name": current.get("first_name") or base_name,
+                            "baseline_name": base_name,
                             "messages": int(base_count) + delta,
                         }
                         if uid:
@@ -2132,7 +2133,13 @@ async def top_cmd(message: Message) -> None:
     for index, row in enumerate(rows, 1):
         uid = int(row.get("user_id") or 0)
         username = str(row.get("username") or "").lstrip("@")
-        display_name = profile_names.get(uid) or str(row.get("first_name") or "Участник")
+        # Preserve Iris' historical display names for imported baseline users unless
+        # the member has explicitly set a custom +ник nickname in this chat.
+        display_name = (
+            profile_names.get(uid)
+            or str(row.get("baseline_name") or "").strip()
+            or str(row.get("first_name") or "Участник")
+        )
         safe_name = escape(display_name)
         if uid > 0:
             display = mention(uid, display_name)
