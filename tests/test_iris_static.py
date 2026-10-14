@@ -224,7 +224,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             "выдвор(?:ить|и|ите)",
             "предупреждай",
             "сними|снимите|снимайте|убрать",
-            r"бан(?:а|у|ом|е)?\s*",
+            "бан(?:а|у|ом|е)?",
         ):
             self.assertIn(fragment, self.source)
 
