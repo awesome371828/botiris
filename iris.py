@@ -943,10 +943,14 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
 
 @router.message(Command("mute"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут|замутить|замуть|замут)(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
-    raw_args = re.split(r"(?i)^\s*[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)\s*", (message.text or "").strip(), maxsplit=1)[-1].split()
+    original_text = (message.text or "").strip()
+    raw_args = re.split(r"(?i)^\s*[.!/]?(?:(?:дать|выдать)\s+)?(?:мут|замутить|замуть|замут)\s*", original_text, maxsplit=1)[-1].split()
+    if original_text.startswith("@"):
+        raw_args = re.sub(r"(?i)^@\w+\s+(?:мут|замутить|замуть|замут)\s*", "", original_text).split()
     target = None
     if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         u = message.reply_to_message.from_user
@@ -1038,7 +1042,7 @@ async def mute_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unmute"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать)\s+(?:мут|муту)|(?:снять|убрать)\s+)?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать)\s+(?:мут|муту)|[.!/]?(?:размут|анмут|унмут|снятьмут|снятьмуту|анмутить))(?:\s|$)"))
 async def unmute_cmd(message: Message) -> None:
     if not await check_mod(message):
         return
@@ -1184,7 +1188,7 @@ async def warn_cmd(message: Message) -> None:
             await safe_error(message, exc)
 
 @router.message(Command("unwarn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:снять|убрать|удалить)\s+(?:варн|предупреждение)|(?:снять|убрать|удалить)\s+)?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?(?:снять|убрать|удалить)\s+(?:варн|предупреждение)|[.!/]?(?:анварн|снятьварн|убратьварн|разварн|аннулироватьварн|снятьпредупреждение|убратьпредупреждение))(?:\s|$)"))
 async def unwarn_cmd(message: Message) -> None:
     if not await require_admin(message, min_rank=2):
         return
