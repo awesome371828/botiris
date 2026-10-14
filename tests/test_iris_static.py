@@ -111,6 +111,8 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             "def _db_read_with_retry",
             "acquire_single_instance_lock()",
             "_ACTIVITY_OVERFLOW_MAX = 20000",
+            "async def _drain_activity_queue",
+            "_ACTIVITY_WRITER_BUSY = False",
             "Temporary Supabase",
         ):
             self.assertIn(fragment, self.source)
