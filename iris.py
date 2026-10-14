@@ -82,27 +82,32 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
-# Command cooldown: one command per user/chat every two seconds.
-_COMMAND_LAST: dict[tuple[int, int], float] = {}
-_COMMAND_NOTICE_LAST: dict[tuple[int, int], float] = {}
+# Rate-limit only rapid repeats of the SAME command. Different commands remain usable back-to-back.
+_COMMAND_LAST: dict[tuple[int, int, str], float] = {}
+_COMMAND_NOTICE_LAST: dict[tuple[int, int, str], float] = {}
 
 class CommandRateLimitMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if not isinstance(event, Message) or not event.from_user or event.from_user.is_bot:
             return await handler(event, data)
         text_value = (event.text or "").strip()
-        looks_like_command = bool(re.match(r"^(?:/|[!.])\w+", text_value, re.I)) or bool(re.match(r"^(?:мут|бан|кик|варн|размут|разбан|очистить|профиль|команды|помощь)(?:\s|$)", text_value, re.I))
-        if not looks_like_command:
+        command_match = re.match(r"^([/!.][\w]+)(?:@\w+)?", text_value, re.I)
+        plain_match = re.match(
+            r"^(мут|бан|кик|варн|размут|анмут|разбан|очистить|профиль|команды|помощь)(?:\s|$)",
+            text_value, re.I,
+        )
+        if not command_match and not plain_match:
             return await handler(event, data)
-        key = (event.chat.id, event.from_user.id)
+        command_name = (command_match.group(1) if command_match else plain_match.group(1)).lower()
+        key = (event.chat.id, event.from_user.id, command_name)
         now = time.monotonic()
         previous = _COMMAND_LAST.get(key, 0.0)
-        if now - previous < 2.0:
+        if now - previous < 0.8:
             last_notice = _COMMAND_NOTICE_LAST.get(key, 0.0)
-            if now - last_notice >= 5.0:
+            if now - last_notice >= 3.0:
                 _COMMAND_NOTICE_LAST[key] = now
                 try:
-                    await event.answer("⏳ Не так быстро: команды можно отправлять раз в 2 секунды.")
+                    await event.answer("⏳ Повтори эту же команду чуть позже.")
                 except Exception:
                     pass
             return None
@@ -332,6 +337,24 @@ async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     except (TelegramBadRequest, TelegramForbiddenError):
         return False
 
+async def await_bot_rights_hint(chat_id: int) -> str:
+    """Report actual bot permissions instead of always claiming it is not an admin."""
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(chat_id, me.id)
+        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            return "⚠️ <b>Pear CM пока не администратор.</b> Назначь его администратором для команд модерации."
+        missing = []
+        if not getattr(member, "can_delete_messages", False):
+            missing.append("удаление сообщений")
+        if not getattr(member, "can_restrict_members", False):
+            missing.append("ограничение/блокировка участников")
+        if missing:
+            return "⚠️ <b>Pear CM уже администратор</b>, но не хватает прав: " + ", ".join(missing) + "."
+        return "✅ <b>Pear CM уже администратор</b>; основные права модерации включены."
+    except Exception:
+        return "⚠️ Не удалось проверить права автоматически. Напиши /checkrights в группе."
+
 def user_rank(chat_id: int, user_id: int) -> int:
     row = db_one("bot_users", user_id=user_id, chat_id=chat_id) or {}
     try:
@@ -554,7 +577,7 @@ async def start(message: Message) -> None:
         await message.answer(
             f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
-            "⚠️ <b>Чтобы бот полноценно работал, выдайте ему права администратора</b> и включите только нужные разрешения: удаление сообщений, ограничение/блокировка участников и управление сообщениями. Без прав команды модерации не смогут выполнять действия.",
+            + await await_bot_rights_hint(message.chat.id),
             reply_markup=keyboard,
         )
 
@@ -651,10 +674,10 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
         user = ensure_user(callback.from_user.id, callback.message.chat.id, callback.from_user.username, callback.from_user.full_name)
         body = (f"👤 <b>Профиль</b>\n{mention(callback.from_user.id, callback.from_user.full_name)}\n\n"
                 f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>\n\n"
-                "⚠️ Чтобы функции модерации работали, выдайте Pear CM права администратора чата.")
+                + await await_bot_rights_hint(callback.message.chat.id))
     else:
         body = ("📚 <b>Основные команды Pear CM</b>\n• /profile — профиль и статистика\n• /top — топ участников\n• /admins — список администраторов\n• /warns — предупреждения\n• /help — все команды\n\n"
-                "⚠️ Чтобы бот мог удалять сообщения, выдавать муты/баны и закреплять сообщения, выдайте ему права администратора с соответствующими разрешениями.")
+                + await await_bot_rights_hint(callback.message.chat.id))
     await callback.answer()
     await callback.message.answer(body)
 
@@ -662,9 +685,9 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
 async def removed_chat_top_button(message: Message) -> None:
     await message.answer("Эти рейтинги чатов убраны из меню. Используйте /top, чтобы посмотреть активных участников текущей группы.")
 
-@router.message(F.chat.type != ChatType.PRIVATE, F.text.in_({"➕ Добавить в чат", "💍 Брак", "🛠 Установка", "🌐 Открыть приложение", "⚠️ Мои варны", "🛡 Кто админ"}))
+@router.message(F.chat.type != ChatType.PRIVATE, F.text == "🌐 Открыть приложение")
 async def group_menu_text_fallback(message: Message) -> None:
-    await message.answer("Я вижу нажатие кнопки, но часть функций доступна только в личке или в группе с нужными правами.\n\n⚠️ <b>Чтобы Pear CM полноценно работал в чате, выдайте ему права администратора</b> — как минимум необходимые права для модерации. Затем повторите команду.\nПодсказка: /help — команды, /profile — профиль, /top — топ участников.")
+    await message.answer("🌐 Открой Mini App через кнопку приложения в личке с Pear CM. В группе используй /help для команд.")
 
 @router.message(F.text == "💠 Профиль")
 @router.message(Command("profile"))
@@ -684,12 +707,11 @@ async def profile(message: Message) -> None:
         f"👤 <b>Профиль участника</b>\n{mention(message.from_user.id, message.from_user.full_name)}\n\n"
         f"💬 Сообщений: <b>{messages}</b>\n🏅 Ранг: <b>{rank}</b> · <b>{level_name}</b>\n⚠️ Предупреждения: <b>{warns}</b>\n{progress}\n\n"
         "💡 Подсказка: /top — рейтинг участников, /activity — статистика активности."
-        + ("\n\n⚠️ Чтобы модерация работала, выдайте боту права администратора чата." if message.chat.type != ChatType.PRIVATE else "")
+
     )
 
-@router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
 @router.message(Command("time"))
-@router.message(F.text.regexp(r"(?i)^[.!]?время(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:время|дата)(?:\s|$)"))
 async def moscow_time_cmd(message: Message) -> None:
     now = moscow_now()
     await message.answer(
@@ -843,9 +865,12 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
                 return None
     return target
 
-async def check_mod(message: Message, min_rank: int = 2) -> bool:
+async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool = True) -> bool:
     if not await require_admin(message, min_rank=min_rank):
         return False
+    if not require_restrict:
+        # Internal warnings are stored by Pear CM and do not require Telegram restrict rights.
+        return True
     try:
         me = await bot.get_me()
         member = await bot.get_chat_member(message.chat.id, me.id)
@@ -1044,7 +1069,7 @@ async def kick_cmd(message: Message) -> None:
 @router.message(Command("warn"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?варн(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
-    if not await check_mod(message):
+    if not await check_mod(message, require_restrict=False):
         return
     raw_args = args_after_command(message)
     target = await resolve_target(message, [] if message.reply_to_message else raw_args[:1])
@@ -1057,6 +1082,12 @@ async def warn_cmd(message: Message) -> None:
     if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Нельзя выдать предупреждение владельцу бота.")
         return
+    if message.from_user and target[0] != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
+        actor_rank = user_rank(message.chat.id, message.from_user.id)
+        target_rank = user_rank(message.chat.id, target[0])
+        if target_rank >= actor_rank and target_rank > 0:
+            await message.answer("⛔ Нельзя выдавать предупреждения участнику с равным или более высоким внутренним рангом.")
+            return
     actor_id = message.from_user.id if message.from_user else 0
     warn_key = (message.chat.id, actor_id, target[0])
     now_mono = time.monotonic()
@@ -1663,13 +1694,12 @@ async def auto_moderation_filters(message: Message) -> None:
         return
     if message.from_user.id == OWNER_ID:
         return
+    # Monitor-only: avoid per-message Telegram admin calls and blocking DB rank lookups.
     try:
-        if await is_admin(bot, message.chat.id, message.from_user.id) or user_rank(message.chat.id, message.from_user.id) >= 1:
-            return
+        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     except Exception:
+        log.exception("Could not load monitor-only filter settings chat=%s", message.chat.id)
         return
-
-    settings = get_chat_settings(message.chat.id)
     now = time.monotonic()
     key = (message.chat.id, message.from_user.id)
     normalized = re.sub(r"[^\w\s]", " ", text_value.lower(), flags=re.UNICODE)
@@ -2631,6 +2661,7 @@ async def main() -> None:
     group_commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="help", description="Справка по командам чата"),
+        BotCommand(command="commands", description="Все команды Pear CM"),
         BotCommand(command="admins", description="Администраторы чата"),
         BotCommand(command="warns", description="Мои предупреждения"),
         BotCommand(command="top", description="Топ за период"),
@@ -2646,6 +2677,7 @@ async def main() -> None:
     private_commands = [
         BotCommand(command="start", description="Открыть меню бота"),
         BotCommand(command="help", description="Справка"),
+        BotCommand(command="commands", description="Все команды Pear CM"),
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="warns", description="Мои предупреждения"),
         BotCommand(command="top", description="Топ участников"),
