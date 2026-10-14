@@ -553,22 +553,40 @@ async def welcome_members(message: Message) -> None:
     # Process anti-raid after welcoming; this is called directly because aiogram stops at the first matching service-message handler.
     await apply_raid_protection(message)
 
+# Keep synchronous Supabase I/O off aiogram's event loop. Message updates can
+# continue while activity counters/events are persisted in a worker thread.
+_ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
+
+def _persist_activity_sync(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
+    user = ensure_user(user_id, chat_id, username, first_name)
+    now = datetime.now(timezone.utc).isoformat()
+    db_upsert("bot_users", {
+        "user_id": user_id, "chat_id": chat_id,
+        "username": username, "first_name": first_name or "Пользователь",
+        "warns": int(user.get("warns", 0)), "rank": int(user.get("rank", 0)),
+        "messages": int(user.get("messages", 0)) + 1,
+        "last_seen": now,
+    }, "user_id,chat_id")
+    db_insert("bot_activity_events", {
+        "chat_id": chat_id, "user_id": user_id,
+        "username": username, "first_name": first_name or "Пользователь",
+        "created_at": now,
+    })
+
+async def _persist_activity_limited(chat_id: int, user_id: int, username: str | None, first_name: str) -> None:
+    try:
+        async with _ACTIVITY_WRITE_SEMAPHORE:
+            await asyncio.to_thread(_persist_activity_sync, chat_id, user_id, username, first_name)
+    except Exception:
+        log.exception("Background activity persistence failed")
+
 async def track_activity(message: Message) -> None:
     if not message.from_user or message.from_user.is_bot or not message.text or not is_group(message):
         return
-    user = ensure_user(message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
-    db_upsert("bot_users", {
-        "user_id": message.from_user.id, "chat_id": message.chat.id,
-        "username": message.from_user.username, "first_name": message.from_user.full_name,
-        "warns": int(user.get("warns", 0)), "rank": int(user.get("rank", 0)),
-        "messages": int(user.get("messages", 0)) + 1,
-        "last_seen": datetime.now(timezone.utc).isoformat(),
-    }, "user_id,chat_id")
-    db_insert("bot_activity_events", {
-        "chat_id": message.chat.id, "user_id": message.from_user.id,
-        "username": message.from_user.username, "first_name": message.from_user.full_name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    asyncio.create_task(_persist_activity_limited(
+        message.chat.id, message.from_user.id, message.from_user.username,
+        message.from_user.full_name,
+    ))
 
 # ── Moderation: shared command implementation ─────────────────────────────────
 async def moderation_target(message: Message, command: str) -> tuple[int, str] | None:
@@ -1268,12 +1286,14 @@ async def auto_moderation_filters(message: Message) -> None:
     await track_activity(message)
     # In maintenance mode, suppress ordinary group messages but keep commands reachable.
     if message.from_user.id != OWNER_ID:
-        if str(_global_setting("maintenance", "off")).lower() == "on" and not (message.text or "").lstrip().startswith(("/", "!", ".")):
+        # Cached reads and worker threads prevent Supabase network waits from
+        # blocking the aiogram event loop for every incoming group message.
+        is_command = (message.text or "").lstrip().startswith(("/", "!", "."))
+        if not is_command and str(await asyncio.to_thread(_global_setting, "maintenance", "off")).lower() == "on":
             try: await message.delete()
             except Exception: pass
             return
-        banned = db_one("bot_global_bans", user_id=message.from_user.id, active=True)
-        if banned and not (message.text or "").lstrip().startswith(("/", "!", ".")):
+        if not is_command and await asyncio.to_thread(_is_globally_banned, message.from_user.id):
             try: await message.delete()
             except Exception: pass
             return
@@ -1785,6 +1805,10 @@ router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.from_us
 # ── Owner console + community utilities (increment 2) ────────────────────────
 _PROCESS_STARTED = time.monotonic()
 _RUNTIME_FLAGS: dict[str, Any] = {"maintenance": False}
+_GLOBAL_SETTINGS_CACHE: dict[str, tuple[Any, float]] = {}
+_GLOBAL_BAN_CACHE: dict[int, tuple[bool, float]] = {}
+_GLOBAL_SETTING_TTL = 5.0
+_GLOBAL_BAN_TTL = 10.0
 
 OWNER_HELP = (
     "<b>🛠 Панель овнера Pear CM</b>\n\n"
@@ -1802,19 +1826,33 @@ OWNER_HELP = (
 )
 
 def _global_setting(key: str, default: Any = None) -> Any:
+    now = time.monotonic()
+    cached = _GLOBAL_SETTINGS_CACHE.get(key)
+    if cached and cached[1] > now:
+        return cached[0]
     row = db_one("bot_global_settings", key=key)
-    if row is not None:
-        return row.get("value", default)
-    # Runtime fallback keeps simple settings available when the migration is absent.
-    return _RUNTIME_FLAGS.get(key, default)
+    value = row.get("value", default) if row is not None else _RUNTIME_FLAGS.get(key, default)
+    _GLOBAL_SETTINGS_CACHE[key] = (value, now + _GLOBAL_SETTING_TTL)
+    return value
 
 def _set_global_setting(key: str, value: Any) -> bool:
     _RUNTIME_FLAGS[key] = value
+    _GLOBAL_SETTINGS_CACHE[key] = (value, time.monotonic() + _GLOBAL_SETTING_TTL)
     row = db_upsert("bot_global_settings", {
         "key": key, "value": str(value),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }, "key")
     return row is not None
+
+def _is_globally_banned(user_id: int) -> bool:
+    now = time.monotonic()
+    cached = _GLOBAL_BAN_CACHE.get(user_id)
+    if cached and cached[1] > now:
+        return cached[0]
+    row = db_one("bot_global_bans", user_id=user_id, active=True)
+    value = bool(row and row.get("active"))
+    _GLOBAL_BAN_CACHE[user_id] = (value, now + _GLOBAL_BAN_TTL)
+    return value
 
 def _operator_active(user_id: int) -> bool:
     row = db_one("bot_operators", user_id=user_id, active=True)
