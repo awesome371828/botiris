@@ -749,10 +749,8 @@ async def welcome_members(message: Message) -> None:
     # Process anti-raid after welcoming; this is called directly because aiogram stops at the first matching service-message handler.
     await apply_raid_protection(message)
 
-# Keep synchronous Supabase I/O off aiogram's event loop. Message updates can
-# continue while activity counters/events are persisted in a worker thread.
-_ACTIVITY_WRITE_SEMAPHORE = asyncio.Semaphore(4)
-_ACTIVITY_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
+# Activity events are batched by the background writer below so ordinary messages
+# never wait for Supabase writes.
 
 def _persist_activity_batch_sync(items: list[tuple[int, int, str | None, str, str]]) -> None:
     if not items:
