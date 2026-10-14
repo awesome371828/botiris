@@ -957,7 +957,8 @@ async def mute_cmd(message: Message) -> None:
         target = (u.id, u.full_name)
     elif not message.reply_to_message:
         # Prefer @username over numbers so «мут 1 час @user» never treats 1 as a user ID.
-        username_arg = next((x for x in raw_args if x.startswith("@")), None)
+        username_match = re.search(r"@\w+", original_text)
+        username_arg = username_match.group(0) if username_match else next((x for x in raw_args if x.startswith("@")), None)
         id_arg = next((x for x in raw_args if x.isdigit() and len(x) >= 7), None)
         target = await resolve_target(message, [username_arg] if username_arg else ([id_arg] if id_arg else []))
     if not target:
@@ -983,6 +984,10 @@ async def mute_cmd(message: Message) -> None:
         if not duration_tokens or duration_tokens[0].lower().strip(",.;") in permanent_words:
             duration_label = "бессрочно"
             reason = (" ".join(duration_tokens[1:]).strip() or None) if duration_tokens else None
+            until = None
+        elif not any(re.match(r"^\d", token) or _unit_seconds(token) is not None for token in duration_tokens):
+            duration_label = "бессрочно"
+            reason = " ".join(duration_tokens).strip() or None
             until = None
         else:
             await message.answer("Не удалось распознать срок. Если срок не указан, мут бессрочный. Примеры: <code>мут час</code>, <code>мут 2 часа спам</code>, <code>мут 67 часов флуд</code>.")
