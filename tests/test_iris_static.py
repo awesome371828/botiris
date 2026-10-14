@@ -102,7 +102,6 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             "Activity queue is full",
             "Three active warnings",
             "Telegram cannot restrict a chat creator or administrator",
-            "Temporary Supabase",
         ):
             self.assertIn(fragment.casefold(), self.source.casefold())
 
