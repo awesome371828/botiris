@@ -44,7 +44,7 @@ SUPABASE_KEY = (
 )
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-5"
+MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-6"
 
 def moscow_now() -> datetime:
     """Current aware Moscow time (MSK, UTC+3), updated from system time."""
@@ -443,6 +443,7 @@ async def start(message: Message) -> None:
 @router.message(F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
     if not message.from_user or message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Эта кнопка доступна только владельцу бота.")
         return
     await owner_panel(message)
 
