@@ -35,6 +35,30 @@ from aiogram.types import (
 )
 from supabase import Client, create_client
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - flock is available on the Linux bot runner
+    fcntl = None
+
+_PROCESS_LOCK_HANDLE = None
+
+def acquire_single_instance_lock() -> None:
+    """Prevent two local polling processes from using the same bot token."""
+    global _PROCESS_LOCK_HANDLE
+    if fcntl is None:
+        log.warning("Process lock unavailable on this platform; rely on deployment concurrency controls")
+        return
+    lock_path = os.getenv("BOT_LOCK_PATH", "/tmp/pear_cm_polling.lock")
+    handle = open(lock_path, "w", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        log.critical("Another Pear CM process already holds %s; refusing duplicate Telegram polling", lock_path)
+        raise SystemExit(23)
+    _PROCESS_LOCK_HANDLE = handle  # Keep the descriptor open for the entire process lifetime.
+
+
 # ── Configuration ────────────────────────────────────────────────────────────
 OWNER_ID = int(os.getenv("BOT_OWNER_ID", "6652898792"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -4547,6 +4571,7 @@ async def global_error_handler(event) -> bool:
     return True
 
 async def main() -> None:
+    acquire_single_instance_lock()
     # Меню команд разделено по контекстам: в группах — только управление чатом,
     # обычным пользователям в личке — пользовательские функции, овнерские команды —
     # только в личном чате владельца бота.
