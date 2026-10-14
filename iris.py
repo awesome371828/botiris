@@ -964,7 +964,12 @@ async def marriage_menu(message: Message) -> None:
 async def admins(message: Message) -> None:
     try:
         # Keep internal Pear CM roles, but always include the actual Telegram chat creator.
-        ranked_users = await asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id)
+        ranked_users_result, telegram_admins_result = await asyncio.gather(
+            asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id),
+            bot.get_chat_administrators(message.chat.id),
+            return_exceptions=True,
+        )
+        ranked_users = ranked_users_result if isinstance(ranked_users_result, list) else []
         ranks: dict[int, tuple[int, str, str | None]] = {}
         for row in ranked_users:
             try:
@@ -984,9 +989,10 @@ async def admins(message: Message) -> None:
         owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
         ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
-        try:
-            telegram_admins = await bot.get_chat_administrators(message.chat.id)
-            for member in telegram_admins:
+        if isinstance(telegram_admins_result, BaseException):
+            log.info("Could not fetch Telegram chat creator for chat %s: %s", message.chat.id, telegram_admins_result)
+        else:
+            for member in telegram_admins_result:
                 if member.status != ChatMemberStatus.CREATOR:
                     continue
                 u = member.user
@@ -995,8 +1001,6 @@ async def admins(message: Message) -> None:
                 if username:
                     display = f"@{username} ({display})"
                 ranks[u.id] = (5, display, username)
-        except (TelegramBadRequest, TelegramForbiddenError):
-            log.info("Could not fetch Telegram chat creator for chat %s", message.chat.id)
 
         lines = ["🛡 <b>Администраторы Pear CM</b>"]
         for uid, (rank, name, username) in sorted(ranks.items(), key=lambda item: (-item[1][0], item[1][1].casefold()))[:100]:
