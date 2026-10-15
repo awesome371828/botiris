@@ -35,7 +35,7 @@ jobs:
           python -m py_compile iris.py
           python -m py_compile moderation_full.py
           python -m unittest discover -s tests -v
-      - name: Run bot with 3-hour process restart
+      - name: Run bot with 4-hour process restart
         shell: bash
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -46,10 +46,10 @@ jobs:
           set +e
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            timeout --signal=TERM --kill-after=20s 3h python -u iris.py
+            timeout --signal=TERM --kill-after=20s 4h python -u iris.py
             code=$?
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-              echo "Three hours reached; restarting bot process."
+              echo "Four hours reached; restarting bot process."
             elif [ "$code" -eq 23 ]; then
               echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever."
               exit 23
