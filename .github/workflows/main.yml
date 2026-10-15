@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  # Start a fresh runner every five hours. Concurrency below cancels the old
+  # runner before the new one polls Telegram, avoiding two active pollers.
+  schedule:
+    - cron: "0 */5 * * *"
 
 permissions:
   contents: read
 
-# GitHub-hosted runners are temporary; this is a restart loop within one job,
-# not a guarantee of uninterrupted 24/7 uptime.
+# GitHub-hosted runners are temporary; scheduled recycling reduces downtime
+# but cannot guarantee uninterrupted 24/7 uptime because cron can be delayed.
 concurrency:
   group: pear-cm-bot
   cancel-in-progress: true
