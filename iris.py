@@ -1533,7 +1533,7 @@ async def check_ban_operator_access(message: Message) -> bool:
 
 
 @router.message(Command("ban"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\\s+)?(?:бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте)?)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте)?)(?:\s|$)"))
 async def ban_cmd(message: Message) -> None:
     if not await check_ban_operator_access(message):
         return
@@ -1578,7 +1578,7 @@ async def ban_cmd(message: Message) -> None:
             reason = " ".join(remainder[consumed:]).strip() or None
         else:
             looks_like_duration = any(
-                re.fullmatch(r"\\d+", token.strip(",.;:")) or
+                re.fullmatch(r"\d+", token.strip(",.;:")) or
                 _unit_seconds(token.strip(",.;:").lower()) is not None
                 for token in remainder
             )
@@ -1618,7 +1618,7 @@ async def ban_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("unban"))
-@router.message(F.text.regexp(r"(?i)^(?:[.!/]?разбан(?:ить|а|у|ь|ьте|ься)?|[.!/]?(?:снять|сними|снимите|снимать|убрать|убери|уберите)\\s+бан(?:а|у|ом|е|ы|ов|ами|ах)?|[.!/]?анбан)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?разбан(?:ить|а|у|ь|ьте|ься)?|[.!/]?(?:снять|сними|снимите|снимать|убрать|убери|уберите)\s+бан(?:а|у|ом|е|ы|ов|ами|ах)?|[.!/]?анбан)(?:\s|$)"))
 async def unban_cmd(message: Message) -> None:
     if not await check_ban_operator_access(message):
         return
