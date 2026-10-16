@@ -3298,7 +3298,7 @@ async def apply_configured_filter_action(message: Message, settings: dict[str, A
 
 
 @router.message(Command("premium", "pear_premium"))
-@router.message(F.text.regexp(r"(?i)^\\s*(?:премиум|pear premium)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:премиум|pear premium)(?:\s|$)"))
 async def premium_cmd(message: Message) -> None:
     """Chat-level Pear Premium switch managed by the bot owner/operators."""
     raw = (message.text or "").strip()
