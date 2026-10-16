@@ -104,6 +104,20 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# In private chats, /ban and /unban are global bot restrictions for the owner/operators.
+# In groups, the existing moderation handlers retain their normal chat-ban semantics.
+@router.message(Command("ban"), F.chat.type == ChatType.PRIVATE)
+async def private_global_ban_command(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    await _global_moderation_command(message, remove=False)
+
+@router.message(Command("unban"), F.chat.type == ChatType.PRIVATE)
+async def private_global_unban_command(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    await _global_moderation_command(message, remove=True)
+
 # Rate-limit only rapid repeats of the SAME command. Different commands remain usable back-to-back.
 _COMMAND_LATENCIES: deque[tuple[float, str]] = deque(maxlen=2000)
 _COMMAND_LAST: dict[tuple[int, int, str], float] = {}
@@ -4461,9 +4475,11 @@ OWNER_HELP = (
     "/load — доступная нагрузочная информация\n/permissions — проверка прав бота в группе\n\n"
     "<b>Управление</b>\n/maintenance on|off|status — режим обслуживания\n"
     "/operator ID — выдать операторский доступ\n/revokeoperator ID — отозвать доступ\n"
-    "/operators — список операторов\n/globalban ID причина — глобальный запрет в боте\n"
-    "/globalunban ID — снять глобальный запрет\n/audit ID — аудит действий по ID\n\n"
-    "<i>Овнерская панель доступна только BOT_OWNER_ID.</i>"
+    "/operators — список операторов\n/globalban ID|@username [срок] причина — глобальный запрет\n"
+    "/globalunban ID|@username — снять глобальный запрет\n"
+    "/ban ID|@username [срок] причина — бан оператора/овнера в личке\n"
+    "/unban ID|@username — разбан оператора/овнера в личке\n/audit ID — аудит действий по ID\n\n"
+    "<i>Панель овнера доступна только BOT_OWNER_ID; операторы могут модерировать, но не управлять овнерами.</i>"
 )
 
 def _global_setting(key: str, default: Any = None) -> Any:
@@ -4492,6 +4508,24 @@ def _is_globally_banned(user_id: int) -> bool:
         return cached[0]
     row = db_one("bot_global_bans", user_id=user_id, active=True)
     value = bool(row and row.get("active"))
+    # Timed global bans expire persistently, even after the bot restarts.
+    if value and row:
+        raw_expiry = row.get("expires_at")
+        if raw_expiry:
+            try:
+                expiry = datetime.fromisoformat(str(raw_expiry).replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry <= datetime.now(timezone.utc):
+                    db_upsert("bot_global_bans", {
+                        "user_id": user_id, "active": False,
+                        "reason": row.get("reason") or "", "actor_id": row.get("actor_id"),
+                        "created_at": row.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                        "expires_at": raw_expiry,
+                    }, "user_id")
+                    value = False
+            except (TypeError, ValueError):
+                log.warning("Invalid global-ban expiry for user_id=%s", user_id)
     _GLOBAL_BAN_CACHE[user_id] = (value, now + _GLOBAL_BAN_TTL)
     if len(_GLOBAL_BAN_CACHE) > 20000:
         for cached_id, (_, expires_at) in list(_GLOBAL_BAN_CACHE.items()):
@@ -4753,37 +4787,166 @@ async def owner_list_operators(message: Message) -> None:
         await message.answer("Список пуст или таблица bot_operators не создана."); return
     await message.answer("<b>Операторы</b>\n" + "\n".join(f"• <code>{r.get('user_id')}</code> — {'активен' if r.get('active') else 'отозван'}" for r in rows))
 
-@router.message(Command("globalban"))
-@router.message(F.text.regexp(r"(?i)^\s*глобальный бан\s+\d+(?:\s+.+)?$"))
-async def owner_global_ban(message: Message) -> None:
-    if not await _owner_only(message): return
-    match=re.match(r"(?is)^\s*(?:/globalban|глобальный бан)\s+(\d+)(?:\s+(.*))?$", message.text or "")
-    if not match:
-        await message.answer("Формат: <code>/globalban USER_ID причина</code>"); return
-    uid=int(match.group(1)); reason=(match.group(2) or "причина не указана")[:500]
-    if uid == OWNER_ID:
-        await message.answer("Нельзя заблокировать овнера."); return
-    row=await asyncio.to_thread(db_upsert, "bot_global_bans", {"user_id":uid,"active":True,"reason":reason,"actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
-    if row:
-        _GLOBAL_BAN_CACHE[uid] = (True, time.monotonic() + _GLOBAL_BAN_TTL)
-        audit(message.chat.id, OWNER_ID, "globalban", uid, reason)
-        await message.answer(f"🚫 Глобальный запрет включён для ID <code>{uid}</code>. Это блокировка внутри бота, не Telegram-wide бан.")
-    else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
+def _find_known_user_by_username(username: str) -> dict | None:
+    """Resolve only usernames the bot has observed; Telegram cannot enumerate arbitrary users by username."""
+    if db is None:
+        return None
+    try:
+        result = db.table("bot_users").select("user_id,username,first_name").ilike(
+            "username", username.lstrip("@")
+        ).limit(1).execute()
+        rows = result.data or []
+        return rows[0] if rows else None
+    except Exception:
+        log.exception("Could not resolve known username for global moderation")
+        return None
 
-@router.message(Command("globalunban"))
-@router.message(F.text.regexp(r"(?i)^\s*глобальный разбан\s+\d+\s*$"))
-async def owner_global_unban(message: Message) -> None:
-    if not await _owner_only(message): return
-    match=re.search(r"(?:/globalunban|глобальный разбан)\s+(\d+)", message.text or "", re.I)
-    if not match:
-        await message.answer("Формат: <code>/globalunban USER_ID</code>"); return
-    uid=int(match.group(1))
-    row=await asyncio.to_thread(db_upsert, "bot_global_bans", {"user_id":uid,"active":False,"reason":"","actor_id":OWNER_ID,"created_at":datetime.now(timezone.utc).isoformat()}, "user_id")
-    if row:
+async def _resolve_global_target(token: str) -> tuple[int, str] | None:
+    token = (token or "").strip().rstrip(",")
+    if re.fullmatch(r"\d{1,20}", token):
+        uid = int(token)
+        row = await asyncio.to_thread(db_one, "bot_users", user_id=uid)
+        username = (row or {}).get("username")
+        name = f"@{username}" if username else f"ID {uid}"
+        return uid, name
+    username = token.lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        return None
+    row = await asyncio.to_thread(_find_known_user_by_username, username)
+    if not row or not row.get("user_id"):
+        return None
+    return int(row["user_id"]), f"@{row.get('username') or username}"
+
+async def _notify_global_action(message: Message, uid: int, target_label: str,
+                                action: str, reason: str = "", duration_label: str | None = None,
+                                expires_at: str | None = None) -> tuple[bool, bool]:
+    """Notify target and owner; Telegram may reject DMs if the target never started the bot."""
+    if action == "ban":
+        duration_text = f" на <b>{escape(duration_label)}</b>" if duration_label else " <b>навсегда</b>"
+        user_text = (
+            f"⛔ <b>Доступ к Pear CM ограничен{duration_text}.</b>\n"
+            f"Причина: {escape(reason or 'причина не указана')}\n"
+            "Если считаете это ошибкой, свяжитесь с владельцем бота."
+        )
+        owner_text = (
+            f"🚫 <b>Глобальный бан выдан</b>\nПользователь: {escape(target_label)} "
+            f"(<code>{uid}</code>)\nСрок:{duration_text}\nПричина: {escape(reason or 'причина не указана')}\n"
+            f"Кто выдал: <code>{message.from_user.id if message.from_user else 0}</code>"
+        )
+    else:
+        user_text = "✅ <b>Глобальный запрет Pear CM снят.</b> Вы снова можете пользоваться ботом."
+        owner_text = (
+            f"✅ <b>Глобальный бан снят</b>\nПользователь: {escape(target_label)} "
+            f"(<code>{uid}</code>)\nКто снял: <code>{message.from_user.id if message.from_user else 0}</code>"
+        )
+    user_notified = False
+    owner_notified = False
+    try:
+        await bot.send_message(uid, user_text)
+        user_notified = True
+    except Exception as exc:
+        log.info("Could not DM global moderation notice to user %s: %s", uid, type(exc).__name__)
+    actor_id = message.from_user.id if message.from_user else 0
+    # The command response itself informs the owner if they issued it in their private chat.
+    if not (actor_id == OWNER_ID and message.chat.type == ChatType.PRIVATE and message.chat.id == OWNER_ID):
+        try:
+            await bot.send_message(OWNER_ID, owner_text)
+            owner_notified = True
+        except Exception as exc:
+            log.warning("Could not DM owner global moderation notice: %s", type(exc).__name__)
+    return user_notified, owner_notified
+
+async def _global_moderation_command(message: Message, remove: bool = False) -> None:
+    raw = (message.text or "").strip()
+    match = re.match(
+        r"(?is)^/(?:globalban|globanban|globalunban|globanunban|ban|unban)(?:@\w+)?\s*(.*)$",
+        raw,
+    )
+    if match:
+        rest = match.group(1).strip()
+    else:
+        natural = re.match(r"(?is)^\s*глобальный\s+(?:бан|разбан)\s+(.*)$", raw)
+        rest = natural.group(1).strip() if natural else ""
+    parts = rest.split()
+    if not parts:
+        verb = "/unban" if remove else "/ban"
+        await message.answer(f"Формат: <code>{verb} ID|@username [срок] причина</code>")
+        return
+    resolved = await _resolve_global_target(parts[0])
+    if not resolved:
+        await message.answer(
+            "❌ Не удалось найти пользователя. Укажи числовой Telegram ID или @username, "
+            "который бот уже встречал в чате/базе. Telegram не позволяет боту искать любого человека по username."
+        )
+        return
+    uid, target_label = resolved
+    if uid == OWNER_ID:
+        await message.answer("⛔ Нельзя заблокировать или разбанить овнера через модерацию.")
+        return
+    actor_id = message.from_user.id if message.from_user else 0
+    tail = parts[1:]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if remove:
+        row = await asyncio.to_thread(db_upsert, "bot_global_bans", {
+            "user_id": uid, "active": False, "reason": "", "actor_id": actor_id,
+            "created_at": now_iso, "expires_at": None,
+        }, "user_id")
+        if not row:
+            await message.answer("❌ Не удалось снять бан. Проверь Supabase и выполни миграцию из schema.sql.")
+            return
         _GLOBAL_BAN_CACHE[uid] = (False, time.monotonic() + _GLOBAL_BAN_TTL)
-        audit(message.chat.id, OWNER_ID, "globalunban", uid, "global ban removed")
-        await message.answer(f"✅ Глобальный запрет для ID <code>{uid}</code> снят.")
-    else: await message.answer("Не удалось сохранить: создай таблицу bot_global_bans из schema.sql.")
+        await asyncio.to_thread(audit, message.chat.id, actor_id, "globalunban", uid, "global ban removed")
+        user_notified, owner_notified = await _notify_global_action(message, uid, target_label, "unban")
+        notice = "Уведомление пользователю отправлено." if user_notified else "Пользователь не получил личное уведомление (возможно, не запускал бота)."
+        await message.answer(f"✅ Глобальный бан снят: {escape(target_label)} (<code>{uid}</code>).\n{notice}")
+        return
+
+    forever_words = {"навсегда", "бессрочно", "перманентно", "постоянно", "вечный", "вечная", "вечное"}
+    duration: timedelta | None = None
+    duration_label: str | None = None
+    if tail and tail[0].lower().strip(",.;:") in forever_words:
+        reason = " ".join(tail[1:]).strip(" ,.;:-") or "причина не указана"
+    else:
+        parsed = parse_duration_prefix(tail) if tail else None
+        if parsed:
+            duration, consumed, duration_label = parsed
+            reason = " ".join(tail[consumed:]).strip(" ,.;:-") or "причина не указана"
+        else:
+            reason = " ".join(tail).strip(" ,.;:-") or "причина не указана"
+    expires_at = (datetime.now(timezone.utc) + duration).isoformat() if duration else None
+    row = await asyncio.to_thread(db_upsert, "bot_global_bans", {
+        "user_id": uid, "active": True, "reason": reason, "actor_id": actor_id,
+        "created_at": now_iso, "expires_at": expires_at,
+    }, "user_id")
+    if not row:
+        await message.answer("❌ Не удалось сохранить глобальный бан. Проверь Supabase и выполни миграцию из schema.sql.")
+        return
+    _GLOBAL_BAN_CACHE[uid] = (True, time.monotonic() + _GLOBAL_BAN_TTL)
+    await asyncio.to_thread(audit, message.chat.id, actor_id, "globalban", uid, reason)
+    user_notified, owner_notified = await _notify_global_action(
+        message, uid, target_label, "ban", reason, duration_label, expires_at
+    )
+    term = f"на <b>{escape(duration_label)}</b>" if duration_label else "<b>навсегда</b>"
+    user_notice = "Личное уведомление пользователю отправлено." if user_notified else "Пользователь не получил личное уведомление (возможно, не запускал бота)."
+    await message.answer(
+        f"🚫 Глобальный запрет включён: {escape(target_label)} (<code>{uid}</code>) {term}.\n"
+        f"Причина: {escape(reason)}\n{user_notice}\n"
+        "<i>Это блокировка функций Pear CM, не бан во всех Telegram-группах.</i>"
+    )
+
+@router.message(Command("globalban", "globanban"))
+@router.message(F.text.regexp(r"(?i)^\s*глобальный\s+бан(?:\s+|$)"))
+async def owner_global_ban(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    await _global_moderation_command(message, remove=False)
+
+@router.message(Command("globalunban", "globanunban"))
+@router.message(F.text.regexp(r"(?i)^\s*глобальный\s+разбан(?:\s+|$)"))
+async def owner_global_unban(message: Message) -> None:
+    if not await _owner_or_operator(message):
+        return
+    await _global_moderation_command(message, remove=True)
 
 @router.message(Command("exportstats", "экспортстатистики"))
 @router.message(F.text.regexp(r"(?i)^\s*экспорт статистики\s*$"))
