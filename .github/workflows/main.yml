@@ -6,7 +6,7 @@ on:
     branches: [main]
   # Best-effort free hosting: recycle the temporary runner every five hours.
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: "17 */5 * * *"
 
 permissions:
   contents: read
@@ -39,6 +39,39 @@ jobs:
           python -m py_compile iris.py
           python -m py_compile moderation_full.py
           python -m unittest discover -s tests -v
+      - name: Check required secrets and Telegram token
+        shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN is missing in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          python - <<'PY'
+          import json, os, sys, urllib.error, urllib.request
+          token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+          request = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/getMe",
+              headers={"User-Agent": "PearCM-startup-check"}
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  data = json.load(response)
+          except Exception as exc:
+              print(f"::error::Telegram getMe request failed: {type(exc).__name__}: {exc}")
+              sys.exit(1)
+          if not data.get("ok"):
+              print("::error::Telegram rejected TELEGRAM_BOT_TOKEN. Replace the Actions secret with the current BotFather token.")
+              sys.exit(1)
+          bot = data.get("result", {})
+          print(f"Telegram token OK: @{bot.get('username', 'unknown')} (id={bot.get('id', 'unknown')})")
+          print("Supabase URL configured:", bool(os.getenv("SUPABASE_URL")))
+          print("Supabase service key configured:", bool(os.getenv("SUPABASE_SERVICE_KEY")))
+          PY
       - name: Keep bot running and restart it if it exits
         shell: bash
         env:
@@ -46,19 +79,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           BOT_OWNER_ID: ${{ vars.BOT_OWNER_ID || '6652898792' }}
+          PYTHONUNBUFFERED: "1"
         run: |
-          set +e
+          set -uo pipefail
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             timeout --signal=TERM --kill-after=20s 4h50m python -u iris.py
             code=$?
+            echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
               echo "Runner recycle reached; restarting bot process."
             elif [ "$code" -eq 23 ]; then
-              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever."
+              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stop every other instance using this token before restarting."
               exit 23
-            else
-              echo "Bot exited with code $code; retrying in 10 seconds."
             fi
+            echo "Retrying in 10 seconds."
             sleep 10
           done
