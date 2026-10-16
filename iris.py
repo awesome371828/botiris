@@ -3297,6 +3297,50 @@ async def apply_configured_filter_action(message: Message, settings: dict[str, A
                       message.chat.id, message.from_user.id, action, reason)
 
 
+@router.message(Command("premium", "pear_premium"))
+@router.message(F.text.regexp(r"(?i)^\\s*(?:премиум|pear premium)(?:\\s|$)"))
+async def premium_cmd(message: Message) -> None:
+    """Chat-level Pear Premium switch managed by the bot owner/operators."""
+    raw = (message.text or "").strip()
+    parts = raw.split()
+    action = parts[1].lower() if len(parts) > 1 else "info"
+    settings = get_chat_settings(message.chat.id)
+    enabled = bool(settings.get("pear_premium", False))
+
+    if action in {"on", "вкл", "включить", "активировать", "enable"}:
+        if not await _owner_or_operator(message):
+            return
+        settings["pear_premium"] = True
+        save_chat_settings(message.chat.id, settings)
+        audit(message.chat.id, message.from_user.id if message.from_user else 0,
+              "premium_enable", None, "Pear Premium enabled")
+        await message.answer(
+            "💎 <b>Pear Premium активирован для этого чата!</b>\\n\\n"
+            "Сохранена премиум-отметка чата и включён расширенный статус модерации.\\n"
+            "Настройки сохраняются в Supabase, если таблица bot_chat_settings настроена."
+        )
+        return
+    if action in {"off", "выкл", "выключить", "отключить", "disable"}:
+        if not await _owner_or_operator(message):
+            return
+        settings["pear_premium"] = False
+        save_chat_settings(message.chat.id, settings)
+        audit(message.chat.id, message.from_user.id if message.from_user else 0,
+              "premium_disable", None, "Pear Premium disabled")
+        await message.answer("💠 Pear Premium отключён для этого чата.")
+        return
+    if action != "info":
+        await message.answer("Формат: <code>/premium</code>, <code>/premium on</code> или <code>/premium off</code>.")
+        return
+    status = "🟢 активен" if enabled else "⚪ не активирован"
+    await message.answer(
+        "💎 <b>Pear Premium</b>\\n"
+        f"Статус этого чата: <b>{status}</b>.\\n\\n"
+        "Это внутренняя функция Pear CM, не платёжная подписка и не копия платных функций Iris.\\n"
+        "Овнер/оператор: <code>/premium on</code> — включить; <code>/premium off</code> — отключить."
+    )
+
+
 async def auto_moderation_filters(message: Message) -> None:
     """Detect configured spam rules; penalties stay off unless a real admin opts in."""
     if not message.from_user or message.from_user.is_bot or not is_group(message):
