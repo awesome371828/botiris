@@ -1503,41 +1503,140 @@ async def unmute_cmd(message: Message) -> None:
     except Exception as exc:
         await safe_error(message, exc)
 
+async def check_ban_operator_access(message: Message) -> bool:
+    """Allow the configured owner/operators or normal chat moderators to ban/unban."""
+    if not message.from_user or not is_group(message):
+        await message.answer("Эта команда работает только в группе.")
+        return False
+    actor_id = message.from_user.id
+    operator = actor_id == OWNER_ID
+    if not operator:
+        try:
+            operator = bool(await asyncio.to_thread(_operator_active, actor_id))
+        except Exception:
+            operator = False
+    if not operator and not await require_admin(message, min_rank=3):
+        return False
+    try:
+        me = await bot.get_me()
+        bot_member = await get_chat_member_cached(bot, message.chat.id, me.id)
+    except Exception:
+        await message.answer("⛔ Не удалось проверить права Pear CM в этой группе.")
+        return False
+    if not bot_member or bot_member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+        await message.answer("⛔ Назначь Pear CM администратором группы.")
+        return False
+    if bot_member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(bot_member, "can_restrict_members", False):
+        await message.answer("⛔ У Pear CM нет права «Блокировка пользователей / Ограничение участников».")
+        return False
+    return True
+
+
 @router.message(Command("ban"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте)?)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\\s+)?(?:бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте)?)(?:\\s|$)"))
 async def ban_cmd(message: Message) -> None:
-    if not await check_mod(message, min_rank=3):
+    if not await check_ban_operator_access(message):
         return
-    target = await moderation_target(message, "ban")
+
+    raw_args = args_after_command(message)
+    if message.reply_to_message:
+        target = await resolve_target(message, raw_args)
+        remainder = raw_args
+    else:
+        if not raw_args:
+            await message.answer(
+                "Формат: <code>/ban @username нарушение правил</code> — навсегда; "
+                "<code>/ban 123456789 1 день нарушение правил</code> — временно. "
+                "Можно также ответить на сообщение."
+            )
+            return
+        target = await resolve_target(message, raw_args[:1])
+        remainder = raw_args[1:]
+
     if not target:
+        await message.answer(
+            "⛔ Не удалось определить пользователя. Ответь на его сообщение, укажи Telegram ID "
+            "или @username, который бот уже видел в этом чате."
+        )
         return
     if not await ensure_moderation_target_safe(message, target, "ban"):
         return
-    raw_args = args_after_command(message)
-    reason = _reason_from_preset(message.chat.id, "ban", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
+
+    permanent_words = {
+        "навсегда", "навечно", "бессрочно", "перманентно", "постоянно",
+        "пожизненно", "вечный", "вечная", "вечное", "вечного", "перманентный",
+    }
+    duration = None
+    duration_label = "навсегда"
+    reason = None
+    if remainder and remainder[0].lower().strip(",.;:") in permanent_words:
+        reason = " ".join(remainder[1:]).strip() or None
+    else:
+        parsed = parse_duration_prefix(remainder)
+        if parsed:
+            duration, consumed, duration_label = parsed
+            reason = " ".join(remainder[consumed:]).strip() or None
+        else:
+            looks_like_duration = any(
+                re.fullmatch(r"\\d+", token.strip(",.;:")) or
+                _unit_seconds(token.strip(",.;:").lower()) is not None
+                for token in remainder
+            )
+            if looks_like_duration:
+                await message.answer(
+                    "⛔ Не удалось распознать срок бана. Примеры: <code>/ban @user 1 день спам</code>, "
+                    "<code>/ban 123456789 2 недели флуд</code>, <code>/ban @user навсегда нарушение правил</code>. "
+                    "Поддерживаются секунды, минуты, часы, дни, недели, месяцы и годы."
+                )
+                return
+            reason = " ".join(remainder).strip() or None
+
+    reason = escape(_reason_from_preset(message.chat.id, "ban", reason or "нарушение правил")[:300])
+    issued_at = moscow_now()
+    until = issued_at + duration if duration else None
+    actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     try:
-        await bot.ban_chat_member(message.chat.id, target[0])
-        audit(message.chat.id, message.from_user.id, "ban", target[0], f"reason={reason}")
-        await message.answer(f"⛔ {mention(target[0], target[1])} заблокирован в чате. Причина: <b>{escape(reason[:300])}</b>.")
+        await bot.ban_chat_member(message.chat.id, target[0], until_date=until)
+        audit(
+            message.chat.id, message.from_user.id if message.from_user else 0,
+            "ban", target[0],
+            f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}",
+        )
+        if until:
+            await message.answer(
+                f"⛔ {mention(target[0], target[1])} заблокирован на <b>{escape(duration_label)}</b>. "
+                f"Причина: <b>{reason}</b>.\\n"
+                f"🕒 Выдан: {format_moscow_time(issued_at)}\\n"
+                f"⏳ Истекает: {format_moscow_time(until)}\\n👮 Модератор: {actor}."
+            )
+        else:
+            await message.answer(
+                f"⛔ {mention(target[0], target[1])} заблокирован <b>навсегда</b>. "
+                f"Причина: <b>{reason}</b>.\\n👮 Модератор: {actor}."
+            )
     except Exception as exc:
         await safe_error(message, exc)
 
 @router.message(Command("unban"))
-@router.message(F.text.regexp(r"(?i)^(?:[.!/]?разбан(?:ить|а|у|ь|ьте)?|[.!/]?(?:снять|сними|снимите|убрать|убери|уберите)\s+бан)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^(?:[.!/]?разбан(?:ить|а|у|ь|ьте|ься)?|[.!/]?(?:снять|сними|снимите|снимать|убрать|убери|уберите)\\s+бан(?:а|у|ом|е|ы|ов|ами|ах)?|[.!/]?анбан)(?:\\s|$)"))
 async def unban_cmd(message: Message) -> None:
-    if not await check_mod(message):
+    if not await check_ban_operator_access(message):
         return
     args = args_after_command(message)
     target = await resolve_target(message, args)
     if not target:
         await message.answer(
-            "Формат: ответьте на сообщение командой <code>разбан</code> / <code>/unban</code> "
-            "или укажите ID/известный чату @username: <code>разбан 123456789</code>."
+            "Формат: <code>/unban 123456789</code> или <code>/unban @username</code>, "
+            "либо ответь на сообщение командой <code>/unban</code>. "
+            "Username должен быть известен боту из этого чата."
         )
+        return
+    if target[0] == OWNER_ID and message.from_user and message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Нельзя снимать ограничения владельца бота.")
         return
     try:
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
-        audit(message.chat.id, message.from_user.id, "unban", target[0], "manual unban")
+        audit(message.chat.id, message.from_user.id if message.from_user else 0, "unban", target[0], "manual unban")
         await message.answer(f"✅ {mention(target[0], target[1])} разблокирован в этом чате.")
     except Exception as exc:
         await safe_error(message, exc)
