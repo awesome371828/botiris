@@ -3315,8 +3315,8 @@ async def premium_cmd(message: Message) -> None:
         audit(message.chat.id, message.from_user.id if message.from_user else 0,
               "premium_enable", None, "Pear Premium enabled")
         await message.answer(
-            "💎 <b>Pear Premium активирован для этого чата!</b>\\n\\n"
-            "Сохранена премиум-отметка чата и включён расширенный статус модерации.\\n"
+            "💎 <b>Pear Premium активирован для этого чата!</b>\n\n"
+            "Сохранена премиум-отметка чата и включён расширенный статус модерации.\n"
             "Настройки сохраняются в Supabase, если таблица bot_chat_settings настроена."
         )
         return
@@ -3334,9 +3334,9 @@ async def premium_cmd(message: Message) -> None:
         return
     status = "🟢 активен" if enabled else "⚪ не активирован"
     await message.answer(
-        "💎 <b>Pear Premium</b>\\n"
-        f"Статус этого чата: <b>{status}</b>.\\n\\n"
-        "Это внутренняя функция Pear CM, не платёжная подписка и не копия платных функций Iris.\\n"
+        "💎 <b>Pear Premium</b>\n"
+        f"Статус этого чата: <b>{status}</b>.\n\n"
+        "Это внутренняя функция Pear CM, не платёжная подписка и не копия платных функций Iris.\n"
         "Овнер/оператор: <code>/premium on</code> — включить; <code>/premium off</code> — отключить."
     )
 
