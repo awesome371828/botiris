@@ -3902,7 +3902,7 @@ def _settings_exportable(settings: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key, value in settings.items():
         if key in FILTER_DEFAULTS or key.startswith(("modrank_", "warn_")) or key in {
-            "welcome_message", "welcome_enabled", "schedule_enabled", "schedule_open",
+            "welcome_message", "welcome_enabled", "schedule_enabled", "pear_premium", "schedule_open",
             "schedule_close", "schedule_timezone", "punishment_reasons", "command_cooldown",
             "flood_limit", "flood_window", "caps_percent", "filter_mute_minutes",
             "raid_threshold", "raid_window", "raid_restrict_minutes", "warn_3_action",
@@ -4970,7 +4970,9 @@ async def main() -> None:
         BotCommand(command="top", description="Топ за период"),
         BotCommand(command="mute", description="Мут (ответом)"),
         BotCommand(command="unmute", description="Снять мут (ответом)"),
-        BotCommand(command="ban", description="Бан (ответом)"),
+        BotCommand(command="ban", description="Бан (ID/@username/ответом)"),
+        BotCommand(command="unban", description="Разбанить по ID/@username"),
+        BotCommand(command="premium", description="Статус Pear Premium"),
         BotCommand(command="kick", description="Исключить (ответом)"),
         BotCommand(command="warn", description="Предупреждение (ответом)"),
         BotCommand(command="del", description="Удалить сообщения"),
