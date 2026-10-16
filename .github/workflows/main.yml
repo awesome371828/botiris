@@ -84,7 +84,7 @@ jobs:
           set -uo pipefail
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            timeout --signal=TERM --kill-after=20s 4h50m python -u iris.py
+            timeout --signal=TERM --kill-after=20s 17400s python -u iris.py
             code=$?
             echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
