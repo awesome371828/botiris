@@ -90,7 +90,7 @@ jobs:
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
               echo "Runner recycle reached; restarting bot process."
             elif [ "$code" -eq 23 ]; then
-              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stop every other instance using this token before restarting."
+              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever. Stop every other instance using this token, then rerun this workflow."
               exit 23
             fi
             echo "Retrying in 10 seconds."
