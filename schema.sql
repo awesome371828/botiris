@@ -85,8 +85,14 @@ create table if not exists public.bot_global_bans (
     active boolean not null default true,
     reason text not null default '',
     actor_id bigint,
-    created_at timestamptz not null default now()
+    created_at timestamptz not null default now(),
+    expires_at timestamptz
 );
+
+-- Additive migration for timed global bans on existing installations.
+alter table public.bot_global_bans add column if not exists expires_at timestamptz;
+create index if not exists bot_global_bans_active_expiry_idx
+    on public.bot_global_bans (active, expires_at);
 
 -- Reports supports both the current report/appeal commands and suggestions.
 create table if not exists public.bot_reports (
