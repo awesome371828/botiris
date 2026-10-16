@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  # Start a fresh runner every five hours. Concurrency below cancels the old
-  # runner before the new one polls Telegram, avoiding two active pollers.
+  # Best-effort free hosting: recycle the temporary runner every five hours.
   schedule:
     - cron: "0 */5 * * *"
 
 permissions:
   contents: read
 
-# GitHub-hosted runners are temporary; scheduled recycling reduces downtime
-# but cannot guarantee uninterrupted 24/7 uptime because cron can be delayed.
+# This prevents two Telegram polling processes from running at once.
+# GitHub-hosted runners are temporary and cron can be delayed, so this is
+# the strongest simple GitHub Actions workaround, not a true 24/7 guarantee.
 concurrency:
   group: pear-cm-bot
   cancel-in-progress: true
@@ -39,7 +39,7 @@ jobs:
           python -m py_compile iris.py
           python -m py_compile moderation_full.py
           python -m unittest discover -s tests -v
-      - name: Run bot with 4-hour process restart
+      - name: Keep bot running and restart it if it exits
         shell: bash
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -50,10 +50,10 @@ jobs:
           set +e
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            timeout --signal=TERM --kill-after=20s 4h python -u iris.py
+            timeout --signal=TERM --kill-after=20s 4h50m python -u iris.py
             code=$?
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-              echo "Four hours reached; restarting bot process."
+              echo "Runner recycle reached; restarting bot process."
             elif [ "$code" -eq 23 ]; then
               echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever."
               exit 23
