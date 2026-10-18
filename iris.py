@@ -936,17 +936,16 @@ async def start(message: Message) -> None:
             + await await_bot_rights_hint(message.chat.id)
         )
 
-    # ReplyKeyboardRemove clears the old persistent keyboard for this chat.
-    # We immediately attach the new inline menu to THIS SAME welcome message,
-    # so no extra explanatory message is sent.
-    sent = await message.answer(text, reply_markup=ReplyKeyboardRemove())
+    # Telegram accepts only one reply_markup per message. Clear the old
+    # persistent reply keyboard with a temporary invisible message, delete it,
+    # and send the welcome message exactly once with the new inline buttons.
+    removal_message = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
     try:
-        await sent.edit_reply_markup(reply_markup=welcome_inline_keyboard(user_id))
-    except TelegramBadRequest as exc:
-        # Some Telegram clients/APIs may reject replacing this markup; fall back
-        # to a separate inline welcome rather than leave the user without buttons.
-        log.warning("Could not attach inline keyboard after removing reply keyboard: %s", exc)
-        await message.answer(text, reply_markup=welcome_inline_keyboard(user_id))
+        await removal_message.delete()
+    except TelegramBadRequest:
+        # Keyboard is already removed even if Telegram does not allow deletion.
+        pass
+    await message.answer(text, reply_markup=welcome_inline_keyboard(user_id))
 
 @router.message(F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
