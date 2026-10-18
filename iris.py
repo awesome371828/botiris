@@ -6074,6 +6074,30 @@ async def random_community_cmd(message: Message) -> None:
     name = picked.get("first_name") or picked.get("username") or f"ID {picked.get('user_id')}"
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
+# "анрег" исключает пользователя из общего сбора в текущем чате.
+@router.message(F.text.regexp(r"(?i)^\s*анрег\s*$"))
+async def participant_call_unregister(message: Message) -> None:
+    if not message.from_user or message.from_user.is_bot or not is_group(message):
+        return
+    chat_id, user_id = message.chat.id, message.from_user.id
+    opted_out: set[tuple[int, int]] = getattr(gather_cmd, "_opted_out", set())
+    opted_out.add((chat_id, user_id))
+    setattr(gather_cmd, "_opted_out", opted_out)
+    persisted = False
+    if db is not None:
+        try:
+            await asyncio.to_thread(lambda: db.table("bot_call_optouts").upsert(
+                {"chat_id": chat_id, "user_id": user_id},
+                on_conflict="chat_id,user_id",
+            ).execute())
+            persisted = True
+        except Exception:
+            log.exception("Could not persist call opt-out chat=%s user=%s", chat_id, user_id)
+    await audit_wait(chat_id, user_id, "participant_call_unregistered",
+                     details=f"username={message.from_user.username or ''}; persistent={persisted}")
+    display = escape(message.from_user.full_name or message.from_user.username or "Участник")
+    await message.reply(f"<b>{display}</b>, на период неактивности Вы исключены из всеобщего призыва.")
+
 # Telegram Bot API не предоставляет метод перечисления всех участников группы.
 # Команда работает по сохранённым ID; «калл»/«call» — удобные текстовые алиасы.
 @router.message(Command("sbor"))
@@ -6099,6 +6123,7 @@ async def gather_cmd(message: Message) -> None:
         if first in {"калл", "колл", "call", "сбор"}:
             notice = parts[1].strip() if len(parts) > 1 else "📢 Общий сбор!"
     safe_notice = escape(notice[:500])
+    opted_out: set[tuple[int, int]] = getattr(gather_cmd, "_opted_out", set())
 
     def load_chat_users() -> list[dict]:
         # Merge three sources: normal profiles, durable message history, and users
@@ -6174,6 +6199,13 @@ async def gather_cmd(message: Message) -> None:
         )
         return
 
+    excluded: set[int] = {uid for cid, uid in opted_out if cid == message.chat.id}
+    if db is not None:
+        try:
+            opt_rows = await asyncio.to_thread(lambda: db.table("bot_call_optouts").select("user_id").eq("chat_id", message.chat.id).execute().data or [])
+            excluded.update(int(row["user_id"]) for row in opt_rows if row.get("user_id"))
+        except Exception:
+            log.exception("Could not load persistent call opt-outs for chat=%s", message.chat.id)
     seen: set[int] = set()
     mentions: list[str] = []
     for row in rows:
@@ -6181,7 +6213,7 @@ async def gather_cmd(message: Message) -> None:
             uid = int(row.get("user_id") or 0)
         except (TypeError, ValueError):
             continue
-        if uid <= 0 or uid in seen:
+        if uid <= 0 or uid in seen or uid in excluded:
             continue
         seen.add(uid)
         name = str(row.get("first_name") or row.get("username") or "Участник")
@@ -6199,18 +6231,23 @@ async def gather_cmd(message: Message) -> None:
     await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
                      "participant_call_resolved", details=f"known_users={len(mentions)}; source_rows={len(rows)}; notice={notice[:300]!r}")
     try:
-        await message.answer(
-            f"📣 <b>Калл: {escape(notice[:200])}</b>\n"
-            f"Отмечаю {len(mentions)} известных участников. "
-            "Вызов включает людей, чьи ID сохранены в профилях, истории сообщений или памяти процесса."
-        )
-        chunk_size = 20
-        sent_chunks = 0
-        for start in range(0, len(mentions), chunk_size):
-            await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(mentions[start:start + chunk_size]))
-            sent_chunks += 1
+        # One Iris-style message whenever it fits Telegram's 4096-character limit.
+        heading = f"📣 <b>ОБЩИЙ СБОР</b>\\n<blockquote>{safe_notice}</blockquote>\\n\\n"
+        messages: list[str] = []
+        body = ""
+        for item in mentions:
+            separator = "  ·  " if body else ""
+            if len(heading) + len(body) + len(separator) + len(item) > 3900 and body:
+                messages.append(heading + body)
+                body = ""
+                separator = ""
+            body += separator + item
+        if body:
+            messages.append(heading + body)
+        for outgoing in messages:
+            await message.answer(outgoing)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
-                         "participant_call_success", details=f"mentioned={len(mentions)}; chunks={sent_chunks}; reason={notice[:300]!r}")
+                         "participant_call_success", details=f"mentioned={len(mentions)}; messages={len(messages)}; excluded={len(excluded)}; reason={notice[:300]!r}")
     except Exception as exc:
         log.exception("Failed to send participant-call mentions chat=%s count=%s", message.chat.id, len(mentions))
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
