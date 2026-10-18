@@ -6036,7 +6036,7 @@ async def random_community_cmd(message: Message) -> None:
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
 # A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
-@router.message(Command("gather"))
+@router.message(Command("sbor"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
     if not await require_real_admin(message):
