@@ -1241,12 +1241,13 @@ async def admins(message: Message) -> None:
         owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
         ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
+        # Clear five-step Pear CM hierarchy: rank 1 is the entry moderator, rank 5 is creator.
         rank_titles = {
-            5: "⭐⭐⭐⭐⭐ Цари",
-            4: "⭐⭐⭐⭐ Окольничьи",
-            3: "⭐⭐⭐ Бояре",
-            2: "⭐⭐ Старшие модераторы",
-            1: "⭐ Модераторы",
+            5: "👑 Создатель",
+            4: "⭐⭐⭐⭐ Старший администратор",
+            3: "⭐⭐⭐ Младший администратор",
+            2: "⭐⭐ Старший модератор",
+            1: "⭐ Младший модератор",
         }
         grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
         creator_ids = set(chat_creators)
@@ -1265,7 +1266,7 @@ async def admins(message: Message) -> None:
             if not members:
                 continue
             lines.append(f"<b>{rank_titles[rank]} · Pear CM</b>")
-            icon = "🎾" if rank == 3 else "🏐"
+            icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 # Names are intentionally plain text, not clickable links.
                 display = escape(str(name or (f"@{username}" if username else f"ID {uid}")))
