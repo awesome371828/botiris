@@ -6242,22 +6242,22 @@ async def gather_cmd(message: Message) -> None:
                      "participant_call_resolved", details=f"known_users={len(mentions)}; source_rows={len(rows)}; notice={notice[:300]!r}")
     try:
         # Compact Iris-inspired call card; keep it as one message when possible.
+        # Iris-inspired compact card: strong title, neat separators and readable participant list.
         def build_heading(part: int = 1, total: int = 1) -> str:
-            part_label = f" <i>({part}/{total})</i>" if total > 1 else ""
+            part_label = f" <i>· часть {part}/{total}</i>" if total > 1 else ""
             return (
-                f"📣 <b>ОБЩИЙ СБОР</b>{part_label}\\n"
-                f"━━━━━━━━━━━━━━━━━━\\n"
-                f"🗣 <blockquote>{safe_notice}</blockquote>\\n"
-                f"👥 <b>Участники:</b> {len(mentions)}\\n"
-                f"━━━━━━━━━━━━━━━━━━\\n\\n"
+                f"📣 <b>ОБЩИЙ СБОР</b>{part_label}\n"
+                f"╭━━━━━━━━━━━━━━━━━━╮\n"
+                f"│  🔔 <b>{safe_notice}</b>\n"
+                f"╰━━━━━━━━━━━━━━━━━━╯\n"
+                f"👥 <b>Кого зовём:</b> {len(mentions)}\n\n"
             )
 
-        # First estimate one-message layout, then split only if Telegram's limit requires it.
         heading = build_heading()
         messages: list[str] = []
         body = ""
         for item in mentions:
-            separator = "  ·  " if body else ""
+            separator = "  •  " if body else ""
             if len(heading) + len(body) + len(separator) + len(item) > 3800 and body:
                 messages.append(heading + body)
                 body = ""
@@ -6266,13 +6266,11 @@ async def gather_cmd(message: Message) -> None:
         if body:
             messages.append(heading + body)
         if len(messages) > 1:
-            # Rebuild all chunks with an accurate part counter.
             chunks: list[str] = []
             current = ""
             for item in mentions:
-                separator = "  ·  " if current else ""
-                provisional = build_heading(99, 99)
-                if len(provisional) + len(current) + len(separator) + len(item) > 3800 and current:
+                separator = "  •  " if current else ""
+                if len(build_heading(99, 99)) + len(current) + len(separator) + len(item) > 3800 and current:
                     chunks.append(current)
                     current = ""
                     separator = ""
