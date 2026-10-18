@@ -919,13 +919,8 @@ async def safe_error(message: Message, exc: Exception) -> None:
 @router.message(CommandStart())
 @router.message(F.text == "🚀 Начать пользоваться ботом")
 async def start(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
     if message.chat.type == ChatType.PRIVATE:
-        # Remove the persistent legacy ReplyKeyboard ("Выберите раздел или введите команду")
-        # left over from older bot versions. Navigation is now inline under bot messages.
-        await message.answer(
-            "Старое меню убрано. Теперь кнопки находятся под сообщениями.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
         text = (
             "👋 <b>Привет! Я Pear CM</b> — бот для управления группой.\n\n"
             "Добавьте меня в группу и выдайте права администратора, если нужны "
@@ -934,18 +929,24 @@ async def start(message: Message) -> None:
             "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
             '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
         )
-        await message.answer(text, reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None))
     else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💠 Профиль", callback_data="group:profile"), InlineKeyboardButton(text="🔗 Команды", callback_data="group:help")],
-            [InlineKeyboardButton(text="🌐 Открыть Mini App", url=MINI_APP_URL)],
-        ])
-        await message.answer(
+        text = (
             f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
-            + await await_bot_rights_hint(message.chat.id),
-            reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None),
+            + await await_bot_rights_hint(message.chat.id)
         )
+
+    # ReplyKeyboardRemove clears the old persistent keyboard for this chat.
+    # We immediately attach the new inline menu to THIS SAME welcome message,
+    # so no extra explanatory message is sent.
+    sent = await message.answer(text, reply_markup=ReplyKeyboardRemove())
+    try:
+        await sent.edit_reply_markup(reply_markup=welcome_inline_keyboard(user_id))
+    except TelegramBadRequest as exc:
+        # Some Telegram clients/APIs may reject replacing this markup; fall back
+        # to a separate inline welcome rather than leave the user without buttons.
+        log.warning("Could not attach inline keyboard after removing reply keyboard: %s", exc)
+        await message.answer(text, reply_markup=welcome_inline_keyboard(user_id))
 
 @router.message(F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
