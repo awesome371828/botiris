@@ -6035,27 +6035,40 @@ async def random_community_cmd(message: Message) -> None:
     name = picked.get("first_name") or picked.get("username") or f"ID {picked.get('user_id')}"
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
-# A group callout uses only members the bot has already observed; Telegram Bot API cannot enumerate all chat members.
-@router.message(Command("sbor"))
+# Telegram Bot API не позволяет получить полный список участников группы.
+# Поэтому упоминаем всех участников этого чата, которых бот уже записал в bot_users.
+@router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
+
     rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
-    seen = set()
-    mentions = []
+    seen: set[int] = set()
+    mentions: list[str] = []
     for row in rows:
-        uid = int(row.get("user_id") or 0)
-        if uid <= 0 or uid == (message.from_user.id if message.from_user else 0) or uid in seen:
+        try:
+            uid = int(row.get("user_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if uid <= 0 or uid in seen:
             continue
         seen.add(uid)
-        mentions.append(mention(uid,str(row.get("first_name") or "Участник")))
-        if len(mentions) >= 30:
-            break
+        name = str(row.get("first_name") or row.get("username") or "Участник")
+        mentions.append(mention(uid, name))
+
     if not mentions:
-        await message.answer("Пока нет участников, которых бот уже видел и может упомянуть.")
+        await message.answer(
+            "Пока нет сохранённых участников этого чата. "
+            "Бот может отмечать пользователей, чьи сообщения он видел после добавления/запуска."
+        )
         return
-    await message.answer("📢 <b>Общий сбор!</b>\n" + " · ".join(mentions) + "\n\n<i>Отмечены участники, которых бот уже встречал в этом чате.</i>")
+
+    await message.answer(f"📢 <b>Общий сбор!</b> Отмечаю всех {len(mentions)} сохранённых участников чата.")
+    # Telegram ограничивает длину сообщения; отправляем отметки несколькими сообщениями.
+    chunk_size = 25
+    for start in range(0, len(mentions), chunk_size):
+        await message.answer(" · ".join(mentions[start:start + chunk_size]))
 
 
 if __name__ == "__main__":
