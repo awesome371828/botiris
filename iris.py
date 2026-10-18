@@ -104,6 +104,14 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Register participant-call aliases before all feature handlers. aiogram stops at
+# the first matching handler, so this must precede broad text/command handlers.
+@router.message(Command("sbor"))
+@router.message(F.text.regexp(r"(?i)^\\s*/sbor(?:@pear_cm_bot)?(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\\s+.*|$)"))
+async def participant_call_dispatch_first(message: Message) -> None:
+    await gather_cmd(message)
+
 # In private chats, /ban and /unban are global bot restrictions for the owner/operators.
 # In groups, the existing moderation handlers retain their normal chat-ban semantics.
 @router.message(Command("ban"), F.chat.type == ChatType.PRIVATE)
