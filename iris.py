@@ -99,7 +99,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     log.warning("Supabase не настроен: данные будут храниться только в рамках процесса.")
 
-bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -231,23 +231,43 @@ URL_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/)", re.I)
 INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.I)
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
-def main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
+def main_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
+    # Compatibility name retained, but all navigation is now attached to the
+    # message as an inline keyboard, never shown in the text-input area.
+    return welcome_inline_keyboard(user_id)
+
+def welcome_inline_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
     rows = [
-            [KeyboardButton(text="➕ Добавить в чат")],
-            [KeyboardButton(text="🚀 Начать пользоваться ботом")],
-            [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
-            [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
-            [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url=MINI_APP_URL))],
-            [KeyboardButton(text="⚠️ Мои варны"), KeyboardButton(text="🛡 Кто админ")],
-        ]
-    if user_id == OWNER_ID:
-        rows.insert(2, [KeyboardButton(text="🛠 Админ-панель")])
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Выберите раздел или введите команду…",
-    )
+        [InlineKeyboardButton(text="➕ Добавить в чат", url="https://t.me/pear_cm_bot?startgroup=true")],
+        [InlineKeyboardButton(text="🚀 Начать пользоваться", callback_data="home:start"),
+         InlineKeyboardButton(text="📚 Команды", callback_data="home:help")],
+        [InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile"),
+         InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage")],
+        [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
+         InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+        [InlineKeyboardButton(text="🛡 Кто админ", callback_data="menu:admins"),
+         InlineKeyboardButton(text="🌐 Открыть приложение", url=MINI_APP_URL)],
+    ]
+    if user_id == OWNER_ID or (user_id is not None and _operator_active(user_id)):
+        rows.insert(1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:open")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def admin_inline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Бан пользователя", callback_data="admin:ban"),
+         InlineKeyboardButton(text="♻️ Разбан", callback_data="admin:unban")],
+        [InlineKeyboardButton(text="👮 Операторы", callback_data="admin:operators"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="📡 Статус", callback_data="admin:status"),
+         InlineKeyboardButton(text="🧪 Диагностика", callback_data="admin:diag")],
+        [InlineKeyboardButton(text="📜 Логи", callback_data="admin:logs"),
+         InlineKeyboardButton(text="📈 Общая статистика", callback_data="admin:globalstats")],
+        [InlineKeyboardButton(text="🧩 Модули", callback_data="admin:modules"),
+         InlineKeyboardButton(text="👥 Список операторов", callback_data="admin:operators_list")],
+        [InlineKeyboardButton(text="🛠 Обслуживание", callback_data="admin:maintenance"),
+         InlineKeyboardButton(text="🧰 Фильтры", callback_data="admin:filters")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:home")],
+    ])
 
 def mention(user_id: int, name: str) -> str:
     safe = (name or "пользователь").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -908,7 +928,7 @@ async def start(message: Message) -> None:
             "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
             '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
         )
-        await message.answer(text, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
+        await message.answer(text, reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None))
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💠 Профиль", callback_data="group:profile"), InlineKeyboardButton(text="🔗 Команды", callback_data="group:help")],
@@ -918,13 +938,13 @@ async def start(message: Message) -> None:
             f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
             + await await_bot_rights_hint(message.chat.id),
-            reply_markup=keyboard,
+            reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None),
         )
 
 @router.message(F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
-    if not message.from_user or message.from_user.id != OWNER_ID:
-        await message.answer("⛔ Эта кнопка доступна только владельцу бота.")
+    if not message.from_user or (message.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, message.from_user.id)):
+        await message.answer("⛔ Эта кнопка доступна только владельцу и активным операторам.")
         return
     await owner_panel(message)
 
@@ -4559,11 +4579,133 @@ async def _owner_or_operator(message: Message) -> bool:
     return False
 
 @router.message(Command("owner", "ownerpanel"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера)\s*$"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера|админ-панель)\s*$"))
 async def owner_panel(message: Message) -> None:
-    if not await _owner_only(message):
+    if not await _owner_or_operator(message):
         return
-    await message.answer(OWNER_HELP, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
+    await message.answer(
+        "🛠 <b>Панель управления Pear CM</b>\n\nВыберите действие кнопкой ниже. "
+        "Для бана бот попросит прислать ID или @username, а затем срок и причину. "
+        "Доступ только владельцу и активным операторам.",
+        reply_markup=admin_inline_keyboard(),
+    )
+
+_ADMIN_INPUT_STATE: dict[int, str] = {}
+
+@router.callback_query(F.data.startswith("home:"))
+async def home_inline_callback(callback: CallbackQuery) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
+    if action == "start":
+        await callback.message.answer(
+            "👋 <b>Pear CM</b> управляет группой: модерация, статистика, фильтры и инструменты администраторов.",
+            reply_markup=welcome_inline_keyboard(callback.from_user.id),
+        )
+    elif action == "help":
+        synthetic.text = "🔗 Команды"
+        await help_command(synthetic)
+    elif action == "profile":
+        synthetic.text = "💠 Профиль"
+        await profile(synthetic)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("menu:"))
+async def inline_menu_callback(callback: CallbackQuery) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
+    handlers = {
+        "marriage": ("💍 Брак", marriage_menu),
+        "installation": ("🛠 Установка", installation_help),
+        "warns": ("⚠️ Мои варны", my_warns),
+        "admins": ("🛡 Кто админ", admins),
+    }
+    item = handlers.get(action)
+    if item:
+        synthetic.text = item[0]
+        await item[1](synthetic)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin:"))
+async def admin_inline_callback(callback: CallbackQuery) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+    if callback.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, callback.from_user.id):
+        await callback.answer("Доступ только овнеру и активным операторам.", show_alert=True)
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    if action == "open":
+        await callback.message.answer("🛠 <b>Админ-панель Pear CM</b>\nВыберите действие:", reply_markup=admin_inline_keyboard())
+    elif action in {"ban", "unban"}:
+        _ADMIN_INPUT_STATE[callback.from_user.id] = action
+        verb = "бан" if action == "ban" else "разбан"
+        await callback.message.answer(
+            f"Введите одним сообщением: <code>@username или Telegram_ID [срок] причина</code> для действия «{verb}».\n"
+            "Примеры: <code>@username 1 день спам</code>, <code>123456789 навсегда мошенничество</code>.\n"
+            "Для разбана достаточно ID или @username. Username должен быть уже известен боту.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")]])
+        )
+    elif action == "cancel":
+        _ADMIN_INPUT_STATE.pop(callback.from_user.id, None)
+        await callback.message.answer("Действие отменено.", reply_markup=admin_inline_keyboard())
+    elif action == "operators":
+        await callback.message.answer("Управление операторами: /operators, /operator ID, /revokeoperator ID. Назначайте операторов только тем, кому доверяете.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📋 Показать операторов", callback_data="admin:operators_list")],[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+    elif action == "operators_list":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/operators"})
+        await owner_list_operators(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "globalstats":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/globalstats"})
+        await owner_global_stats(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "logs":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/logs"})
+        await owner_logs(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "modules":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/modules"})
+        await owner_modules(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "maintenance":
+        await callback.message.answer("Режим обслуживания: отправьте <code>/maintenance on</code> или <code>/maintenance off</code>. Это глобально ограничивает функции бота, поэтому изменение требует явной команды.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+    elif action == "filters":
+        await callback.message.answer("Фильтры текущей группы: <code>фильтры</code>, <code>+антиссылка</code>, <code>-антиссылка</code>, <code>+антифлуд</code>, <code>-антифлуд</code>. Настройки применяются к группе, где вы их вводите.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+    elif action == "stats":
+        rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
+        await callback.message.answer(f"📊 <b>Статистика</b>\nЗаписей пользователей в выборке: <b>{len(rows)}</b>.", reply_markup=admin_inline_keyboard())
+    elif action == "status":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/status"})
+        await owner_status(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "diag":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/diag"})
+        await owner_diagnostics(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "home":
+        await callback.message.answer("Главное меню:", reply_markup=welcome_inline_keyboard(callback.from_user.id))
+    await callback.answer()
+
+@router.message(F.chat.type == ChatType.PRIVATE, F.text, lambda message: bool(message.from_user and message.from_user.id in _ADMIN_INPUT_STATE))
+async def admin_inline_input_handler(message: Message) -> None:
+    if not message.from_user:
+        return
+    action = _ADMIN_INPUT_STATE.get(message.from_user.id)
+    if not action:
+        return
+    if message.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, message.from_user.id):
+        _ADMIN_INPUT_STATE.pop(message.from_user.id, None)
+        return
+    prefix = "/ban" if action == "ban" else "/unban"
+    synthetic = message.model_copy(update={"text": f"{prefix} {message.text.strip()}"})
+    _ADMIN_INPUT_STATE.pop(message.from_user.id, None)
+    await _global_moderation_command(synthetic, remove=(action == "unban"))
+    await message.answer("🛠 Панель управления:", reply_markup=admin_inline_keyboard())
 
 @router.message(Command("status", "статусбота"))
 @router.message(F.text.regexp(r"(?i)^\s*статус бота\s*$"))
@@ -5118,6 +5260,43 @@ async def global_error_handler(event) -> bool:
         except Exception:
             log.exception("Could not send the user-facing internal-error notice")
     return True
+
+# Extra Russian moderation aliases. Normalize synonyms before invoking the existing
+# permission-checked handlers so reply-to-message targeting and protections remain.
+_MODERATION_ALIAS_GROUPS = [
+    (re.compile(r"(?i)^\s*[.!/]?(?:выкинуть|выкинь|выкиньте|вышвырнуть|вышвырни|вышвырните|выдворить|выдворите|удалить\s+из\s+чата|убрать\s+из\s+чата)\b\s*(.*)$"), "кик"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:заблокировать|заблокируй|заблокируйте|забанить|забань|забаньте|вбанить|вбань|бань|баньте|отправить\s+в\s+бан|дать\s+бан|выдать\s+бан)\b\s*(.*)$"), "бан"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:отбанить|разбанить|разбань|разбаньте|разблокировать|разблокируй|разблокируйте|снять\s+блокировку|отменить\s+бан|отмени\s+бан|отмените\s+бан)\b\s*(.*)$"), "разбан"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:замутить|замуть|замутьте|заглушить|заглуши|заглушите|приглушить|приглуши|приглушите|заткнуть|заткни|заткните|выдать\s+мут|дать\s+мут|включить\s+мут)\b\s*(.*)$"), "мут"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:разглушить|разглуши|разглушите|анмутить|анмуть|анмутьте|снять\s+ограничение|вернуть\s+голос|убрать\s+мут|сними\s+мут|снимите\s+мут)\b\s*(.*)$"), "размут"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:выдать\s+предупреждение|дать\s+предупреждение|объявить\s+предупреждение|предупреди|предупредите|выписать\s+варн|выпиши\s+варн|выпишите\s+варн|замечание)\b\s*(.*)$"), "варн"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:убрать\s+предупреждение|снять\s+предупреждение|сними\s+предупреждение|снимите\s+предупреждение|удалить\s+варн|удали\s+варн|удалите\s+варн|аннулировать\s+варн)\b\s*(.*)$"), "снять варн"),
+]
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:выкинуть|выкинь|выкиньте|вышвырнуть|вышвырни|вышвырните|удалить\s+из\s+чата|убрать\s+из\s+чата|заблокировать|заблокируй|заблокируйте|забанить|забань|забаньте|вбанить|вбань|бань|баньте|отбанить|разбанить|разбань|разбаньте|разблокировать|разблокируй|разблокируйте|снять\s+блокировку|отменить\s+бан|отмени\s+бан|отмените\s+бан|замутить|замуть|замутьте|заглушить|заглуши|заглушите|приглушить|приглуши|приглушите|заткнуть|заткни|заткните|выдать\s+мут|дать\s+мут|включить\s+мут|разглушить|разглуши|разглушите|анмутить|анмуть|анмутьте|снять\s+ограничение|вернуть\s+голос|убрать\s+мут|сними\s+мут|снимите\s+мут|выдать\s+предупреждение|дать\s+предупреждение|объявить\s+предупреждение|предупреди|предупредите|выписать\s+варн|выпиши\s+варн|выпишите\s+варн|замечание|убрать\s+предупреждение|снять\s+предупреждение|сними\s+предупреждение|снимите\s+предупреждение|удалить\s+варн|удали\s+варн|удалите\s+варн|аннулировать\s+варн)(?:\s|$)"))
+async def extra_moderation_aliases(message: Message) -> None:
+    raw = (message.text or "").strip()
+    for pattern, canonical in _MODERATION_ALIAS_GROUPS:
+        match = pattern.match(raw)
+        if not match:
+            continue
+        remainder = match.group(1).strip()
+        synthetic = message.model_copy(update={"text": f"{canonical} {remainder}".strip()})
+        if canonical == "кик":
+            await kick_cmd(synthetic)
+        elif canonical == "бан":
+            await ban_cmd(synthetic)
+        elif canonical == "разбан":
+            await unban_cmd(synthetic)
+        elif canonical == "мут":
+            await mute_cmd(synthetic)
+        elif canonical == "размут":
+            await unmute_cmd(synthetic)
+        elif canonical == "варн":
+            await warn_cmd(synthetic)
+        elif canonical == "снять варн":
+            await unwarn_cmd(synthetic)
+        return
+
 
 async def main() -> None:
     acquire_single_instance_lock()
