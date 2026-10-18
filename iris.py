@@ -231,23 +231,10 @@ URL_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/)", re.I)
 INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.I)
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
-def main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
-    rows = [
-            [KeyboardButton(text="➕ Добавить в чат")],
-            [KeyboardButton(text="🚀 Начать пользоваться ботом")],
-            [KeyboardButton(text="💠 Профиль"), KeyboardButton(text="💍 Брак")],
-            [KeyboardButton(text="🛠 Установка"), KeyboardButton(text="🔗 Команды")],
-            [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url=MINI_APP_URL))],
-            [KeyboardButton(text="⚠️ Мои варны"), KeyboardButton(text="🛡 Кто админ")],
-        ]
-    if user_id == OWNER_ID:
-        rows.insert(2, [KeyboardButton(text="🛠 Админ-панель")])
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Выберите раздел или введите команду…",
-    )
+def main_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
+    # Compatibility name retained, but all navigation is now attached to the
+    # message as an inline keyboard, never shown in the text-input area.
+    return welcome_inline_keyboard(user_id)
 
 def welcome_inline_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
     rows = [
@@ -255,7 +242,11 @@ def welcome_inline_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🚀 Начать пользоваться", callback_data="home:start"),
          InlineKeyboardButton(text="📚 Команды", callback_data="home:help")],
         [InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile"),
-         InlineKeyboardButton(text="🌐 Mini App", url=MINI_APP_URL)],
+         InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage")],
+        [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
+         InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+        [InlineKeyboardButton(text="🛡 Кто админ", callback_data="menu:admins"),
+         InlineKeyboardButton(text="🌐 Открыть приложение", url=MINI_APP_URL)],
     ]
     if user_id == OWNER_ID or (user_id is not None and _operator_active(user_id)):
         rows.insert(1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:open")])
@@ -4607,15 +4598,37 @@ async def home_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     action = (callback.data or "").split(":", 1)[1]
+    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
     if action == "start":
         await callback.message.answer(
             "👋 <b>Pear CM</b> управляет группой: модерация, статистика, фильтры и инструменты администраторов.",
             reply_markup=welcome_inline_keyboard(callback.from_user.id),
         )
     elif action == "help":
-        await callback.message.answer("Список возможностей: /help")
+        synthetic.text = "🔗 Команды"
+        await help_command(synthetic)
     elif action == "profile":
-        await callback.message.answer("Для просмотра профиля отправьте /profile.")
+        synthetic.text = "💠 Профиль"
+        await profile(synthetic)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("menu:"))
+async def inline_menu_callback(callback: CallbackQuery) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
+    handlers = {
+        "marriage": ("💍 Брак", marriage_menu),
+        "installation": ("🛠 Установка", installation_help),
+        "warns": ("⚠️ Мои варны", my_warns),
+        "admins": ("🛡 Кто админ", admins),
+    }
+    item = handlers.get(action)
+    if item:
+        synthetic.text = item[0]
+        await item[1](synthetic)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("admin:"))
