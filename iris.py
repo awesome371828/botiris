@@ -941,7 +941,7 @@ async def start(message: Message) -> None:
             f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
             + await await_bot_rights_hint(message.chat.id),
-            reply_markup=keyboard,
+            reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None),
         )
 
 @router.message(F.text == "🛠 Админ-панель")
