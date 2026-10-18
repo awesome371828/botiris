@@ -181,8 +181,40 @@ async def _remember_message_id(handler, event: Message, data):
     started = time.monotonic()
     if isinstance(event, Message):
         _RECENT_MESSAGE_IDS[event.chat.id].append(event.message_id)
+    raw = (event.text or event.caption or "").strip() if isinstance(event, Message) else ""
+    # Owner audit trail: record every slash command and the important text aliases.
+    # Keep logging asynchronous so ordinary chat commands remain responsive.
+    if isinstance(event, Message) and event.from_user and raw and (
+        raw.startswith(("/", "!", ".")) or re.match(
+            r"(?i)^(калл|колл|call|сбор|общий сбор|вызов участников|мут|бан|кик|варн|размут|анмут|разбан|очистить|профиль|команды|помощь)(?:\\s|$)",
+            raw,
+        )
+    ):
+        action_name = raw.split(maxsplit=1)[0][:100]
+        try:
+            asyncio.get_running_loop().create_task(asyncio.to_thread(
+                db_insert, "bot_audit", _audit_payload(
+                    event.chat.id, event.from_user.id, "command_received",
+                    details=f"command={raw[:500]!r}; chat_type={event.chat.type}; message_id={event.message_id}",
+                )
+            ))
+        except Exception:
+            log.exception("Could not queue command audit event")
     try:
         return await handler(event, data)
+    except Exception as exc:
+        if isinstance(event, Message) and event.from_user and raw:
+            log.exception("Unhandled handler error chat=%s user=%s text=%r", event.chat.id, event.from_user.id, raw[:300])
+            try:
+                asyncio.get_running_loop().create_task(asyncio.to_thread(
+                    db_insert, "bot_audit", _audit_payload(
+                        event.chat.id, event.from_user.id, "command_exception",
+                        details=f"command={raw[:300]!r}; error={type(exc).__name__}: {str(exc)[:1200]}",
+                    )
+                ))
+            except Exception:
+                log.exception("Could not queue command exception audit")
+        raise
     finally:
         elapsed = time.monotonic() - started
         _COMMAND_LATENCIES.append((elapsed, type(event).__name__))
@@ -6044,7 +6076,13 @@ async def gather_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     log.info("Received participant call in chat_id=%s from user_id=%s text=%r", message.chat.id, message.from_user.id if message.from_user else None, raw)
     if not await require_real_admin(message):
+        if message.from_user:
+            await audit_wait(message.chat.id, message.from_user.id, "participant_call_denied",
+                             details=f"text={raw[:300]!r}; reason=not_telegram_admin")
         return
+
+    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                     "participant_call_started", details=f"text={raw[:300]!r}; chat_title={message.chat.title or ''}")
 
     # Для «калл проверка», «call проверка» и «/sbor проверка» текст после команды — причина.
     parts = raw.split(maxsplit=1)
@@ -6118,9 +6156,15 @@ async def gather_cmd(message: Message) -> None:
         return collected
     try:
         rows = await asyncio.to_thread(load_chat_users)
-    except Exception:
+    except Exception as exc:
         log.exception("Failed to load users for participant call in chat %s", message.chat.id)
-        await message.answer("⚠️ Не удалось загрузить список известных участников. Проверь подключение Supabase.")
+        await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                         "participant_call_error", details=f"stage=load_users; error={type(exc).__name__}: {str(exc)[:1500]}")
+        await message.answer(
+            "⚠️ Общий сбор не запущен: ошибка загрузки базы. "
+            f"Причина: <code>{escape(type(exc).__name__ + ': ' + str(exc)[:350])}</code>. "
+            "Подробности сохранены в логах владельца."
+        )
         return
 
     seen: set[int] = set()
@@ -6137,21 +6181,37 @@ async def gather_cmd(message: Message) -> None:
         mentions.append(mention(uid, name))
 
     if not mentions:
+        await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                         "participant_call_error", details="stage=resolve_users; reason=no_saved_ids; check bot_users, bot_activity_events, tracking and Supabase schema")
         await message.answer(
-            "⚠️ У бота пока нет сохранённых ID участников этого чата. "
-            "Telegram Bot API не позволяет получить полный список всех участников группы, "
-            "в том числе тех, кого бот никогда не видел."
+            "⚠️ Общий сбор не запущен: не найдено ни одного сохранённого ID. "
+            "Проверь в логах владельца причину и наличие таблиц bot_users / bot_activity_events."
         )
         return
 
-    await message.answer(
-        f"📣 <b>Калл: {escape(notice[:200])}</b>\n"
-        f"Отмечаю {len(mentions)} известных участников. "
-        "Telegram не позволяет боту узнать ID абсолютно всех участников группы."
-    )
-    chunk_size = 20
-    for start in range(0, len(mentions), chunk_size):
-        await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(mentions[start:start + chunk_size]))
+    await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                     "participant_call_resolved", details=f"known_users={len(mentions)}; source_rows={len(rows)}; notice={notice[:300]!r}")
+    try:
+        await message.answer(
+            f"📣 <b>Калл: {escape(notice[:200])}</b>\n"
+            f"Отмечаю {len(mentions)} известных участников. "
+            "Вызов включает людей, чьи ID сохранены в профилях, истории сообщений или памяти процесса."
+        )
+        chunk_size = 20
+        sent_chunks = 0
+        for start in range(0, len(mentions), chunk_size):
+            await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(mentions[start:start + chunk_size]))
+            sent_chunks += 1
+        await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                         "participant_call_success", details=f"mentioned={len(mentions)}; chunks={sent_chunks}; reason={notice[:300]!r}")
+    except Exception as exc:
+        log.exception("Failed to send participant-call mentions chat=%s count=%s", message.chat.id, len(mentions))
+        await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
+                         "participant_call_error", details=f"stage=send_mentions; sent_before_error; users={len(mentions)}; error={type(exc).__name__}: {str(exc)[:1500]}")
+        try:
+            await message.answer(f"⚠️ Сбор остановлен при отправке отметок. Причина: <code>{escape(type(exc).__name__ + ': ' + str(exc)[:350])}</code>. Подробности записаны в логи владельца.")
+        except Exception:
+            log.exception("Could not send participant-call failure notice")
 
 
 if __name__ == "__main__":
