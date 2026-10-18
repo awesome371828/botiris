@@ -14,6 +14,7 @@ permissions:
 # This prevents two Telegram polling processes from running at once.
 # GitHub-hosted runners are temporary and cron can be delayed, so this is
 # the strongest simple GitHub Actions workaround, not a true 24/7 guarantee.
+# All push/schedule/manual runs share one concurrency group; a new run cancels the previous one.
 concurrency:
   group: pear-cm-bot
   cancel-in-progress: true
