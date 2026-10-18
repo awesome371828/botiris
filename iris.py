@@ -190,7 +190,6 @@ async def _remember_message_id(handler, event: Message, data):
             raw,
         )
     ):
-        action_name = raw.split(maxsplit=1)[0][:100]
         try:
             asyncio.get_running_loop().create_task(asyncio.to_thread(
                 db_insert, "bot_audit", _audit_payload(
