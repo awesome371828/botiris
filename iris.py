@@ -5390,7 +5390,7 @@ async def main() -> None:
         BotCommand(command="clan", description="Кланы чата"),
         BotCommand(command="profileform", description="Анкета участника"),
         BotCommand(command="awards", description="Мои награды"),
-        BotCommand(command="gather", description="Общий сбор участников"),
+        BotCommand(command="sbor", description="Отметить участников чата"),
         BotCommand(command="exportsettings", description="Экспорт настроек"),
         BotCommand(command="importsettings", description="Импорт настроек"),
     ]
@@ -6038,8 +6038,8 @@ async def random_community_cmd(message: Message) -> None:
 # Telegram Bot API не позволяет получить полный список участников группы.
 # Telegram Bot API не умеет перечислять всех участников группы.
 # Отмечаем всех пользователей этого чата, сохранённых в bot_users.
-@router.message(Command("sbor"))
-@router.message(F.text.regexp(r"(?i)^\\s*(?:сбор|общий сбор|вызов участников)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^/sbor(?:@pear_cm_bot)?(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
