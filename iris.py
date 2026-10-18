@@ -1004,20 +1004,14 @@ async def help_command(message: Message) -> None:
         "• приветствие Текст {name} — приветствие новичков; расписание 23:00 08:00 — автоматическое закрытие/открытие\n"
         "• экспорт настроек / импорт настроек — перенос настроек; статистика модераторов неделя — отчёт модерации\n"
         "• история наказаний ответом — история пользователя; диагностика — состояние и задержки обработчиков (для овнера/операторов)\n\n"
-        "<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
         "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права."
     )
-    # Owner-only controls are not mentioned in group help, even for the owner.
+    # Owner/operator commands are only disclosed in the private bot chat.
     if is_privileged:
         help_text += (
             "\\n\\n<b>Управление ботом</b>: /owner, /status, /ping, /diag, "
             "/logs, /globalstats, /modules, /operator ID, /maintenance on|off"
-        )
-    else:
-        help_text = help_text.replace(
-            "\\n\\n<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off",
-            ""
         )
     await message.answer(
         help_text,
