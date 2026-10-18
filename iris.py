@@ -920,6 +920,12 @@ async def safe_error(message: Message, exc: Exception) -> None:
 @router.message(F.text == "🚀 Начать пользоваться ботом")
 async def start(message: Message) -> None:
     if message.chat.type == ChatType.PRIVATE:
+        # Remove the persistent legacy ReplyKeyboard ("Выберите раздел или введите команду")
+        # left over from older bot versions. Navigation is now inline under bot messages.
+        await message.answer(
+            "Старое меню убрано. Теперь кнопки находятся под сообщениями.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         text = (
             "👋 <b>Привет! Я Pear CM</b> — бот для управления группой.\n\n"
             "Добавьте меня в группу и выдайте права администратора, если нужны "
