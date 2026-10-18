@@ -99,7 +99,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     log.warning("Supabase не настроен: данные будут храниться только в рамках процесса.")
 
-bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -267,8 +267,14 @@ def admin_inline_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="♻️ Разбан", callback_data="admin:unban")],
         [InlineKeyboardButton(text="👮 Операторы", callback_data="admin:operators"),
          InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
-        [InlineKeyboardButton(text="📡 Статус бота", callback_data="admin:status"),
+        [InlineKeyboardButton(text="📡 Статус", callback_data="admin:status"),
          InlineKeyboardButton(text="🧪 Диагностика", callback_data="admin:diag")],
+        [InlineKeyboardButton(text="📜 Логи", callback_data="admin:logs"),
+         InlineKeyboardButton(text="📈 Общая статистика", callback_data="admin:globalstats")],
+        [InlineKeyboardButton(text="🧩 Модули", callback_data="admin:modules"),
+         InlineKeyboardButton(text="👥 Список операторов", callback_data="admin:operators_list")],
+        [InlineKeyboardButton(text="🛠 Обслуживание", callback_data="admin:maintenance"),
+         InlineKeyboardButton(text="🧰 Фильтры", callback_data="admin:filters")],
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:home")],
     ])
 
@@ -4636,19 +4642,43 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         _ADMIN_INPUT_STATE.pop(callback.from_user.id, None)
         await callback.message.answer("Действие отменено.", reply_markup=admin_inline_keyboard())
     elif action == "operators":
-        await callback.message.answer("Управление операторами: /operators, /operator ID, /revokeoperator ID.", reply_markup=admin_inline_keyboard())
+        await callback.message.answer("Управление операторами: /operators, /operator ID, /revokeoperator ID. Назначайте операторов только тем, кому доверяете.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📋 Показать операторов", callback_data="admin:operators_list")],[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+    elif action == "operators_list":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/operators"})
+        await owner_list_operators(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "globalstats":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/globalstats"})
+        await owner_global_stats(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "logs":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/logs"})
+        await owner_logs(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "modules":
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/modules"})
+        await owner_modules(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+    elif action == "maintenance":
+        await callback.message.answer("Режим обслуживания: отправьте <code>/maintenance on</code> или <code>/maintenance off</code>. Это глобально ограничивает функции бота, поэтому изменение требует явной команды.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+    elif action == "filters":
+        await callback.message.answer("Фильтры текущей группы: <code>фильтры</code>, <code>+антиссылка</code>, <code>-антиссылка</code>, <code>+антифлуд</code>, <code>-антифлуд</code>. Настройки применяются к группе, где вы их вводите.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
     elif action == "stats":
         rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
         await callback.message.answer(f"📊 <b>Статистика</b>\nЗаписей пользователей в выборке: <b>{len(rows)}</b>.", reply_markup=admin_inline_keyboard())
     elif action == "status":
-        await callback.message.answer("Статус бота: /status", reply_markup=admin_inline_keyboard())
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/status"})
+        await owner_status(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
     elif action == "diag":
-        await callback.message.answer("Для полной диагностики отправьте /diag.", reply_markup=admin_inline_keyboard())
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/diag"})
+        await owner_diagnostics(synthetic)
+        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
     elif action == "home":
         await callback.message.answer("Главное меню:", reply_markup=welcome_inline_keyboard(callback.from_user.id))
     await callback.answer()
 
-@router.message(F.chat.type == ChatType.PRIVATE, F.text)
+@router.message(F.chat.type == ChatType.PRIVATE, F.text, lambda message: bool(message.from_user and message.from_user.id in _ADMIN_INPUT_STATE))
 async def admin_inline_input_handler(message: Message) -> None:
     if not message.from_user:
         return
@@ -5217,6 +5247,43 @@ async def global_error_handler(event) -> bool:
         except Exception:
             log.exception("Could not send the user-facing internal-error notice")
     return True
+
+# Extra Russian moderation aliases. Normalize synonyms before invoking the existing
+# permission-checked handlers so reply-to-message targeting and protections remain.
+_MODERATION_ALIAS_GROUPS = [
+    (re.compile(r"(?i)^\s*[.!/]?(?:выкинуть|выкинь|выкиньте|вышвырнуть|вышвырни|вышвырните|выдворить|выдворите|удалить\s+из\s+чата|убрать\s+из\s+чата)\b\s*(.*)$"), "кик"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:заблокировать|заблокируй|заблокируйте|забанить|забань|забаньте|вбанить|вбань|бань|баньте|отправить\s+в\s+бан|дать\s+бан|выдать\s+бан)\b\s*(.*)$"), "бан"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:отбанить|разбанить|разбань|разбаньте|разблокировать|разблокируй|разблокируйте|снять\s+блокировку|отменить\s+бан|отмени\s+бан|отмените\s+бан)\b\s*(.*)$"), "разбан"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:замутить|замуть|замутьте|заглушить|заглуши|заглушите|приглушить|приглуши|приглушите|заткнуть|заткни|заткните|выдать\s+мут|дать\s+мут|включить\s+мут)\b\s*(.*)$"), "мут"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:разглушить|разглуши|разглушите|анмутить|анмуть|анмутьте|снять\s+ограничение|вернуть\s+голос|убрать\s+мут|сними\s+мут|снимите\s+мут)\b\s*(.*)$"), "размут"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:выдать\s+предупреждение|дать\s+предупреждение|объявить\s+предупреждение|предупреди|предупредите|выписать\s+варн|выпиши\s+варн|выпишите\s+варн|замечание)\b\s*(.*)$"), "варн"),
+    (re.compile(r"(?i)^\s*[.!/]?(?:убрать\s+предупреждение|снять\s+предупреждение|сними\s+предупреждение|снимите\s+предупреждение|удалить\s+варн|удали\s+варн|удалите\s+варн|аннулировать\s+варн)\b\s*(.*)$"), "снять варн"),
+]
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:выкинуть|выкинь|выкиньте|вышвырнуть|вышвырни|вышвырните|удалить\s+из\s+чата|убрать\s+из\s+чата|заблокировать|заблокируй|заблокируйте|забанить|забань|забаньте|вбанить|вбань|бань|баньте|отбанить|разбанить|разбань|разбаньте|разблокировать|разблокируй|разблокируйте|снять\s+блокировку|отменить\s+бан|отмени\s+бан|отмените\s+бан|замутить|замуть|замутьте|заглушить|заглуши|заглушите|приглушить|приглуши|приглушите|заткнуть|заткни|заткните|выдать\s+мут|дать\s+мут|включить\s+мут|разглушить|разглуши|разглушите|анмутить|анмуть|анмутьте|снять\s+ограничение|вернуть\s+голос|убрать\s+мут|сними\s+мут|снимите\s+мут|выдать\s+предупреждение|дать\s+предупреждение|объявить\s+предупреждение|предупреди|предупредите|выписать\s+варн|выпиши\s+варн|выпишите\s+варн|замечание|убрать\s+предупреждение|снять\s+предупреждение|сними\s+предупреждение|снимите\s+предупреждение|удалить\s+варн|удали\s+варн|удалите\s+варн|аннулировать\s+варн)(?:\s|$)"))
+async def extra_moderation_aliases(message: Message) -> None:
+    raw = (message.text or "").strip()
+    for pattern, canonical in _MODERATION_ALIAS_GROUPS:
+        match = pattern.match(raw)
+        if not match:
+            continue
+        remainder = match.group(1).strip()
+        synthetic = message.model_copy(update={"text": f"{canonical} {remainder}".strip()})
+        if canonical == "кик":
+            await kick_cmd(synthetic)
+        elif canonical == "бан":
+            await ban_cmd(synthetic)
+        elif canonical == "разбан":
+            await unban_cmd(synthetic)
+        elif canonical == "мут":
+            await mute_cmd(synthetic)
+        elif canonical == "размут":
+            await unmute_cmd(synthetic)
+        elif canonical == "варн":
+            await warn_cmd(synthetic)
+        elif canonical == "снять варн":
+            await unwarn_cmd(synthetic)
+        return
+
 
 async def main() -> None:
     acquire_single_instance_lock()
