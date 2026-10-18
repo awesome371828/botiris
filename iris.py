@@ -112,6 +112,10 @@ dp.include_router(router)
 async def participant_call_dispatch_first(message: Message) -> None:
     await gather_cmd(message)
 
+@router.message(F.text.regexp(r"(?i)^\s*анрег\s*$"))
+async def participant_call_unregister_dispatch_first(message: Message) -> None:
+    await participant_call_unregister(message)
+
 # In private chats, /ban and /unban are global bot restrictions for the owner/operators.
 # In groups, the existing moderation handlers retain their normal chat-ban semantics.
 @router.message(Command("ban"), F.chat.type == ChatType.PRIVATE)
@@ -6075,7 +6079,6 @@ async def random_community_cmd(message: Message) -> None:
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
 # "анрег" исключает пользователя из общего сбора в текущем чате.
-@router.message(F.text.regexp(r"(?i)^\s*анрег\s*$"))
 async def participant_call_unregister(message: Message) -> None:
     if not message.from_user or message.from_user.is_bot or not is_group(message):
         return
