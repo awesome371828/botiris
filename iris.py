@@ -446,7 +446,7 @@ def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: st
             stored_rank = max(0, min(5, int(current.get("rank", 0) or 0)))
         except (TypeError, ValueError):
             stored_rank = 0
-        rank = 5 if user_id == OWNER_ID else stored_rank
+        rank = 4 if user_id == OWNER_ID else stored_rank
         db_upsert("bot_users", {
             "user_id": user_id, "chat_id": chat_id, "username": username,
             "first_name": first_name or "Пользователь", "rank": rank,
@@ -455,7 +455,7 @@ def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: st
         current.update({"username": username, "first_name": first_name or "Пользователь", "rank": rank})
         invalidate_user_rank(chat_id, user_id)
         return current
-    rank = 5 if user_id == OWNER_ID else 0
+    rank = 4 if user_id == OWNER_ID else 0
     row = db_upsert("bot_users", {
         "user_id": user_id, "chat_id": chat_id, "username": username,
         "first_name": first_name or "Пользователь", "warns": 0, "rank": rank,
@@ -1238,8 +1238,8 @@ async def admins(message: Message) -> None:
         owner_username = str(owner_row.get("username") or "").lstrip("@") or None
         if message.from_user and message.from_user.id == OWNER_ID:
             owner_username = owner_username or message.from_user.username
-        owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (5, "Владелец Pear CM", None))[1]))
-        ranks[OWNER_ID] = (5, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
+        owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (4, "Владелец Pear CM", None))[1]))
+        ranks[OWNER_ID] = (4, owner_name, owner_username or ranks.get(OWNER_ID, (4, "", None))[2])
 
         # Clear five-step Pear CM hierarchy: rank 1 is the entry moderator, rank 5 is creator.
         rank_titles = {
@@ -1259,7 +1259,7 @@ async def admins(message: Message) -> None:
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
-                lines.append(f"👑 {escape(str(name))} · создатель чата")
+                lines.append(f"👑 {mention(uid, str(name))} · создатель чата")
             lines.append("")
         for rank in (5, 4, 3, 2, 1):
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
@@ -1268,9 +1268,8 @@ async def admins(message: Message) -> None:
             lines.append(f"<b>{rank_titles[rank]} · Pear CM</b>")
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
-                # Names are intentionally plain text, not clickable links.
-                display = escape(str(name or (f"@{username}" if username else f"ID {uid}")))
-                lines.append(f"{icon} {display}")
+                display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
+                lines.append(f"{icon} {mention(uid, display_name)}")
             lines.append("")
         if len(lines) <= 2:
             lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока не найдены создатели чата или назначенные роли Pear CM."]
@@ -2207,12 +2206,12 @@ async def top_cmd(message: Message) -> None:
         if category_key == "members":
             rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "created_at", chat_id=message.chat.id)
             rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
-            lines = [f"{i}. {('@'+escape(str(r.get('username')))) if r.get('username') else escape(str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1)]
+            lines = [f"{i}. {mention(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
             await message.answer("<b>🆕 Топ новичков</b>\n" + ("\n".join(lines) if lines else "Пока нет участников."))
             return
         if category_key == "messages":
             rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
-            lines = [f"{i}. {('@'+escape(str(r.get('username')))) if r.get('username') else escape(str(r.get('first_name') or 'Участник'))} — <b>{int(r.get('messages') or 0)}</b> 💬" for i,r in enumerate(rows[:10],1)]
+            lines = [f"{i}. {mention(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))} — <b>{int(r.get('messages') or 0)}</b> 💬" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
             await message.answer("<b>🏆 Топ сообщений</b>\n" + ("\n".join(lines) if lines else "Пока нет статистики."))
             return
         table, field, icon = table_map[category_key]
@@ -2247,7 +2246,7 @@ async def top_cmd(message: Message) -> None:
             if u.get("first_name"): current["first_name"] = u["first_name"]
         ranked = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:10]
         title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
-        await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {('@'+escape(str(r['username']))) if r.get('username') else escape(str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1)) if ranked else "Пока нет данных для рейтинга."))
+        await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {mention(int(r['user_id']), '@'+str(r['username']).lstrip('@') if r.get('username') else str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1) if int(r.get('user_id') or 0) > 0) if ranked else "Пока нет данных для рейтинга."))
         return
     # Iris-style statistics support both "топ" and "стата", with an optional count.
     count = 30
@@ -3038,12 +3037,21 @@ async def rank_cmd(message: Message) -> None:
         actor_existing_rank = max(0, min(5, int(actor_existing.get("rank", 0) or 0)))
     except (TypeError, ValueError):
         actor_existing_rank = 0
-    effective_actor_rank = 5 if is_chat_creator else max(3, actor_existing_rank)
+    effective_actor_rank = 5 if is_chat_creator else max(4 if message.from_user.id == OWNER_ID else 3, actor_existing_rank)
+    if target[0] == OWNER_ID and message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Ранг владельца Pear CM защищён от изменений.")
+        return
+    if target_existing_rank >= 5 and not is_chat_creator:
+        await message.answer("⛔ Ранг 5 защищён: изменить его может только настоящий создатель Telegram-чата.")
+        return
     if not is_chat_creator and rank >= effective_actor_rank:
         await message.answer("⛔ Вы можете назначать только ранг ниже своего. Ранг 5 может назначать только создатель чата или владелец Pear CM.")
         return
     if not is_chat_creator and target_existing_rank >= effective_actor_rank and target_existing_rank > 0:
         await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
+        return
+    if message.from_user.id == OWNER_ID and rank > 4:
+        await message.answer("⛔ Вы — старший администратор (ранг 4). Ранг 5 принадлежит создателю Telegram-чата и не назначается через Pear CM.")
         return
     user = target_existing
     saved = await asyncio.to_thread(db_upsert, "bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
