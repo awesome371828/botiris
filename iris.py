@@ -1727,14 +1727,14 @@ async def ban_cmd(message: Message) -> None:
         if until:
             await message.answer(
                 f"⛔ {mention(target[0], target[1])} заблокирован на <b>{escape(duration_label)}</b>. "
-                f"Причина: <b>{reason}</b>.\\n"
-                f"🕒 Выдан: {format_moscow_time(issued_at)}\\n"
-                f"⏳ Истекает: {format_moscow_time(until)}\\n👮 Модератор: {actor}."
+                f"Причина: <b>{reason}</b>.\n"
+                f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
+                f"⏳ Истекает: {format_moscow_time(until)}\n👮 Модератор: {actor}."
             )
         else:
             await message.answer(
                 f"⛔ {mention(target[0], target[1])} заблокирован <b>навсегда</b>. "
-                f"Причина: <b>{reason}</b>.\\n👮 Модератор: {actor}."
+                f"Причина: <b>{reason}</b>.\n👮 Модератор: {actor}."
             )
     except Exception as exc:
         await safe_error(message, exc)
@@ -6232,7 +6232,7 @@ async def gather_cmd(message: Message) -> None:
                      "participant_call_resolved", details=f"known_users={len(mentions)}; source_rows={len(rows)}; notice={notice[:300]!r}")
     try:
         # One Iris-style message whenever it fits Telegram's 4096-character limit.
-        heading = f"📣 <b>ОБЩИЙ СБОР</b>\\n<blockquote>{safe_notice}</blockquote>\\n\\n"
+        heading = f"📣 <b>ОБЩИЙ СБОР</b>\n<blockquote>{safe_notice}</blockquote>\n\n"
         messages: list[str] = []
         body = ""
         for item in mentions:
