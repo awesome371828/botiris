@@ -1010,7 +1010,7 @@ async def help_command(message: Message) -> None:
     # Owner/operator commands are only disclosed in the private bot chat.
     if is_privileged:
         help_text += (
-            "\\n\\n<b>Управление ботом</b>: /owner, /status, /ping, /diag, "
+            "\n\n<b>Управление ботом</b>: /owner, /status, /ping, /diag, "
             "/logs, /globalstats, /modules, /operator ID, /maintenance on|off"
         )
     await message.answer(
@@ -4630,6 +4630,9 @@ async def _owner_or_operator(message: Message) -> bool:
 @router.message(Command("owner", "ownerpanel"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера|админ-панель)\s*$"))
 async def owner_panel(message: Message) -> None:
+    # Never open or mention the owner panel from a group or supergroup.
+    if message.chat.type != ChatType.PRIVATE:
+        return
     if not await _owner_or_operator(message):
         return
     await message.answer(
