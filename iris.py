@@ -946,8 +946,8 @@ async def start(message: Message) -> None:
 
 @router.message(F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
-    if not message.from_user or message.from_user.id != OWNER_ID:
-        await message.answer("⛔ Эта кнопка доступна только владельцу бота.")
+    if not message.from_user or (message.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, message.from_user.id)):
+        await message.answer("⛔ Эта кнопка доступна только владельцу и активным операторам.")
         return
     await owner_panel(message)
 
