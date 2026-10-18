@@ -236,19 +236,29 @@ def main_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
     # message as an inline keyboard, never shown in the text-input area.
     return welcome_inline_keyboard(user_id)
 
-def welcome_inline_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
+def welcome_inline_keyboard(
+    user_id: int | None = None,
+    chat_type: ChatType = ChatType.PRIVATE,
+) -> InlineKeyboardMarkup:
+    # The owner panel is private-only and never shown to operators or groups.
+    if chat_type != ChatType.PRIVATE:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📚 Команды", callback_data="home:help"),
+             InlineKeyboardButton(text="🛡 Кто админ", callback_data="menu:admins")],
+            [InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage"),
+             InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+        ])
+
     rows = [
         [InlineKeyboardButton(text="➕ Добавить в чат", url="https://t.me/pear_cm_bot?startgroup=true")],
-        [InlineKeyboardButton(text="🚀 Начать пользоваться", callback_data="home:start"),
-         InlineKeyboardButton(text="📚 Команды", callback_data="home:help")],
-        [InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile"),
-         InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage")],
-        [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
+        [InlineKeyboardButton(text="📚 Команды", callback_data="home:help"),
+         InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile")],
+        [InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage"),
          InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
-        [InlineKeyboardButton(text="🛡 Кто админ", callback_data="menu:admins"),
+        [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
          InlineKeyboardButton(text="🌐 Открыть приложение", url=MINI_APP_URL)],
     ]
-    if user_id == OWNER_ID or (user_id is not None and _operator_active(user_id)):
+    if user_id == OWNER_ID:
         rows.insert(1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -941,12 +951,12 @@ async def start(message: Message) -> None:
     # Send exactly one visible message, with the inline keyboard attached.
     # Do not send a temporary ReplyKeyboardRemove message: Telegram displays
     # it briefly even if we delete it immediately.
-    await message.answer(text, reply_markup=welcome_inline_keyboard(user_id))
+    await message.answer(text, reply_markup=welcome_inline_keyboard(user_id, message.chat.type))
 
-@router.message(F.text == "🛠 Админ-панель")
+@router.message(F.chat.type == ChatType.PRIVATE, F.text == "🛠 Админ-панель")
 async def admin_panel_button(message: Message) -> None:
-    if not message.from_user or (message.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, message.from_user.id)):
-        await message.answer("⛔ Эта кнопка доступна только владельцу и активным операторам.")
+    if not message.from_user or message.from_user.id != OWNER_ID:
+        await message.answer("⛔ Админ-панель доступна только владельцу бота в личных сообщениях.")
         return
     await owner_panel(message)
 
@@ -4604,7 +4614,7 @@ async def home_inline_callback(callback: CallbackQuery) -> None:
     if action == "start":
         await callback.message.answer(
             "👋 <b>Pear CM</b> управляет группой: модерация, статистика, фильтры и инструменты администраторов.",
-            reply_markup=welcome_inline_keyboard(callback.from_user.id),
+            reply_markup=welcome_inline_keyboard(callback.from_user.id, callback.message.chat.type),
         )
     elif action == "help":
         synthetic = synthetic.model_copy(update={"text": "🔗 Команды"})
@@ -4638,8 +4648,8 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
     if not callback.from_user or not callback.message:
         await callback.answer("Не удалось определить пользователя.", show_alert=True)
         return
-    if callback.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, callback.from_user.id):
-        await callback.answer("Доступ только овнеру и активным операторам.", show_alert=True)
+    if callback.message.chat.type != ChatType.PRIVATE or callback.from_user.id != OWNER_ID:
+        await callback.answer("Админ-панель доступна только владельцу бота в личных сообщениях.", show_alert=True)
         return
     action = (callback.data or "").split(":", 1)[1]
     if action == "open":
