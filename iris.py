@@ -249,6 +249,29 @@ def main_keyboard(user_id: int | None = None) -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите раздел или введите команду…",
     )
 
+def welcome_inline_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="➕ Добавить в чат", url="https://t.me/pear_cm_bot?startgroup=true")],
+        [InlineKeyboardButton(text="🚀 Начать пользоваться", callback_data="home:start"),
+         InlineKeyboardButton(text="📚 Команды", callback_data="home:help")],
+        [InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile"),
+         InlineKeyboardButton(text="🌐 Mini App", url=MINI_APP_URL)],
+    ]
+    if user_id == OWNER_ID or (user_id is not None and _operator_active(user_id)):
+        rows.insert(1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:open")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def admin_inline_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Бан пользователя", callback_data="admin:ban"),
+         InlineKeyboardButton(text="♻️ Разбан", callback_data="admin:unban")],
+        [InlineKeyboardButton(text="👮 Операторы", callback_data="admin:operators"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="📡 Статус бота", callback_data="admin:status"),
+         InlineKeyboardButton(text="🧪 Диагностика", callback_data="admin:diag")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:home")],
+    ])
+
 def mention(user_id: int, name: str) -> str:
     safe = (name or "пользователь").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return f'<a href="tg://user?id={user_id}">{safe}</a>'
@@ -908,7 +931,7 @@ async def start(message: Message) -> None:
             "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
             '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
         )
-        await message.answer(text, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
+        await message.answer(text, reply_markup=welcome_inline_keyboard(message.from_user.id if message.from_user else None))
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💠 Профиль", callback_data="group:profile"), InlineKeyboardButton(text="🔗 Команды", callback_data="group:help")],
@@ -4559,11 +4582,87 @@ async def _owner_or_operator(message: Message) -> bool:
     return False
 
 @router.message(Command("owner", "ownerpanel"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера)\s*$"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:овнер панель|панель овнера|админка овнера|админ-панель)\s*$"))
 async def owner_panel(message: Message) -> None:
-    if not await _owner_only(message):
+    if not await _owner_or_operator(message):
         return
-    await message.answer(OWNER_HELP, reply_markup=main_keyboard(message.from_user.id if message.from_user else None))
+    await message.answer(
+        "🛠 <b>Панель управления Pear CM</b>\n\nВыберите действие кнопкой ниже. "
+        "Для бана бот попросит прислать ID или @username, а затем срок и причину. "
+        "Доступ только владельцу и активным операторам.",
+        reply_markup=admin_inline_keyboard(),
+    )
+
+_ADMIN_INPUT_STATE: dict[int, str] = {}
+
+@router.callback_query(F.data.startswith("home:"))
+async def home_inline_callback(callback: CallbackQuery) -> None:
+    if not callback.message:
+        await callback.answer()
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    if action == "start":
+        await callback.message.answer(
+            "👋 <b>Pear CM</b> управляет группой: модерация, статистика, фильтры и инструменты администраторов.",
+            reply_markup=welcome_inline_keyboard(callback.from_user.id),
+        )
+    elif action == "help":
+        await callback.message.answer("Список возможностей: /help")
+    elif action == "profile":
+        await callback.message.answer("Для просмотра профиля отправьте /profile.")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("admin:"))
+async def admin_inline_callback(callback: CallbackQuery) -> None:
+    if not callback.from_user or not callback.message:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+    if callback.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, callback.from_user.id):
+        await callback.answer("Доступ только овнеру и активным операторам.", show_alert=True)
+        return
+    action = (callback.data or "").split(":", 1)[1]
+    if action == "open":
+        await callback.message.answer("🛠 <b>Админ-панель Pear CM</b>\nВыберите действие:", reply_markup=admin_inline_keyboard())
+    elif action in {"ban", "unban"}:
+        _ADMIN_INPUT_STATE[callback.from_user.id] = action
+        verb = "бан" if action == "ban" else "разбан"
+        await callback.message.answer(
+            f"Введите одним сообщением: <code>@username или Telegram_ID [срок] причина</code> для действия «{verb}».\n"
+            "Примеры: <code>@username 1 день спам</code>, <code>123456789 навсегда мошенничество</code>.\n"
+            "Для разбана достаточно ID или @username. Username должен быть уже известен боту.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")]])
+        )
+    elif action == "cancel":
+        _ADMIN_INPUT_STATE.pop(callback.from_user.id, None)
+        await callback.message.answer("Действие отменено.", reply_markup=admin_inline_keyboard())
+    elif action == "operators":
+        await callback.message.answer("Управление операторами: /operators, /operator ID, /revokeoperator ID.", reply_markup=admin_inline_keyboard())
+    elif action == "stats":
+        rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
+        await callback.message.answer(f"📊 <b>Статистика</b>\nЗаписей пользователей в выборке: <b>{len(rows)}</b>.", reply_markup=admin_inline_keyboard())
+    elif action == "status":
+        await callback.message.answer("Статус бота: /status", reply_markup=admin_inline_keyboard())
+    elif action == "diag":
+        await callback.message.answer("Для полной диагностики отправьте /diag.", reply_markup=admin_inline_keyboard())
+    elif action == "home":
+        await callback.message.answer("Главное меню:", reply_markup=welcome_inline_keyboard(callback.from_user.id))
+    await callback.answer()
+
+@router.message(F.chat.type == ChatType.PRIVATE, F.text)
+async def admin_inline_input_handler(message: Message) -> None:
+    if not message.from_user:
+        return
+    action = _ADMIN_INPUT_STATE.get(message.from_user.id)
+    if not action:
+        return
+    if message.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, message.from_user.id):
+        _ADMIN_INPUT_STATE.pop(message.from_user.id, None)
+        return
+    prefix = "/ban" if action == "ban" else "/unban"
+    synthetic = message.model_copy(update={"text": f"{prefix} {message.text.strip()}"})
+    _ADMIN_INPUT_STATE.pop(message.from_user.id, None)
+    await _global_moderation_command(synthetic, remove=(action == "unban"))
+    await message.answer("🛠 Панель управления:", reply_markup=admin_inline_keyboard())
 
 @router.message(Command("status", "статусбота"))
 @router.message(F.text.regexp(r"(?i)^\s*статус бота\s*$"))
