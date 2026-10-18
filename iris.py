@@ -930,21 +930,17 @@ async def start(message: Message) -> None:
             '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
         )
     else:
+        # Keep /start fast: do not wait for an extra Telegram getChatMember
+        # request just to render the welcome message.
         text = (
             f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
-            + await await_bot_rights_hint(message.chat.id)
+            "Открой кнопки под этим сообщением, чтобы пользоваться ботом."
         )
 
-    # Telegram accepts only one reply_markup per message. Clear the old
-    # persistent reply keyboard with a temporary invisible message, delete it,
-    # and send the welcome message exactly once with the new inline buttons.
-    removal_message = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
-    try:
-        await removal_message.delete()
-    except TelegramBadRequest:
-        # Keyboard is already removed even if Telegram does not allow deletion.
-        pass
+    # Send exactly one visible message, with the inline keyboard attached.
+    # Do not send a temporary ReplyKeyboardRemove message: Telegram displays
+    # it briefly even if we delete it immediately.
     await message.answer(text, reply_markup=welcome_inline_keyboard(user_id))
 
 @router.message(F.text == "🛠 Админ-панель")
