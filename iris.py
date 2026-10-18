@@ -6056,11 +6056,21 @@ async def gather_cmd(message: Message) -> None:
     safe_notice = escape(notice[:500])
 
     def load_chat_users() -> list[dict]:
-        if db is None:
-            return db_rows("bot_users", 1000, "last_seen", chat_id=message.chat.id)
+        # Merge three sources: normal profiles, durable message history, and users
+        # seen in this process. bot_activity_events keeps historical writers even
+        # when a profile row was not created or its upsert failed.
         collected: list[dict] = []
-        offset = 0
+        if db is None:
+            collected.extend(db_rows("bot_users", 1000, "last_seen", chat_id=message.chat.id))
+            try:
+                collected.extend(db_rows("bot_activity_events", 1000, "created_at", chat_id=message.chat.id))
+            except Exception:
+                log.exception("Could not read activity history for participant call chat=%s", message.chat.id)
+            return collected
+
         page_size = 1000
+        # Primary profiles.
+        offset = 0
         while True:
             page = (
                 db.table("bot_users")
@@ -6074,8 +6084,38 @@ async def gather_cmd(message: Message) -> None:
             if len(page) < page_size:
                 break
             offset += page_size
-        return collected
 
+        # Historical writers. This intentionally scans every page so older users
+        # are included even if their bot_users profile is missing.
+        offset = 0
+        try:
+            while True:
+                page = (
+                    db.table("bot_activity_events")
+                    .select("user_id,first_name,username,chat_id")
+                    .eq("chat_id", message.chat.id)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                    .data or []
+                )
+                collected.extend(page)
+                if len(page) < page_size:
+                    break
+                offset += page_size
+        except Exception:
+            # Keep the main command useful if the installation is missing the
+            # activity table; the profiles and in-memory cache still work.
+            log.exception("Could not read bot_activity_events for chat=%s", message.chat.id)
+
+        # Include message authors seen since this bot process started, even if
+        # persistence is currently delayed or temporarily unavailable.
+        for (chat_id, user_id), (username, first_name, _stamp) in list(_RECENT_CHAT_USERS.items()):
+            if chat_id == message.chat.id:
+                collected.append({
+                    "chat_id": chat_id, "user_id": user_id,
+                    "username": username, "first_name": first_name,
+                })
+        return collected
     try:
         rows = await asyncio.to_thread(load_chat_users)
     except Exception:
