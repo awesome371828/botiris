@@ -4605,10 +4605,10 @@ async def home_inline_callback(callback: CallbackQuery) -> None:
             reply_markup=welcome_inline_keyboard(callback.from_user.id),
         )
     elif action == "help":
-        synthetic.text = "🔗 Команды"
+        synthetic = synthetic.model_copy(update={"text": "🔗 Команды"})
         await help_command(synthetic)
     elif action == "profile":
-        synthetic.text = "💠 Профиль"
+        synthetic = synthetic.model_copy(update={"text": "💠 Профиль"})
         await profile(synthetic)
     await callback.answer()
 
@@ -4627,7 +4627,7 @@ async def inline_menu_callback(callback: CallbackQuery) -> None:
     }
     item = handlers.get(action)
     if item:
-        synthetic.text = item[0]
+        synthetic = synthetic.model_copy(update={"text": item[0]})
         await item[1](synthetic)
     await callback.answer()
 
