@@ -4688,8 +4688,11 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
     if not callback.from_user or not callback.message:
         await callback.answer("Не удалось определить пользователя.", show_alert=True)
         return
-    if callback.message.chat.type != ChatType.PRIVATE or callback.from_user.id != OWNER_ID:
-        await callback.answer("Админ-панель доступна только владельцу бота в личных сообщениях.", show_alert=True)
+    if callback.message.chat.type != ChatType.PRIVATE:
+        await callback.answer("Админ-панель доступна только в личных сообщениях с ботом.", show_alert=True)
+        return
+    if callback.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, callback.from_user.id):
+        await callback.answer("Нет доступа к админ-панели.", show_alert=True)
         return
     action = (callback.data or "").split(":", 1)[1]
     if action == "open":
