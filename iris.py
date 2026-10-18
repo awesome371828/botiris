@@ -6219,8 +6219,15 @@ async def gather_cmd(message: Message) -> None:
         if uid <= 0 or uid in seen or uid in excluded:
             continue
         seen.add(uid)
-        name = str(row.get("first_name") or row.get("username") or "Участник")
-        mentions.append(mention(uid, name))
+        # Some Telegram display names contain only invisible Unicode characters.
+        # Clean them so the call list never shows huge blank-looking names.
+        raw_name = str(row.get("first_name") or "").strip()
+        name = re.sub(r"[\\u200b-\\u200f\\u202a-\\u202e\\u2060\\ufeff]", "", raw_name).strip()
+        if not name:
+            name = str(row.get("username") or "").strip().lstrip("@")
+        if not name:
+            name = "Участник"
+        mentions.append(mention(uid, name[:64]))
 
     if not mentions:
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
@@ -6234,19 +6241,46 @@ async def gather_cmd(message: Message) -> None:
     await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
                      "participant_call_resolved", details=f"known_users={len(mentions)}; source_rows={len(rows)}; notice={notice[:300]!r}")
     try:
-        # One Iris-style message whenever it fits Telegram's 4096-character limit.
-        heading = f"📣 <b>ОБЩИЙ СБОР</b>\n<blockquote>{safe_notice}</blockquote>\n\n"
+        # Compact Iris-inspired call card; keep it as one message when possible.
+        def build_heading(part: int = 1, total: int = 1) -> str:
+            part_label = f" <i>({part}/{total})</i>" if total > 1 else ""
+            return (
+                f"📣 <b>ОБЩИЙ СБОР</b>{part_label}\\n"
+                f"━━━━━━━━━━━━━━━━━━\\n"
+                f"🗣 <blockquote>{safe_notice}</blockquote>\\n"
+                f"👥 <b>Участники:</b> {len(mentions)}\\n"
+                f"━━━━━━━━━━━━━━━━━━\\n\\n"
+            )
+
+        # First estimate one-message layout, then split only if Telegram's limit requires it.
+        heading = build_heading()
         messages: list[str] = []
         body = ""
         for item in mentions:
             separator = "  ·  " if body else ""
-            if len(heading) + len(body) + len(separator) + len(item) > 3900 and body:
+            if len(heading) + len(body) + len(separator) + len(item) > 3800 and body:
                 messages.append(heading + body)
                 body = ""
                 separator = ""
             body += separator + item
         if body:
             messages.append(heading + body)
+        if len(messages) > 1:
+            # Rebuild all chunks with an accurate part counter.
+            chunks: list[str] = []
+            current = ""
+            for item in mentions:
+                separator = "  ·  " if current else ""
+                provisional = build_heading(99, 99)
+                if len(provisional) + len(current) + len(separator) + len(item) > 3800 and current:
+                    chunks.append(current)
+                    current = ""
+                    separator = ""
+                current += separator + item
+            if current:
+                chunks.append(current)
+            total = len(chunks)
+            messages = [build_heading(i + 1, total) + chunk for i, chunk in enumerate(chunks)]
         for outgoing in messages:
             await message.answer(outgoing)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
