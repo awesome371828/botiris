@@ -107,8 +107,8 @@ dp.include_router(router)
 # Register participant-call aliases before all feature handlers. aiogram stops at
 # the first matching handler, so this must precede broad text/command handlers.
 @router.message(Command("sbor"))
-@router.message(F.text.regexp(r"(?i)^\\s*/sbor(?:@pear_cm_bot)?(?:\\s|$)"))
-@router.message(F.text.regexp(r"(?i)^\\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\\s+.*|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s+.*|$)"))
 async def participant_call_dispatch_first(message: Message) -> None:
     await gather_cmd(message)
 
