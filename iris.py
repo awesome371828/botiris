@@ -6035,21 +6035,25 @@ async def random_community_cmd(message: Message) -> None:
     name = picked.get("first_name") or picked.get("username") or f"ID {picked.get('user_id')}"
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
-# Telegram Bot API не позволяет получить полный список участников группы.
-# Отмечаем всех пользователей этого чата, сохранённых в bot_users.
-# Command("sbor") корректно разбирает и /sbor, и /sbor@pear_cm_bot.
+# Telegram Bot API не предоставляет метод перечисления всех участников группы.
+# Команда работает по сохранённым ID; «калл»/«call» — удобные текстовые алиасы.
 @router.message(Command("sbor"))
 @router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
-    log.info("Received /sbor in chat_id=%s from user_id=%s text=%r", message.chat.id, message.from_user.id if message.from_user else None, message.text)
+    raw = (message.text or "").strip()
+    log.info("Received participant call in chat_id=%s from user_id=%s text=%r", message.chat.id, message.from_user.id if message.from_user else None, raw)
     if not await require_real_admin(message):
         return
 
-    # Текст после команды: /sbor проверка -> каждый пакет упоминаний сопровождается «проверка».
-    parts = (message.text or "").split(maxsplit=1)
+    # Для «калл проверка», «call проверка» и «/sbor проверка» текст после команды — причина.
+    parts = raw.split(maxsplit=1)
     notice = parts[1].strip() if len(parts) > 1 else "📢 Общий сбор!"
-    safe_notice = escape(notice)
+    if raw.lower().startswith(("/sbor", "/sbor@")) is False and parts:
+        first = parts[0].casefold()
+        if first in {"калл", "колл", "call", "сбор"}:
+            notice = parts[1].strip() if len(parts) > 1 else "📢 Общий сбор!"
+    safe_notice = escape(notice[:500])
 
     def load_chat_users() -> list[dict]:
         if db is None:
@@ -6075,8 +6079,8 @@ async def gather_cmd(message: Message) -> None:
     try:
         rows = await asyncio.to_thread(load_chat_users)
     except Exception:
-        log.exception("Failed to load users for /sbor in chat %s", message.chat.id)
-        await message.answer("⚠️ Не удалось получить список сохранённых участников. Проверь подключение Supabase.")
+        log.exception("Failed to load users for participant call in chat %s", message.chat.id)
+        await message.answer("⚠️ Не удалось загрузить список известных участников. Проверь подключение Supabase.")
         return
 
     seen: set[int] = set()
@@ -6094,18 +6098,20 @@ async def gather_cmd(message: Message) -> None:
 
     if not mentions:
         await message.answer(
-            "Не нашёл сохранённых участников этого чата. Telegram Bot API не позволяет боту "
-            "получить полный список участников автоматически; бот может отметить только тех, "
-            "кого он уже видел и чьи ID сохранены."
+            "⚠️ У бота пока нет сохранённых ID участников этого чата. "
+            "Telegram Bot API не позволяет получить полный список всех участников группы, "
+            "в том числе тех, кого бот никогда не видел."
         )
         return
 
-    # Делим сообщения на небольшие пакеты, чтобы не превысить лимит Telegram.
+    await message.answer(
+        f"📣 <b>Калл: {escape(notice[:200])}</b>\n"
+        f"Отмечаю {len(mentions)} известных участников. "
+        "Telegram не позволяет боту узнать ID абсолютно всех участников группы."
+    )
     chunk_size = 20
-    await message.answer(f"📣 Рассылка: отмечаю {len(mentions)} сохранённых участников.")
     for start in range(0, len(mentions), chunk_size):
-        batch = mentions[start:start + chunk_size]
-        await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(batch))
+        await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(mentions[start:start + chunk_size]))
 
 
 if __name__ == "__main__":
