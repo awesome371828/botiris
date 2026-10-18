@@ -1266,10 +1266,7 @@ async def admins(message: Message) -> None:
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
-                creator_username = str((ranks.get(uid) or (0, "", None))[2] or "").strip().lstrip("@")
                 creator_display = escape(str(name))
-                if creator_username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", creator_username):
-                    creator_display = f'<a href="https://t.me/{escape(creator_username, quote=True)}">{creator_display}</a>'
                 lines.append(f"👑 {creator_display} · создатель чата")
             lines.append("")
         for rank in (5, 4, 3, 2, 1):
@@ -1280,11 +1277,8 @@ async def admins(message: Message) -> None:
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
+                # Keep admin names as plain text: no profile links or mention entities.
                 safe_display_name = escape(display_name)
-                if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username.lstrip("@")):
-                    safe_display_name = f'<a href="https://t.me/{escape(username.lstrip("@"), quote=True)}">{safe_display_name}</a>'
-                # Never use tg://user?id links in the admin list: Telegram treats
-                # them as text mentions and may send a notification.
                 lines.append(f"{icon} {safe_display_name}")
             lines.append("")
         if len(lines) <= 2:
