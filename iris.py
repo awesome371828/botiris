@@ -6238,12 +6238,20 @@ async def gather_cmd(message: Message) -> None:
         # Some Telegram display names contain only invisible Unicode characters.
         # Clean them so the call list never shows huge blank-looking names.
         raw_name = str(row.get("first_name") or "").strip()
-        name = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", raw_name).strip()
+        # Remove invisible formatting characters and common blank Unicode fillers.
+        name = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff\u115f\u1160\u3164\u2800]", "", raw_name).strip()
+        username = str(row.get("username") or "").strip().lstrip("@")
         if not name:
-            name = str(row.get("username") or "").strip().lstrip("@")
+            name = username
         if not name:
             name = "Участник"
-        mentions.append(mention(uid, name[:64]))
+        # @username is an explicit Telegram mention and is more reliable for
+        # notification delivery; users without a username get a text-mention link.
+        # Notification delivery still depends on the recipient's Telegram settings.
+        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            mentions.append(f"@{escape(username)}")
+        else:
+            mentions.append(mention(uid, name[:64]))
 
     if not mentions:
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
