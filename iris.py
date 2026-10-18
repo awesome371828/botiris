@@ -326,9 +326,16 @@ def admin_inline_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="admin:home")],
     ])
 
+def profile_link(user_id: int, name: str) -> str:
+    """Clickable Telegram profile link without creating a mention notification."""
+    safe = escape(str(name or "пользователь"))
+    if int(user_id or 0) > 0:
+        return f'<a href="tg://user?id={int(user_id)}">{safe}</a>'
+    return safe
+
 def mention(user_id: int, name: str) -> str:
-    safe = (name or "пользователь").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return f'<a href="tg://user?id={user_id}">{safe}</a>'
+    """Clickable profile link intended for commands that explicitly ping users."""
+    return profile_link(user_id, name)
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 def _is_transient_db_error(exc: Exception) -> bool:
@@ -1259,7 +1266,7 @@ async def admins(message: Message) -> None:
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
-                lines.append(f"👑 {mention(uid, str(name))} · создатель чата")
+                lines.append(f"👑 {profile_link(uid, str(name))} · создатель чата")
             lines.append("")
         for rank in (5, 4, 3, 2, 1):
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
@@ -1269,7 +1276,7 @@ async def admins(message: Message) -> None:
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
-                lines.append(f"{icon} {mention(uid, display_name)}")
+                lines.append(f"{icon} {profile_link(uid, display_name)}")
             lines.append("")
         if len(lines) <= 2:
             lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока не найдены создатели чата или назначенные роли Pear CM."]
@@ -2206,7 +2213,7 @@ async def top_cmd(message: Message) -> None:
         if category_key == "members":
             rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "created_at", chat_id=message.chat.id)
             rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
-            lines = [f"{i}. {mention(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
+            lines = [f"{i}. {profile_link(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
             await message.answer("<b>🆕 Топ новичков</b>\n" + ("\n".join(lines) if lines else "Пока нет участников."))
             return
         if category_key == "messages":
@@ -2503,7 +2510,7 @@ async def top_cmd(message: Message) -> None:
         )
         safe_name = escape(display_name)
         if uid > 0:
-            display = mention(uid, display_name)
+            display = profile_link(uid, display_name)
         elif username:
             display = f'<a href="https://t.me/{escape(username, quote=True)}">{safe_name}</a>'
         else:
@@ -6231,7 +6238,7 @@ async def gather_cmd(message: Message) -> None:
         # Some Telegram display names contain only invisible Unicode characters.
         # Clean them so the call list never shows huge blank-looking names.
         raw_name = str(row.get("first_name") or "").strip()
-        name = re.sub(r"[\\u200b-\\u200f\\u202a-\\u202e\\u2060\\ufeff]", "", raw_name).strip()
+        name = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]", "", raw_name).strip()
         if not name:
             name = str(row.get("username") or "").strip().lstrip("@")
         if not name:
