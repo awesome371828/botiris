@@ -6036,11 +6036,13 @@ async def random_community_cmd(message: Message) -> None:
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
 # Telegram Bot API не позволяет получить полный список участников группы.
-# Telegram Bot API не умеет перечислять всех участников группы.
 # Отмечаем всех пользователей этого чата, сохранённых в bot_users.
-@router.message(F.text.regexp(r"(?i)^/sbor(?:@pear_cm_bot)?(?:\s|$)"))
+# Command("sbor") корректно разбирает и /sbor, и /sbor@pear_cm_bot.
+@router.message(Command("sbor"))
+@router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
+    log.info("Received /sbor in chat_id=%s from user_id=%s text=%r", message.chat.id, message.from_user.id if message.from_user else None, message.text)
     if not await require_real_admin(message):
         return
 
