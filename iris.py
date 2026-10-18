@@ -1266,7 +1266,11 @@ async def admins(message: Message) -> None:
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
-                lines.append(f"👑 {profile_link(uid, str(name))} · создатель чата")
+                creator_username = str((ranks.get(uid) or (0, "", None))[2] or "").strip().lstrip("@")
+                creator_display = escape(str(name))
+                if creator_username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", creator_username):
+                    creator_display = f'<a href="https://t.me/{escape(creator_username, quote=True)}">{creator_display}</a>'
+                lines.append(f"👑 {creator_display} · создатель чата")
             lines.append("")
         for rank in (5, 4, 3, 2, 1):
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
@@ -1276,7 +1280,12 @@ async def admins(message: Message) -> None:
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
-                lines.append(f"{icon} {profile_link(uid, display_name)}")
+                safe_display_name = escape(display_name)
+                if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username.lstrip("@")):
+                    safe_display_name = f'<a href="https://t.me/{escape(username.lstrip("@"), quote=True)}">{safe_display_name}</a>'
+                # Never use tg://user?id links in the admin list: Telegram treats
+                # them as text mentions and may send a notification.
+                lines.append(f"{icon} {safe_display_name}")
             lines.append("")
         if len(lines) <= 2:
             lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока не найдены создатели чата или назначенные роли Pear CM."]
@@ -2509,11 +2518,13 @@ async def top_cmd(message: Message) -> None:
             or str(row.get("first_name") or "Участник")
         )
         safe_name = escape(display_name)
-        if uid > 0:
-            display = profile_link(uid, display_name)
-        elif username:
+        # In statistics, use a normal t.me username URL, never Telegram's
+        # tg://user?id text-mention entity, which can notify the user.
+        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
             display = f'<a href="https://t.me/{escape(username, quote=True)}">{safe_name}</a>'
         else:
+            # No username means there is no reliable non-notifying profile URL.
+            # Prefer plain text over accidentally pinging someone.
             display = safe_name
         if period == "month":
             badge = "🔥🔥🔥 " if index <= 5 else ("💥💥 " if index <= 11 else ("⭐️ " if index <= 22 else "⚡️ "))
