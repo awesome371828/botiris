@@ -6036,14 +6036,47 @@ async def random_community_cmd(message: Message) -> None:
     await message.answer(f"🎲 Выбран участник: {mention(int(picked['user_id']),str(name))}")
 
 # Telegram Bot API не позволяет получить полный список участников группы.
-# Поэтому упоминаем всех участников этого чата, которых бот уже записал в bot_users.
-@router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:сбор|общий сбор|вызов участников)(?:\s|$)"))
+# Telegram Bot API не умеет перечислять всех участников группы.
+# Отмечаем всех пользователей этого чата, сохранённых в bot_users.
+@router.message(Command("sbor"))
+@router.message(F.text.regexp(r"(?i)^\\s*(?:сбор|общий сбор|вызов участников)(?:\\s|$)"))
 async def gather_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
 
-    rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "last_seen", chat_id=message.chat.id)
+    # Текст после команды: /sbor проверка -> каждый пакет упоминаний сопровождается «проверка».
+    parts = (message.text or "").split(maxsplit=1)
+    notice = parts[1].strip() if len(parts) > 1 else "📢 Общий сбор!"
+    safe_notice = escape(notice)
+
+    def load_chat_users() -> list[dict]:
+        if db is None:
+            return db_rows("bot_users", 1000, "last_seen", chat_id=message.chat.id)
+        collected: list[dict] = []
+        offset = 0
+        page_size = 1000
+        while True:
+            page = (
+                db.table("bot_users")
+                .select("user_id,first_name,username,chat_id")
+                .eq("chat_id", message.chat.id)
+                .range(offset, offset + page_size - 1)
+                .execute()
+                .data or []
+            )
+            collected.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return collected
+
+    try:
+        rows = await asyncio.to_thread(load_chat_users)
+    except Exception:
+        log.exception("Failed to load users for /sbor in chat %s", message.chat.id)
+        await message.answer("⚠️ Не удалось получить список сохранённых участников. Проверь подключение Supabase.")
+        return
+
     seen: set[int] = set()
     mentions: list[str] = []
     for row in rows:
@@ -6059,16 +6092,18 @@ async def gather_cmd(message: Message) -> None:
 
     if not mentions:
         await message.answer(
-            "Пока нет сохранённых участников этого чата. "
-            "Бот может отмечать пользователей, чьи сообщения он видел после добавления/запуска."
+            "Не нашёл сохранённых участников этого чата. Telegram Bot API не позволяет боту "
+            "получить полный список участников автоматически; бот может отметить только тех, "
+            "кого он уже видел и чьи ID сохранены."
         )
         return
 
-    await message.answer(f"📢 <b>Общий сбор!</b> Отмечаю всех {len(mentions)} сохранённых участников чата.")
-    # Telegram ограничивает длину сообщения; отправляем отметки несколькими сообщениями.
-    chunk_size = 25
+    # Делим сообщения на небольшие пакеты, чтобы не превысить лимит Telegram.
+    chunk_size = 20
+    await message.answer(f"📣 Рассылка: отмечаю {len(mentions)} сохранённых участников.")
     for start in range(0, len(mentions), chunk_size):
-        await message.answer(" · ".join(mentions[start:start + chunk_size]))
+        batch = mentions[start:start + chunk_size]
+        await message.answer(f"<b>{safe_notice}</b>\n" + " · ".join(batch))
 
 
 if __name__ == "__main__":
