@@ -231,14 +231,18 @@ URL_RE = re.compile(r"(?:https?://|www\.|t\.me/|telegram\.me/)", re.I)
 INVITE_RE = re.compile(r"(?:t\.me/\+|t\.me/joinchat|telegram\.me/joinchat)", re.I)
 
 # ── Keyboards ────────────────────────────────────────────────────────────────
-def main_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
-    # Compatibility name retained, but all navigation is now attached to the
-    # message as an inline keyboard, never shown in the text-input area.
-    return welcome_inline_keyboard(user_id)
+def main_keyboard(
+    user_id: int | None = None,
+    chat_type: ChatType = ChatType.PRIVATE,
+    privileged: bool = False,
+) -> InlineKeyboardMarkup:
+    # Inline navigation only. In groups, never expose owner/operator controls.
+    return welcome_inline_keyboard(user_id, chat_type, privileged)
 
 def welcome_inline_keyboard(
     user_id: int | None = None,
     chat_type: ChatType = ChatType.PRIVATE,
+    privileged: bool = False,
 ) -> InlineKeyboardMarkup:
     # The owner panel is private-only and never shown to operators or groups.
     if chat_type != ChatType.PRIVATE:
@@ -258,7 +262,7 @@ def welcome_inline_keyboard(
         [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
          InlineKeyboardButton(text="🌐 Открыть приложение", url=MINI_APP_URL)],
     ]
-    if user_id == OWNER_ID:
+    if user_id == OWNER_ID or privileged:
         rows.insert(1, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -965,7 +969,14 @@ async def admin_panel_button(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:помощь|команды)(?:\s|$)"))
 @router.message(F.text.in_({"🔗 Команды", "❓ Помощь"}))
 async def help_command(message: Message) -> None:
-    await message.answer(
+    user_id = message.from_user.id if message.from_user else None
+    is_private = message.chat.type == ChatType.PRIVATE
+    is_privileged = bool(
+        is_private and user_id and (
+            user_id == OWNER_ID or await asyncio.to_thread(_operator_active, user_id)
+        )
+    )
+    help_text = (
         "<b>📚 Команды Pear CM</b>\n\n"
         "<b>Профиль и чат</b>\n"
         "• /profile или профиль — профиль; топ дня/недели/вся — рейтинг текущего чата; топ все чаты — общий рейтинг\n"
@@ -995,8 +1006,22 @@ async def help_command(message: Message) -> None:
         "• история наказаний ответом — история пользователя; диагностика — состояние и задержки обработчиков (для овнера/операторов)\n\n"
         "<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off\n\n"
         "<b>Важно:</b> команды модерации требуют прав администратора. "
-        "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права.",
-        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
+        "Для mute/ban/delete/pin сам бот тоже должен иметь соответствующие права."
+    )
+    # Owner-only controls are not mentioned in group help, even for the owner.
+    if is_privileged:
+        help_text += (
+            "\\n\\n<b>Управление ботом</b>: /owner, /status, /ping, /diag, "
+            "/logs, /globalstats, /modules, /operator ID, /maintenance on|off"
+        )
+    else:
+        help_text = help_text.replace(
+            "\\n\\n<b>Овнер</b>: /owner, /status, /ping, /diag, /logs, /globalstats, /modules, /operator ID, /maintenance on|off",
+            ""
+        )
+    await message.answer(
+        help_text,
+        reply_markup=main_keyboard(user_id, message.chat.type, is_privileged),
     )
 
 @router.message(F.text.in_({"📋 Меню", "Меню"}))
@@ -1007,7 +1032,16 @@ async def menu_button(message: Message) -> None:
         "💠 Профиль — ваша статистика и предупреждения.\n"
         "🔗 Команды — список доступных команд.\n"
         "🛠 Установка — понятная инструкция по подключению.",
-        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
+        reply_markup=main_keyboard(
+            message.from_user.id if message.from_user else None,
+            message.chat.type,
+            bool(
+                message.chat.type == ChatType.PRIVATE and message.from_user and (
+                    message.from_user.id == OWNER_ID
+                    or await asyncio.to_thread(_operator_active, message.from_user.id)
+                )
+            ),
+        ),
     )
 
 @router.message(F.text == "➕ Добавить в чат")
@@ -1043,7 +1077,16 @@ async def installation_help(message: Message) -> None:
         "<b>4.</b> Включите необходимые права: удаление сообщений, блокировка/ограничение участников. Для команд «-чат» и «+чат» нужны права управления чатом.\n"
         "<b>5.</b> Проверьте в группе: <code>/admins</code>, <code>-смс 10</code>, <code>-чат</code> и <code>+чат</code>.\n\n"
         "Если нужна только статистика, не выдавайте права модерации. Команды доступны в группе через меню «/».",
-        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
+        reply_markup=main_keyboard(
+            message.from_user.id if message.from_user else None,
+            message.chat.type,
+            bool(
+                message.chat.type == ChatType.PRIVATE and message.from_user and (
+                    message.from_user.id == OWNER_ID
+                    or await asyncio.to_thread(_operator_active, message.from_user.id)
+                )
+            ),
+        ),
     )
 
 @router.callback_query(F.data.startswith("group:"))
