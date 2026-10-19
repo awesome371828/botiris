@@ -6475,7 +6475,17 @@ async def gather_cmd(message: Message) -> None:
                 )
                 # The photo already contains the announcement heading; send only
                 # the participant list below it, without repeating the title.
-                messages = ["\n".join(mentions)] if len(mentions) <= 180 else messages
+                messages = []
+                body_chunk = ""
+                for item in mentions:
+                    separator = "\n" if body_chunk else ""
+                    if len(body_chunk) + len(separator) + len(item) > 3800 and body_chunk:
+                        messages.append(body_chunk)
+                        body_chunk = ""
+                        separator = ""
+                    body_chunk += separator + item
+                if body_chunk:
+                    messages.append(body_chunk)
         for outgoing in messages:
             await message.answer(outgoing, parse_mode=ParseMode.HTML)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
