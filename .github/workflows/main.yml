@@ -11,10 +11,8 @@ on:
 permissions:
   contents: read
 
-# This prevents two Telegram polling processes from running at once.
-# GitHub-hosted runners are temporary and cron can be delayed, so this is
-# the strongest simple GitHub Actions workaround, not a true 24/7 guarantee.
-# All push/schedule/manual runs share one concurrency group; a new run cancels the previous one.
+# Keep a single polling instance for this Telegram token.
+# GitHub-hosted runners are temporary; this is a free workaround, not a true 24/7 guarantee.
 concurrency:
   group: pear-cm-bot
   cancel-in-progress: true
@@ -53,7 +51,7 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import json, os, sys, urllib.error, urllib.request
+          import json, os, sys, urllib.request
           token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
           request = urllib.request.Request(
               f"https://api.telegram.org/bot{token}/getMe",
@@ -85,15 +83,15 @@ jobs:
           set -uo pipefail
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            timeout --signal=TERM --kill-after=20s 17400s python -u iris.py
+            # Do not wrap Python in GNU timeout: timeout's process-group signal
+            # was terminating the shell loop too, causing every run to fail after 4h50m.
+            python -u iris.py
             code=$?
             echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-              echo "Runner recycle reached; restarting bot process."
-            elif [ "$code" -eq 23 ]; then
-              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping instead of restarting forever. Stop every other instance using this token, then rerun this workflow."
+            if [ "$code" -eq 23 ]; then
+              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping to avoid a restart loop."
               exit 23
             fi
-            echo "Retrying in 10 seconds."
+            echo "Restarting Pear CM in 10 seconds."
             sleep 10
           done
