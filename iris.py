@@ -2558,8 +2558,8 @@ async def top_cmd(message: Message) -> None:
 
 
 
-@router.message(F.text.regexp(r"(?i)^\s*\+ник(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^\s*/nick(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?\+ник(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?/nick(?:\s|$)"))
 async def set_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Никнеймы можно задавать внутри группы.")
@@ -2567,14 +2567,14 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = (message.text or "").strip()
-    match = re.match(r"(?is)^(?:\+ник|/nick)(?:@\w+)?(?:\s+(.+))?$", raw)
+    match = re.match(r"(?is)^(?:\.дк\s+)?(?:\+ник|/nick)(?:@\w+)?(?:\s+(.+))?$", raw)
     nickname = (match.group(1) or "").strip() if match else ""
+    if not await is_admin(bot, message.chat.id, message.from_user.id):
+        await message.answer("⛔ Устанавливать и менять ники могут только администраторы чата.")
+        return
     target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
     if not target_user or target_user.is_bot:
         await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
-        return
-    if target_user.id != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
-        await message.answer("Чужой ник может менять только администратор. Для своего ника напиши <code>+ник ТВОЙ НИК</code>.")
         return
     if not nickname:
         await message.answer("Укажи ник: <code>+ник АВЕСОМ</code>. Чтобы убрать его — <code>-ник</code>.")
@@ -2597,19 +2597,20 @@ async def set_chat_nickname_cmd(message: Message) -> None:
         return
     await message.answer(f"✅ Ник участника изменён на <b>{escape(nickname)}</b>. Он будет показываться в статистике и профиле чата.")
 
-@router.message(F.text.regexp(r"(?i)^\s*(?:-ник|/unnick)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?(?:-ник|/unnick)(?:\s|$)"))
 async def clear_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Никнеймы можно убирать внутри группы.")
         return
     if not message.from_user:
         return
+    if not await is_admin(bot, message.chat.id, message.from_user.id):
+        await message.answer("⛔ Устанавливать и сбрасывать ники могут только администраторы чата.")
+        return
     target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
     if not target_user or target_user.is_bot:
         await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
         return
-    if target_user.id != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
-        await message.answer("Чужой ник может убрать только администратор.")
         return
     current = await asyncio.to_thread(
         db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_user.id
@@ -2624,7 +2625,7 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
     await message.answer("♻️ Ник сброшен. Теперь в статистике будет отображаться имя из Telegram." if saved else "Не удалось убрать ник. Проверь Supabase.")
 
 @router.message(Command("nicks"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:ники|никнеймы|все ники|список ников)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?[.!/]?(?:ники|никнеймы|все ники|список ников)(?:\s|$)"))
 async def list_chat_nicknames_cmd(message: Message) -> None:
     """List custom nicknames only for this exact chat, never across all chats."""
     if not is_group(message):
