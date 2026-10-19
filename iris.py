@@ -2699,10 +2699,16 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
 
     # Clean, one-column directory: custom nicknames only. No usernames,
     # text mentions, profile links or extra suffixes that could ping people.
+    # Render every nickname as a separate, clearly spaced line. Normalize
+    # accidental literal "\\n" sequences saved in nickname data into real line breaks,
+    # then flatten them so one nickname can never split the directory layout.
     lines = [f"📒 <b>Ники чата</b> · {len(rows)}", ""]
     for index, row in enumerate(rows, 1):
-        nick = escape(str(row.get("display_name") or "").strip())
-        lines.append(f"{index}. {nick}")
+        raw_nick = str(row.get("display_name") or "").strip()
+        raw_nick = re.sub(r"(?i)\\\\n", " ", raw_nick)
+        raw_nick = re.sub(r"\\s+", " ", raw_nick).strip()
+        nick = escape(raw_nick or "Без имени")
+        lines.append(f"<b>{index:02}.</b>  {nick}")
     chunks: list[str] = []
     current = ""
     for line in lines:
@@ -6447,14 +6453,31 @@ async def gather_cmd(message: Message) -> None:
             total = len(chunks)
             messages = [build_heading(i + 1, total) + chunk for i, chunk in enumerate(chunks)]
         if photo_file_id:
-            photo_caption = (
-                f"📣 <b>ОБЩИЙ СБОР</b>\n"
-                f"🔔 <b>{safe_notice}</b>\n"
-                f"👥 Кого зовём: <b>{len(mentions)}</b>"
-            )
-            await message.answer_photo(photo=photo_file_id, caption=photo_caption[:1024])
+            # Avoid posting the same announcement twice. Prefer a single photo
+            # message with the full participant list when Telegram's caption limit allows it.
+            if len(messages) == 1 and len(messages[0]) <= 1024:
+                await message.answer_photo(
+                    photo=photo_file_id,
+                    caption=messages[0],
+                    parse_mode=ParseMode.HTML,
+                )
+                messages = []
+            else:
+                photo_caption = (
+                    f"📣 <b>ОБЩИЙ СБОР</b>\n"
+                    f"🔔 <b>{safe_notice}</b>\n"
+                    f"👥 Кого зовём: <b>{len(mentions)}</b>"
+                )
+                await message.answer_photo(
+                    photo=photo_file_id,
+                    caption=photo_caption[:1024],
+                    parse_mode=ParseMode.HTML,
+                )
+                # The photo already contains the announcement heading; send only
+                # the participant list below it, without repeating the title.
+                messages = ["\n".join(mentions)] if len(mentions) <= 180 else messages
         for outgoing in messages:
-            await message.answer(outgoing)
+            await message.answer(outgoing, parse_mode=ParseMode.HTML)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
                          "participant_call_success", details=f"mentioned={len(mentions)}; messages={len(messages)}; photo={bool(photo_file_id)}; excluded={len(excluded)}; reason={notice[:300]!r}")
     except Exception as exc:
