@@ -88,7 +88,9 @@ jobs:
             python -u iris.py
             code=$?
             echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            if [ "$code" -eq 23 ]; then
+            if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+              echo "Process was terminated; checking whether the runner recycle caused it."
+            elif [ "$code" -eq 23 ]; then
               echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping to avoid a restart loop."
               exit 23
             fi
