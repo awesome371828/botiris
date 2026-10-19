@@ -124,6 +124,23 @@ async def normalize_dot_dk_prefix(handler, event, data):
                 and not parts[0].startswith(("+", "-", "/"))
             )
             if not is_rule:
+                if event.from_user and is_group(event) and event.from_user.id != OWNER_ID:
+                    command_token = re.sub(r"^[.!/]+", "", parts[0].lower())
+                    # Generic per-command rank rule: .дк топ 3 -> .дк топ вся requires rank 3.
+                    generic_key = "modrank_cmd_" + re.sub(r"[^a-zа-яё0-9]+", "_", command_token).strip("_")
+                    try:
+                        settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
+                        required = int(settings.get(generic_key, settings.get("modrank_default", 1)) or 1)
+                        required = max(1, min(5, required))
+                        actual = await asyncio.to_thread(user_rank, event.chat.id, event.from_user.id)
+                    except (TypeError, ValueError):
+                        required, actual = 1, 0
+                    if actual < required:
+                        await event.answer(
+                            f"⛔ Для этой команды нужен ранг <b>{required} — {role_name(required)}</b>. "
+                            f"Твой ранг: <b>{actual} — {role_name(actual)}</b>."
+                        )
+                        return
                 event.text = body
     return await handler(event, data)
 
@@ -3494,7 +3511,10 @@ async def command_rank_rule_cmd(message: Message) -> None:
         save_chat_settings(message.chat.id, settings)
         await message.answer(f"🔐 Общий порог доступа установлен: <b>{required} — {role_name(required)}</b>.")
         return
-    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin","call","nick"}:
+    if key is None:
+        first_token = command_phrase.split()[0] if command_phrase.split() else "unknown"
+        key = "cmd_" + re.sub(r"[^a-zа-яё0-9]+", "_", first_token).strip("_")
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin","call","nick"} and not key.startswith("cmd_"):
         await message.answer(
             "Не удалось распознать команду. Склонения поддерживаются.\n"
             "Примеры: <code>.дк мутами 2</code>, <code>.дк за баны 4</code>, "
