@@ -104,6 +104,29 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+@router.message.outer_middleware
+async def normalize_dot_dk_prefix(handler, event, data):
+    """Let .дк prefix reuse existing command handlers without duplicating command logic.
+
+    A final rank digit is kept for .дк <command> <rank> configuration, e.g. .дк ник 4.
+    Commands beginning with + or - are never mistaken for access-rule configuration.
+    """
+    if isinstance(event, Message) and event.text:
+        raw = event.text.strip()
+        match = re.match(r"(?is)^\.дк\s+(.+)$", raw)
+        if match:
+            body = match.group(1).strip()
+            parts = body.split()
+            is_rule = (
+                len(parts) >= 2
+                and parts[-1].isdigit()
+                and parts[-1] in {"1", "2", "3", "4", "5"}
+                and not parts[0].startswith(("+", "-", "/"))
+            )
+            if not is_rule:
+                event.text = body
+    return await handler(event, data)
+
 # Register participant-call aliases before all feature handlers. aiogram stops at
 # the first matching handler, so this must precede broad text/command handlers.
 @router.message(Command("sbor"))
