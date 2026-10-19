@@ -594,6 +594,28 @@ def user_rank(chat_id: int, user_id: int) -> int:
 def invalidate_user_rank(chat_id: int, user_id: int) -> None:
     _USER_RANK_CACHE.pop((chat_id, user_id), None)
 
+async def nickname_rank_allowed(message: Message) -> bool:
+    """Enforce the .дк ник N rank threshold for both setting and clearing nicknames."""
+    if not message.from_user or not is_group(message):
+        await message.answer("Эта команда работает в группе.")
+        return False
+    if message.from_user.id == OWNER_ID:
+        return True
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    try:
+        required = int(settings.get("modrank_nick", settings.get("modrank_default", 1)) or 1)
+    except (TypeError, ValueError):
+        required = 1
+    required = max(1, min(5, required))
+    actual = await asyncio.to_thread(user_rank, message.chat.id, message.from_user.id)
+    if actual < required:
+        await message.answer(
+            f"⛔ Для изменения или сброса ников нужен ранг "
+            f"<b>{required} — {role_name(required)}</b>. Твой ранг: <b>{actual} — {role_name(actual)}</b>."
+        )
+        return False
+    return True
+
 async def require_admin(message: Message, min_rank: int = 1) -> bool:
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
@@ -2569,8 +2591,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     match = re.match(r"(?is)^(?:\.дк\s+)?(?:\+ник|/nick)(?:@\w+)?(?:\s+(.+))?$", raw)
     nickname = (match.group(1) or "").strip() if match else ""
-    if not await is_admin(bot, message.chat.id, message.from_user.id):
-        await message.answer("⛔ Устанавливать и менять ники могут только администраторы чата.")
+    if not await nickname_rank_allowed(message):
         return
     target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
     if not target_user or target_user.is_bot:
@@ -2604,8 +2625,7 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
         return
     if not message.from_user:
         return
-    if not await is_admin(bot, message.chat.id, message.from_user.id):
-        await message.answer("⛔ Устанавливать и сбрасывать ники могут только администраторы чата.")
+    if not await nickname_rank_allowed(message):
         return
     target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
     if not target_user or target_user.is_bot:
@@ -3410,6 +3430,7 @@ async def command_rank_rule_cmd(message: Message) -> None:
         "пин":"pin", "пинить":"pin", "пинь":"pin", "пиньте":"pin", "пином":"pin", "пина":"pin", "пину":"pin", "пины":"pin", "пинами":"pin", "закрепить":"pin", "закрепи":"pin", "закрепите":"pin", "закрепление":"pin", "закрепом":"pin", "закреп":"pin",
         "анпин":"unpin", "анпинить":"unpin", "открепить":"unpin", "открепи":"unpin", "открепите":"unpin", "снять закреп":"unpin", "снять закрепление":"unpin", "открепление":"unpin",
         "калл":"call", "каллить":"call", "каллом":"call", "каллу":"call", "калла":"call", "каллы":"call", "каллами":"call", "колл":"call", "коллом":"call", "коллы":"call", "коллами":"call", "call":"call", "calling":"call", "сбор":"call", "сбора":"call", "сбору":"call", "сбором":"call", "сборе":"call", "сборы":"call", "сборами":"call", "созыв":"call", "созыва":"call", "созвать":"call", "вызов":"call", "вызова":"call", "вызовом":"call", "вызовы":"call", "общий сбор":"call", "вызов участников":"call",
+        "ник":"nick", "ники":"nick", "никнейм":"nick", "никнеймы":"nick", "установка ника":"nick",
         "общий":"__default__", "общий доступ":"__default__", "все команды":"__default__",
     }
     key = exact_aliases.get(command_phrase)
@@ -3450,7 +3471,7 @@ async def command_rank_rule_cmd(message: Message) -> None:
         save_chat_settings(message.chat.id, settings)
         await message.answer(f"🔐 Общий порог доступа установлен: <b>{required} — {role_name(required)}</b>.")
         return
-    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin","call"}:
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin","call","nick"}:
         await message.answer(
             "Не удалось распознать команду. Склонения поддерживаются.\n"
             "Примеры: <code>.дк мутами 2</code>, <code>.дк за баны 4</code>, "
