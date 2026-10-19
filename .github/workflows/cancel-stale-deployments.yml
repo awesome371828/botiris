@@ -9,6 +9,11 @@ permissions:
   actions: write
   contents: read
 
+# Only the newest cancellation sweep needs to run.
+concurrency:
+  group: pear-cm-cancel-stale-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cancel-stale:
     runs-on: ubuntu-latest
