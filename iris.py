@@ -109,6 +109,7 @@ dp.include_router(router)
 @router.message(Command("sbor"))
 @router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s+.*|$)"))
+@router.message(F.caption.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s+.*|$)"))
 async def participant_call_dispatch_first(message: Message) -> None:
     await gather_cmd(message)
 
@@ -895,7 +896,7 @@ def role_name(rank: int) -> str:
             5: "Создатель"}.get(max(0, min(5, int(rank))), "Участник")
 
 def moderation_command_key(message: Message) -> str | None:
-    text_value = re.sub(r"^[.!/]+", "", (message.text or "").strip().lower())
+    text_value = re.sub(r"^[.!/]+", "", (message.text or message.caption or "").strip().lower())
     text_value = re.sub(r"@\w+", "", text_value)
     words = text_value.split()
     if not words:
@@ -920,8 +921,9 @@ def moderation_command_key(message: Message) -> str | None:
             "анварн":"unwarn", "снятьварн":"unwarn", "убратьварн":"unwarn",
             "размут":"unmute", "анмут":"unmute", "унмут":"unmute", "снятьмут":"unmute", "убратьмут":"unmute",
             "разбан":"unban", "повысить":"promote", "повыситьранг":"promote", "понизить":"demote",
-            "понизитьранг":"demote", "очистить":"purge", "-смс":"delete", "пин":"pin", "анпин":"unpin"}.get(first,
-            first if first in {"mute","unmute","ban","unban","kick","warn","unwarn","clearwarns","promote","demote","purge","delete","pin","unpin"} else None)
+            "понизитьранг":"demote", "очистить":"purge", "-смс":"delete", "пин":"pin", "анпин":"unpin",
+            "калл":"call", "колл":"call", "call":"call", "сбор":"call", "вызов":"call", "созыв":"call"}.get(first,
+            first if first in {"mute","unmute","ban","unban","kick","warn","unwarn","clearwarns","promote","demote","purge","delete","pin","unpin","call"} else None)
 
 def required_rank_for(message: Message, default_rank: int) -> int:
     key = moderation_command_key(message)
@@ -3232,7 +3234,7 @@ async def command_rank_rule_cmd(message: Message) -> None:
         for key, label in (("mute","мут"),("unmute","размут"),("ban","бан"),("unban","разбан"),
                            ("kick","кик"),("warn","варн"),("unwarn","снять варн"),("promote","повысить"),
                            ("demote","понизить"),("purge","очистить"),("delete","удалить сообщения"),
-                           ("pin","закрепить"),("unpin","открепить")):
+                           ("pin","закрепить"),("unpin","открепить"),("call","калл / сбор")):
             rules.append(f"• {label}: ранг {settings.get('modrank_'+key, default_rank)}")
         await message.answer(
             "<b>🔐 Доступ к командам (.дк)</b>\n"
@@ -3271,8 +3273,9 @@ async def command_rank_rule_cmd(message: Message) -> None:
         "мут":"mute", "замут":"mute", "замутить":"mute", "замуть":"mute", "дать мут":"mute", "выдать мут":"mute",
         "размут":"unmute", "анмут":"unmute", "унмут":"unmute", "снять мут":"unmute", "снять муту":"unmute",
         "убрать мут":"unmute", "убрать муту":"unmute", "снятьмут":"unmute",
-        "бан":"ban", "забанить":"ban", "дать бан":"ban", "выдать бан":"ban",
-        "разбан":"unban", "снять бан":"unban", "разбанить":"unban",
+        "бан":"ban", "бана":"ban", "бану":"ban", "баном":"ban", "бане":"ban", "баны":"ban", "банами":"ban", "банов":"ban", "банах":"ban",
+        "забанить":"ban", "забань":"ban", "забаньте":"ban", "забанили":"ban", "дать бан":"ban", "выдать бан":"ban", "выдать баны":"ban", "за баны":"ban", "за бан":"ban",
+        "разбан":"unban", "разбана":"unban", "разбану":"unban", "разбаном":"unban", "разбанить":"unban", "разбаньте":"unban", "снять бан":"unban", "снять баны":"unban", "убрать бан":"unban", "убрать баны":"unban",
         "кик":"kick", "кикнуть":"kick", "выгнать":"kick", "исключить":"kick",
         "варн":"warn", "варны":"warn", "варнами":"warn", "варнов":"warn", "предупреждение":"warn",
         "предупреждения":"warn", "предупредить":"warn", "дать варн":"warn", "выдать варн":"warn",
@@ -3288,8 +3291,9 @@ async def command_rank_rule_cmd(message: Message) -> None:
         "понижай":"demote", "понизь":"demote",
         "очистить":"purge", "очистка":"purge", "удалить последние сообщения":"purge",
         "смс":"delete", "сообщение":"delete", "сообщения":"delete", "удалить сообщения":"delete",
-        "пин":"pin", "пинить":"pin", "закрепить":"pin", "закрепление":"pin",
-        "анпин":"unpin", "открепить":"unpin", "снять закреп":"unpin", "открепление":"unpin",
+        "пин":"pin", "пинить":"pin", "пинь":"pin", "пиньте":"pin", "пином":"pin", "пина":"pin", "пину":"pin", "пины":"pin", "пинами":"pin", "закрепить":"pin", "закрепи":"pin", "закрепите":"pin", "закрепление":"pin", "закрепом":"pin", "закреп":"pin",
+        "анпин":"unpin", "анпинить":"unpin", "открепить":"unpin", "открепи":"unpin", "открепите":"unpin", "снять закреп":"unpin", "снять закрепление":"unpin", "открепление":"unpin",
+        "калл":"call", "каллить":"call", "каллом":"call", "каллу":"call", "калла":"call", "каллы":"call", "каллами":"call", "колл":"call", "коллом":"call", "коллы":"call", "коллами":"call", "call":"call", "calling":"call", "сбор":"call", "сбора":"call", "сбору":"call", "сбором":"call", "сборе":"call", "сборы":"call", "сборами":"call", "созыв":"call", "созыва":"call", "созвать":"call", "вызов":"call", "вызова":"call", "вызовом":"call", "вызовы":"call", "общий сбор":"call", "вызов участников":"call",
         "общий":"__default__", "общий доступ":"__default__", "все команды":"__default__",
     }
     key = exact_aliases.get(command_phrase)
@@ -3320,6 +3324,8 @@ async def command_rank_rule_cmd(message: Message) -> None:
             key = "delete"
         elif any(t.startswith(("анпин", "откреп", "снят")) for t in tokens) and any(t.startswith(("пин", "закреп")) for t in tokens):
             key = "unpin"
+        elif any(t.startswith(("калл", "колл", "call", "сбор", "созыв", "вызов")) for t in tokens):
+            key = "call"
         elif any(t.startswith(("пин", "закреп")) for t in tokens):
             key = "pin"
     if key == "__default__":
@@ -3328,11 +3334,11 @@ async def command_rank_rule_cmd(message: Message) -> None:
         save_chat_settings(message.chat.id, settings)
         await message.answer(f"🔐 Общий порог доступа установлен: <b>{required} — {role_name(required)}</b>.")
         return
-    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin"}:
+    if key not in {"mute","unmute","ban","unban","kick","warn","unwarn","promote","demote","purge","delete","pin","unpin","call"}:
         await message.answer(
             "Не удалось распознать команду. Склонения поддерживаются.\n"
             "Примеры: <code>.дк мутами 2</code>, <code>.дк за баны 4</code>, "
-            "<code>.дк снять все предупреждения 3</code>, <code>.дк повысить рангом 2</code>."
+            "<code>.дк снять все предупреждения 3</code>, <code>.дк повысить рангом 2</code>, <code>.дк калл 4</code>."
         )
         return
     settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
@@ -6127,10 +6133,11 @@ async def participant_call_unregister(message: Message) -> None:
 @router.message(Command("sbor"))
 @router.message(F.text.regexp(r"(?i)^\s*/sbor(?:@pear_cm_bot)?(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s|$)"))
+@router.message(F.caption.regexp(r"(?i)^\s*(?:калл|колл|call|сбор|общий сбор|вызов участников)(?:\s|$)"))
 async def gather_cmd(message: Message) -> None:
-    raw = (message.text or "").strip()
+    raw = (message.text or message.caption or "").strip()
     log.info("Received participant call in chat_id=%s from user_id=%s text=%r", message.chat.id, message.from_user.id if message.from_user else None, raw)
-    if not await require_real_admin(message):
+    if not await require_admin(message, min_rank=1):
         if message.from_user:
             await audit_wait(message.chat.id, message.from_user.id, "participant_call_denied",
                              details=f"text={raw[:300]!r}; reason=not_telegram_admin")
@@ -6146,7 +6153,12 @@ async def gather_cmd(message: Message) -> None:
         first = parts[0].casefold()
         if first in {"калл", "колл", "call", "сбор"}:
             notice = parts[1].strip() if len(parts) > 1 else "📢 Общий сбор!"
-    safe_notice = escape(notice[:500])
+    safe_notice = escape(notice[:600])
+    photo_file_id = None
+    if message.photo:
+        photo_file_id = message.photo[-1].file_id
+    elif message.reply_to_message and message.reply_to_message.photo:
+        photo_file_id = message.reply_to_message.photo[-1].file_id
     opted_out: set[tuple[int, int]] = getattr(gather_cmd, "_opted_out", set())
 
     def load_chat_users() -> list[dict]:
@@ -6308,10 +6320,17 @@ async def gather_cmd(message: Message) -> None:
                 chunks.append(current)
             total = len(chunks)
             messages = [build_heading(i + 1, total) + chunk for i, chunk in enumerate(chunks)]
+        if photo_file_id:
+            photo_caption = (
+                f"📣 <b>ОБЩИЙ СБОР</b>\n"
+                f"🔔 <b>{safe_notice}</b>\n"
+                f"👥 Кого зовём: <b>{len(mentions)}</b>"
+            )
+            await message.answer_photo(photo=photo_file_id, caption=photo_caption[:1024])
         for outgoing in messages:
             await message.answer(outgoing)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
-                         "participant_call_success", details=f"mentioned={len(mentions)}; messages={len(messages)}; excluded={len(excluded)}; reason={notice[:300]!r}")
+                         "participant_call_success", details=f"mentioned={len(mentions)}; messages={len(messages)}; photo={bool(photo_file_id)}; excluded={len(excluded)}; reason={notice[:300]!r}")
     except Exception as exc:
         log.exception("Failed to send participant-call mentions chat=%s count=%s", message.chat.id, len(mentions))
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
