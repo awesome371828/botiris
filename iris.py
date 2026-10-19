@@ -2697,18 +2697,22 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
         await message.answer("📒 В этом чате пока нет установленных ников. Задать: <code>+ник ИМЯ</code>.")
         return
 
-    # Clean, one-column directory: custom nicknames only. No usernames,
-    # text mentions, profile links or extra suffixes that could ping people.
-    # Render every nickname as a separate, clearly spaced line. Normalize
-    # accidental literal "\\n" sequences saved in nickname data into real line breaks,
-    # then flatten them so one nickname can never split the directory layout.
+    # Use ordinary HTTPS t.me links for usernames. These are clickable profile
+    # links, not Telegram text_mention entities, so they do not ping members.
+    # Never use tg://user?id= links in this directory.
     lines = [f"📒 <b>Ники чата</b> · {len(rows)}", ""]
     for index, row in enumerate(rows, 1):
         raw_nick = str(row.get("display_name") or "").strip()
         raw_nick = re.sub(r"(?i)\\n", " ", raw_nick)
         raw_nick = re.sub(r"\s+", " ", raw_nick).strip()
         nick = escape(raw_nick or "Без имени")
-        lines.append(f"<b>{index:02}.</b>  {nick}")
+        user = row.get("_user") or {}
+        username = str(user.get("username") or "").strip().lstrip("@")
+        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            profile = f' · <a href="https://t.me/{escape(username, quote=True)}">@{escape(username)}</a>'
+        else:
+            profile = ""
+        lines.append(f"<b>{index:02}.</b>  {nick}{profile}")
     chunks: list[str] = []
     current = ""
     for line in lines:
