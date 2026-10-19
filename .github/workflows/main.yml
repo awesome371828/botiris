@@ -83,15 +83,18 @@ jobs:
           set -uo pipefail
           while true; do
             echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            # Do not wrap Python in GNU timeout: timeout's process-group signal
-            # was terminating the shell loop too, causing every run to fail after 4h50m.
-            python -u iris.py
-            code=$?
+            # --foreground keeps GNU timeout from signaling the surrounding shell.
+            # The if/else captures non-zero exits despite GitHub Actions bash -e.
+            if timeout --foreground --signal=TERM --kill-after=20s 17400s python -u iris.py; then
+              code=0
+            else
+              code=$?
+            fi
             echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-              echo "Process was terminated; checking whether the runner recycle caused it."
+              echo "Restart interval reached; starting a fresh Pear CM process."
             elif [ "$code" -eq 23 ]; then
-              echo "::error::Telegram polling conflict detected. Another deployment is using this token; stopping to avoid a restart loop."
+              echo "::error::Telegram polling conflict detected; stopping instead of restarting forever because another deployment is using this token."
               exit 23
             fi
             echo "Restarting Pear CM in 10 seconds."
