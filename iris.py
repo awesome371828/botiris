@@ -2613,6 +2613,103 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
     }, "chat_id,user_id")
     await message.answer("♻️ Ник сброшен. Теперь в статистике будет отображаться имя из Telegram." if saved else "Не удалось убрать ник. Проверь Supabase.")
 
+@router.message(Command("nicks"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:ники|никнеймы|все ники|список ников)(?:\s|$)"))
+async def list_chat_nicknames_cmd(message: Message) -> None:
+    """List custom nicknames only for this exact chat, never across all chats."""
+    if not is_group(message):
+        await message.answer("📒 Список ников доступен внутри группы.")
+        return
+
+    def load_nicknames() -> list[dict]:
+        if db is None:
+            return []
+        profiles: list[dict] = []
+        offset = 0
+        page_size = 500
+        while True:
+            page = (
+                db.table("bot_member_profiles")
+                .select("user_id,display_name")
+                .eq("chat_id", message.chat.id)
+                .range(offset, offset + page_size - 1)
+                .execute()
+                .data or []
+            )
+            profiles.extend(
+                row for row in page
+                if str(row.get("display_name") or "").strip()
+            )
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        if not profiles:
+            return []
+        users: dict[int, dict] = {}
+        offset = 0
+        while True:
+            page = (
+                db.table("bot_users")
+                .select("user_id,first_name,username")
+                .eq("chat_id", message.chat.id)
+                .range(offset, offset + page_size - 1)
+                .execute()
+                .data or []
+            )
+            for row in page:
+                try:
+                    users[int(row.get("user_id") or 0)] = row
+                except (TypeError, ValueError):
+                    continue
+            if len(page) < page_size:
+                break
+            offset += page_size
+        for profile in profiles:
+            try:
+                uid = int(profile.get("user_id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            profile["_user"] = users.get(uid, {})
+        profiles.sort(key=lambda row: str(row.get("display_name") or "").casefold())
+        return profiles
+
+    try:
+        rows = await asyncio.to_thread(load_nicknames)
+    except Exception:
+        log.exception("Failed to load chat nicknames chat=%s", message.chat.id)
+        await message.answer("⚠️ Не удалось загрузить ники этого чата. Проверь, что в Supabase выполнен актуальный schema.sql.")
+        return
+    if db is None:
+        await message.answer("⚠️ Список ников хранится в Supabase, но база сейчас не настроена.")
+        return
+    if not rows:
+        await message.answer("📒 В этом чате пока нет установленных ников. Задать: <code>+ник ИМЯ</code>.")
+        return
+
+    lines = [f"📒 <b>Ники этого чата</b> · всего: <b>{len(rows)}</b>", ""]
+    for index, row in enumerate(rows, 1):
+        nick = escape(str(row.get("display_name") or "").strip())
+        user = row.get("_user") or {}
+        username = str(user.get("username") or "").strip().lstrip("@")
+        first_name = escape(str(user.get("first_name") or "Участник").strip())
+        suffix = f" (@{escape(username)})" if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else f" · {first_name}"
+        lines.append(f"{index}. <b>{nick}</b>{suffix}")
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = current + "\\n" + line if current else line
+        if len(candidate) > 3900 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await message.answer(chunk)
+
+
 @router.message(Command("logs"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?логи(?:\s|$)"))
 async def logs_cmd(message: Message) -> None:
