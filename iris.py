@@ -1177,10 +1177,16 @@ async def profile(message: Message) -> None:
     next_goal = next((goal for goal in (25, 100, 500, 1000) if messages < goal), None)
     progress = f"📈 До следующего рубежа: <b>{next_goal - messages}</b> сообщ." if next_goal else "✨ Достигнут высокий рубеж активности!"
     await message.answer(
-        f"👤 <b>Профиль участника</b>\n{mention(message.from_user.id, message.from_user.full_name)}\n\n"
-        f"💬 Сообщений: <b>{messages}</b>\n🏅 Ранг: <b>{rank}</b> · <b>{level_name}</b>\n⚠️ Предупреждения: <b>{warns}</b>\n{progress}\n\n"
-        "💡 Подсказка: /top — рейтинг участников, /activity — статистика активности."
-
+        "👤 <b>МОЙ ПРОФИЛЬ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🪪 {profile_link(message.from_user.id, message.from_user.full_name)}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"💬 <b>Сообщений:</b> {messages:,}\n"
+        f"🏅 <b>Ранг:</b> {role_name(rank)} · <code>{rank}/5</code>\n"
+        f"✨ <b>Уровень активности:</b> {level_name}\n"
+        f"⚠️ <b>Предупреждений:</b> {warns}\n"
+        f"{progress}\n\n"
+        "📚 Команды: <code>кто я</code> · <code>топ</code> · <code>активность</code>".replace(",", " ")
     )
 
 @router.message(Command("time"))
@@ -2689,14 +2695,12 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
         await message.answer("📒 В этом чате пока нет установленных ников. Задать: <code>+ник ИМЯ</code>.")
         return
 
-    lines = [f"📒 <b>Ники этого чата</b> · всего: <b>{len(rows)}</b>", ""]
+    # Clean, one-column directory: custom nicknames only. No usernames,
+    # text mentions, profile links or extra suffixes that could ping people.
+    lines = [f"📒 <b>Ники чата</b> · {len(rows)}", ""]
     for index, row in enumerate(rows, 1):
         nick = escape(str(row.get("display_name") or "").strip())
-        user = row.get("_user") or {}
-        username = str(user.get("username") or "").strip().lstrip("@")
-        first_name = escape(str(user.get("first_name") or "Участник").strip())
-        suffix = f" (@{escape(username)})" if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else f" · {first_name}"
-        lines.append(f"{index}. <b>{nick}</b>{suffix}")
+        lines.append(f"{index}. {nick}")
     chunks: list[str] = []
     current = ""
     for line in lines:
@@ -5686,34 +5690,55 @@ def _feature_safe_name(row: dict) -> str:
     return escape(name[:80])
 
 @router.message(Command("whois"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:кто я|кто ты|кто он|кто она|мой статус)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:кто\s+я(?:\s+(?:такой|такая|тут|здесь))?|кто\s+ты(?:\s+(?:такой|такая))?|кто\s+он|кто\s+она|кто\s+это|мой\s+статус|инфо(?:рмация)?)(?:\s|$)"))
 async def who_is_cmd(message: Message) -> None:
     if not message.from_user:
         return
-    text_value = (message.text or "").strip()
-    text_value = re.sub(r"(?i)^/whois(?:@\w+)?\s*", "", text_value).strip() or "кто я"
-    first = _feature_normalize(text_value.split()[0]) if text_value.split() else "кто я"
-    target = None
-    if first in {"кто я", "мой статус"} or _feature_normalize(text_value) == "кто я":
+    raw = (message.text or "").strip()
+    text_value = re.sub(r"(?i)^[.!/]?(?:whois|кто\s+я(?:\s+(?:такой|такая|тут|здесь))?|кто\s+ты(?:\s+(?:такой|такая))?|кто\s+он|кто\s+она|кто\s+это|мой\s+статус|инфо(?:рмация)?)(?:@\w+)?\s*", "", raw).strip()
+    normalized = _feature_normalize(raw)
+    self_query = bool(re.match(r"(?i)^[.!/]?(?:кто\s+я(?:\s+(?:такой|такая|тут|здесь))?|мой\s+статус)(?:\s|$)", raw))
+    # Iris-like behavior: when the command is a reply, inspect the replied-to
+    # user even if the phrase is "кто я"; otherwise "кто я" means the sender.
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = await _feature_target(message, text_value or None)
+    elif self_query or normalized in {"кто я", "кто я такой", "кто я такая", "кто я тут", "кто я здесь", "мой статус"}:
         target = await asyncio.to_thread(db_one, "bot_users", user_id=message.from_user.id, chat_id=message.chat.id)
         target = target or {"user_id":message.from_user.id,"username":message.from_user.username,"first_name":message.from_user.full_name,"rank":0,"messages":0,"warns":0}
     else:
-        rest = re.sub(r"(?i)^\s*(?:кто ты|кто он|кто она)\s*", "", text_value).strip()
-        target = await _feature_target(message, rest or None)
+        target = await _feature_target(message, text_value or None)
     if not target:
-        await message.answer("Не нашёл участника. Ответь на его сообщение командой «кто ты» или укажи @username, который уже встречался в этом чате.")
+        await message.answer("🔎 <b>Участник не найден</b>\nОтветь на сообщение командой <code>кто я</code> / <code>кто ты</code> или укажи @username/ID участника, которого бот уже видел в этом чате.")
         return
     uid = int(target.get("user_id") or 0)
     user = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id) or target
-    rank = max(0,min(5,int(user.get("rank") or 0)))
-    warns = int(user.get("warns") or 0)
-    msgs = int(user.get("messages") or 0)
-    name = user.get("first_name") or target.get("first_name") or "Участник"
-    uname = ("@" + str(user.get("username"))) if user.get("username") else "нет username"
+    try:
+        rank = max(0, min(5, int(user.get("rank") or 0)))
+    except (TypeError, ValueError):
+        rank = 0
+    try:
+        warns = int(user.get("warns") or 0)
+    except (TypeError, ValueError):
+        warns = 0
+    try:
+        msgs = int(user.get("messages") or 0)
+    except (TypeError, ValueError):
+        msgs = 0
+    name = str(user.get("first_name") or target.get("first_name") or "Участник")
+    username = str(user.get("username") or target.get("username") or "").strip().lstrip("@")
+    display = profile_link(uid, name) if uid > 0 else escape(name)
+    uname = f"@{escape(username)}" if username else "не указан"
+    # Consistent compact visual hierarchy; profile_link is clickable but does not notify.
     await message.answer(
-        f"🪪 <b>Карточка участника</b>\nИмя: {mention(uid, str(name))}\n"
-        f"Username: <code>{escape(uname)}</code>\nID: <code>{uid}</code>\n"
-        f"Ранг: <b>{role_name(rank)}</b> ({rank})\nСообщений: <b>{msgs}</b>\nПредупреждений: <b>{warns}</b>"
+        "🪪 <b>ПРОФИЛЬ УЧАСТНИКА</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Имя:</b> {display}\n"
+        f"🔗 <b>Username:</b> <code>{uname}</code>\n"
+        f"🆔 <b>ID:</b> <code>{uid}</code>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🏅 <b>Ранг:</b> {role_name(rank)} · <code>{rank}/5</code>\n"
+        f"💬 <b>Сообщений:</b> {msgs:,}\n"
+        f"⚠️ <b>Предупреждений:</b> {warns}".replace(",", " ")
     )
 
 @router.message(F.text.regexp(r"(?i)^\s*лдк(?:\s|$)"))
