@@ -2705,8 +2705,8 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
     lines = [f"📒 <b>Ники чата</b> · {len(rows)}", ""]
     for index, row in enumerate(rows, 1):
         raw_nick = str(row.get("display_name") or "").strip()
-        raw_nick = re.sub(r"(?i)\\\\n", " ", raw_nick)
-        raw_nick = re.sub(r"\\s+", " ", raw_nick).strip()
+        raw_nick = re.sub(r"(?i)\\n", " ", raw_nick)
+        raw_nick = re.sub(r"\s+", " ", raw_nick).strip()
         nick = escape(raw_nick or "Без имени")
         lines.append(f"<b>{index:02}.</b>  {nick}")
     chunks: list[str] = []
