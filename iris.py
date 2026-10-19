@@ -2706,7 +2706,7 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
     chunks: list[str] = []
     current = ""
     for line in lines:
-        candidate = current + "\\n" + line if current else line
+        candidate = current + "\n" + line if current else line
         if len(candidate) > 3900 and current:
             chunks.append(current)
             current = line
