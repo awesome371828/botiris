@@ -1047,7 +1047,7 @@ def args_after_command(message: Message) -> list[str]:
         if stripped != text_value:
             return stripped.split()
     text_value = re.sub(
-        r"^[.!/]?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?|размут(?:ить|и|ь|ьте|ите|а|у)?|анмут(?:ить|и|ь|ьте|ите)?|унмут|бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте|ьте|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте|ируйте)?|разбан(?:ить|а|у|ь|ьте)?|кик(?:нуть|ни|нись|а|у|ом|е|и|ов|ами)?|исключ(?:ить|и|ите)|выгнать|выгони|выгоните|выдвор(?:ить|и|ите)|изгнать|изгони|варн(?:ить|а|у|ом|е|ы|ов|ами)?|предупред(?:ить|и|ите|и́)|предупреждени(?:е|я|ю|ем|и)|предупреждай|предупреждайте|анварн|снятьварн|убратьварн|повысить(?:\s*[- ]?\s*ранг)?|повышени(?:е|я|ю|ем|и)|повышай|поднять(?:\s+ранг)?|продвинуть|назначить\s+(?:ранг|чин)|присвоить\s+ранг|понизить\s+в\s+должности|понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\s+(?:ранг|чин|админ(?:а|у|ом|е)?|администратор(?:а|у|ом|е)?|модератор(?:а|у|ом|е)?)|убрать\s+(?:ранг|чин)|разжаловать|лишить\s+ранга|очистить|чистка|пин(?:ить|а|у|ом|е)?|закрепить|анпин|открепить)\s*",
+        r"^[.!/]?(?:анмут|размут|унмут|снятьмут|снятьмуту|убратьмут|анмутить|анварн|разварн|снятьварн|убратьварн|мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?|размут(?:ить|и|ь|ьте|ите|а|у)?|анмут(?:ить|и|ь|ьте|ите)?|унмут|бан(?:ить|а|у|ом|е|ы|ов|ами|ах)?|забан(?:ить|ь|ьте|ьте|ьте)?|блок(?:ировать|ируй|ируйте|ни|нуть)?|заблок(?:ировать|ируй|ируйте|ируйте)?|разбан(?:ить|а|у|ь|ьте)?|кик(?:нуть|ни|нись|а|у|ом|е|и|ов|ами)?|исключ(?:ить|и|ите)|выгнать|выгони|выгоните|выдвор(?:ить|и|ите)|изгнать|изгони|варн(?:ить|а|у|ом|е|ы|ов|ами)?|предупред(?:ить|и|ите|и́)|предупреждени(?:е|я|ю|ем|и)|предупреждай|предупреждайте|анварн|снятьварн|убратьварн|повысить(?:\s*[- ]?\s*ранг)?|повышени(?:е|я|ю|ем|и)|повышай|поднять(?:\s+ранг)?|продвинуть|назначить\s+(?:ранг|чин)|присвоить\s+ранг|понизить\s+в\s+должности|понизить(?:\s*[- ]?\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\s+(?:ранг|чин|админ(?:а|у|ом|е)?|администратор(?:а|у|ом|е)?|модератор(?:а|у|ом|е)?)|убрать\s+(?:ранг|чин)|разжаловать|лишить\s+ранга|очистить|чистка|пин(?:ить|а|у|ом|е)?|закрепить|анпин|открепить)\s*",
         "", text_value, count=1, flags=re.I
     )
     return text_value.split()
@@ -1673,7 +1673,11 @@ async def track_activity(message: Message) -> None:
 
 # ── Moderation: shared command implementation ─────────────────────────────────
 async def moderation_target(message: Message, command: str) -> tuple[int, str] | None:
-    target = await resolve_target(message, args_after_command(message))
+    args = args_after_command(message)
+    # A reply is the target by default. Only an explicit @username or long Telegram
+    # ID overrides it; reason text such as "111" must not break reply moderation.
+    explicit = next((x for x in args if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+    target = await resolve_target(message, [explicit] if explicit else ([] if message.reply_to_message else args))
     if not target:
         await message.answer(f"Ответьте на сообщение участника командой <code>/{command}</code>.")
         return None
@@ -1935,7 +1939,8 @@ async def ban_cmd(message: Message) -> None:
 
     raw_args = args_after_command(message)
     if message.reply_to_message:
-        target = await resolve_target(message, raw_args)
+        explicit_target = next((x for x in raw_args if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+        target = await resolve_target(message, [explicit_target] if explicit_target else [])
         remainder = raw_args
     else:
         if not raw_args:
@@ -2095,7 +2100,8 @@ async def warn_cmd(message: Message) -> None:
         return
     # A username/ID explicitly written by the moderator takes priority; a reply
     # is used only when there is no explicit target.
-    target = await resolve_target(message, target_tokens[:1] if target_tokens else [])
+    explicit_target = next((x for x in target_tokens if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+    target = await resolve_target(message, [explicit_target] if explicit_target else ([] if message.reply_to_message else target_tokens[:1]))
     if not target:
         await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
