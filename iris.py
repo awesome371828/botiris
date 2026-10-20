@@ -41,6 +41,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
 )
 from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
 
 try:
     import fcntl
@@ -106,8 +107,20 @@ if not BOT_TOKEN:
 db: Client | None = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        db = create_client(SUPABASE_URL, SUPABASE_KEY)
-        log.info("Supabase client configured")
+        # Supabase's default HTTP timeout can leave a synchronous request waiting
+        # for ~120 seconds. Under group traffic this exhausts asyncio's worker pool
+        # and makes unrelated Telegram updates appear to freeze. Bound every DB
+        # request so a cold/unreachable database degrades gracefully instead.
+        db = create_client(
+            SUPABASE_URL,
+            SUPABASE_KEY,
+            options=ClientOptions(
+                postgrest_client_timeout=4,
+                storage_client_timeout=4,
+                function_client_timeout=4,
+            ),
+        )
+        log.info("Supabase client configured (request timeout=4s)")
     except Exception:
         log.exception("Не удалось создать клиент Supabase")
 else:
@@ -450,7 +463,10 @@ def _db_read_with_retry(table: str, operation: str, build_query):
                             table, operation, elapsed * 1000, attempt + 1)
             return result
         except Exception as exc:
-            if attempt < 1 and _is_transient_db_error(exc):
+            elapsed = time.monotonic() - started
+            # Retry only quick transient failures. Retrying a request that already
+            # consumed most of its timeout doubles the delay and starves worker threads.
+            if attempt < 1 and elapsed < 1.5 and _is_transient_db_error(exc):
                 # Never sleep/retry synchronously on the asyncio event-loop thread.
                 try:
                     asyncio.get_running_loop()
