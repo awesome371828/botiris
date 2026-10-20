@@ -160,12 +160,6 @@ async def bot_commands_topic_toggle(message: Message) -> None:
     match = _BOT_COMMAND_TOPIC_TOGGLES.fullmatch(message.text or "")
     if not match or not message.from_user or not is_group(message):
         return
-    if message.message_thread_id is None:
-        await message.answer(
-            "⚠️ Эта команда работает внутри темы форума. Открой нужную тему и отправь "
-            "<code>+боткоманд</code> или <code>-боткоманд</code> там."
-        )
-        return
 
     try:
         member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
@@ -221,26 +215,9 @@ async def normalize_dot_dk_prefix(handler, event, data):
     if isinstance(event, Message) and event.text:
         raw = event.text.strip()
 
-        # Topic command gate: once a chat uses +боткоманд, process updates only
-        # inside explicitly enabled forum topics. The two toggle commands always pass.
-        if is_group(event):
-            toggle_match = _BOT_COMMAND_TOPIC_TOGGLES.fullmatch(raw)
-            if not toggle_match:
-                try:
-                    settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
-                    if settings.get("bot_commands_topics_mode"):
-                        allowed = settings.get("bot_commands_enabled_topics", [])
-                        topic_id = event.message_thread_id
-                        if topic_id is None or int(topic_id) not in {
-                            int(value) for value in allowed
-                            if str(value).lstrip("-").isdigit()
-                        }:
-                            return
-                except Exception:
-                    # Fail open on a settings read failure to avoid accidentally
-                    # disabling moderation throughout the group.
-                    log.exception("Could not check topic command gate chat=%s", event.chat.id)
-
+        # Commands are enabled uniformly across every topic in every group.
+        # Legacy per-topic settings are intentionally ignored; they must never
+        # silently disable moderation or other commands in a topic.
         match = re.match(r"(?is)^\.дк\s+(.+)$", raw)
         if match:
             body = match.group(1).strip()
@@ -3078,10 +3055,17 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
         user = row.get("_user") or {}
         username = str(user.get("username") or "").strip().lstrip("@")
         if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-            profile = f' · <a href="https://t.me/{escape(username, quote=True)}">@{escape(username)}</a>'
+            # HTTPS profile links are clickable and do not create mention entities.
+            linked_nick = f'<a href="https://t.me/{escape(username, quote=True)}">{nick}</a>'
         else:
-            profile = ""
-        lines.append(f"<b>{index:02}.</b>  {nick}{profile}")
+            # A tg:// URL inside an HTML text_link is a clickable profile link,
+            # unlike a text_mention entity it does not ping the member.
+            try:
+                uid = int(row.get("user_id") or 0)
+            except (TypeError, ValueError):
+                uid = 0
+            linked_nick = f'<a href="tg://user?id={uid}">{nick}</a>' if uid > 0 else nick
+        lines.append(f"<b>{index:02}.</b>  {linked_nick}")
     chunks: list[str] = []
     current = ""
     for line in lines:
