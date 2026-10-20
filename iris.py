@@ -1130,8 +1130,15 @@ async def help_command(message: Message) -> None:
     # Owner/operator commands are only disclosed in the private bot chat.
     if is_privileged:
         help_text += (
-            "\n\n<b>Управление ботом</b>: /owner, /status, /ping, /diag, "
-            "/logs, /globalstats, /modules, /operator ID, /maintenance on|off"
+            "\n\n<b>🔐 Команды владельца и операторов (только в личке)</b>\\n"
+            "• /owner, овнер панель, панель овнера, админ-панель — панель владельца\\n"
+            "• /status, статус бота — состояние; /ping — задержка; /diag, диагностика — диагностика\\n"
+            "• /logs N, логи N — последние системные события; /audit N, аудит N — журнал аудита\\n"
+            "• /globalstats, глобальная статистика — статистика по всем чатам; /exportstats, экспорт статистики — выгрузка статистики\\n"
+            "• /modules — состояние модулей; /maintenance on|off, техобслуживание вкл|выкл — режим обслуживания\\n"
+            "• /operator ID, выдать доступ ID — выдать операторский доступ; /revokeoperator ID, отозвать доступ ID — отозвать доступ\\n"
+            "• глобальный бан ID причина / глобальный разбан ID — глобальная блокировка или снятие блокировки\\n"
+            "• проверка прав — проверить разрешения бота в текущем чате"
         )
     await message.answer(
         help_text,
