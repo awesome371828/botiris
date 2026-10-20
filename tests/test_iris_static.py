@@ -316,10 +316,10 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Slow update handler (target <1s)", self.source)
 
     def test_economy_mutations_use_atomic_rpc(self):
-        start = self.source.index("async def economy_cmd")
+        start = self.source.index("async def _economy_rpc")
         end = self.source.index("# Clans", start)
         body = self.source[start:end]
-        self.assertIn("async def _economy_rpc", body)
+        self.assertIn("async def economy_cmd", body)
         self.assertIn('"bonus"', body)
         self.assertIn('"purchase"', body)
         self.assertIn('"transfer"', body)
