@@ -318,7 +318,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 declare
     v_balance bigint;
     v_target_balance bigint;
@@ -402,7 +402,7 @@ begin
 
     return jsonb_build_object('ok', false, 'reason', 'invalid_request');
 end;
-$;
+$$;
 
 revoke all on function public.pear_economy_action(bigint, bigint, text, bigint, bigint, text) from public, anon, authenticated;
 grant execute on function public.pear_economy_action(bigint, bigint, text, bigint, bigint, text) to service_role;
