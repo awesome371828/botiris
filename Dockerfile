@@ -15,10 +15,11 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 # Copy every local module imported by the application.
-COPY iris.py moderation_full.py pear_core.py schema.sql ./
+COPY iris.py moderation_full.py pear_core.py schema.sql entrypoint.sh ./
+RUN chmod +x /app/entrypoint.sh
 
 # Fail the image build early if a runtime module is missing or has syntax errors.
 RUN python -m py_compile iris.py moderation_full.py pear_core.py
 
 # Run the bot directly. Docker's restart policy handles process/host restarts.
-CMD ["python", "-u", "iris.py"]
+CMD ["/app/entrypoint.sh"]
