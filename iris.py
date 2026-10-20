@@ -332,7 +332,8 @@ FILTER_DEFAULTS = {
 }
 _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
 _CHAT_SETTINGS_CACHE_TIME: dict[int, float] = {}
-_CHAT_SETTINGS_CACHE_TTL = 5.0
+# Settings change infrequently. A longer cache avoids one PostgREST read per chat burst.
+_CHAT_SETTINGS_CACHE_TTL = 60.0
 _FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 _SPAM_LAST: dict[tuple[int, int], tuple[str, float]] = {}
 _SPAM_HISTORY: dict[tuple[int, int], deque[tuple[float, str, int]]] = defaultdict(lambda: deque(maxlen=30))
@@ -419,9 +420,9 @@ def _is_transient_db_error(exc: Exception) -> bool:
     ))
 
 def _db_read_with_retry(table: str, operation: str, build_query):
-    """Retry idempotent Supabase reads/upserts on transient failures with bounded backoff."""
+    """Keep transient database trouble bounded; never let retries pile up behind busy workers."""
     started = time.monotonic()
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             result = build_query()
             elapsed = time.monotonic() - started
@@ -430,7 +431,7 @@ def _db_read_with_retry(table: str, operation: str, build_query):
                             table, operation, elapsed * 1000, attempt + 1)
             return result
         except Exception as exc:
-            if attempt < 2 and _is_transient_db_error(exc):
+            if attempt < 1 and _is_transient_db_error(exc):
                 # Never sleep/retry synchronously on the asyncio event-loop thread.
                 try:
                     asyncio.get_running_loop()
@@ -441,8 +442,8 @@ def _db_read_with_retry(table: str, operation: str, build_query):
                     log.warning("Temporary Supabase %s failure for %s on event loop; skipping blocking retry: %s",
                                 operation, table, exc)
                     return None
-                delay = 0.25 * (2 ** attempt)
-                log.warning("Temporary Supabase %s failure for %s (attempt %s/3); retrying in %.2fs: %s",
+                delay = 0.15
+                log.warning("Temporary Supabase %s failure for %s (attempt %s/2); retrying once in %.2fs: %s",
                             operation, table, attempt + 1, delay, exc)
                 time.sleep(delay)
                 continue
@@ -1589,16 +1590,16 @@ async def _activity_writer_loop() -> None:
             if not await asyncio.to_thread(spool_activity_batch, batch):
                 log.error("Could not durably spool activity batch (size=%s); continuing with Supabase", len(batch))
             async with _ACTIVITY_WRITE_SEMAPHORE:
-                for attempt in range(3):
+                for attempt in range(2):
                     try:
                         await asyncio.to_thread(_persist_activity_batch_sync, batch)
                         persisted = True
                         await asyncio.to_thread(acknowledge_activity, batch)
                         break
                     except Exception:
-                        log.exception("Activity batch persistence failed (attempt %s/3; size=%s)", attempt + 1, len(batch))
-                        if attempt < 2:
-                            await asyncio.sleep(0.5 * (attempt + 1))
+                        log.exception("Activity batch persistence failed (attempt %s/2; size=%s)", attempt + 1, len(batch))
+                        if attempt < 1:
+                            await asyncio.sleep(0.25)
         finally:
             if not persisted:
                 room = max(0, _ACTIVITY_OVERFLOW_MAX - len(_ACTIVITY_OVERFLOW))
@@ -3373,12 +3374,25 @@ def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, An
     cached_at = _CHAT_SETTINGS_CACHE_TIME.get(chat_id, 0.0)
     if not force_refresh and cached is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
         return dict(cached)
-    settings = dict(FILTER_DEFAULTS)
+
+    # A cache miss can coincide with a Supabase outage. Never replace known-good
+    # settings with defaults just because a read timed out; keep serving the last
+    # successful snapshot and refresh it on the next TTL expiry.
     row = db_one("bot_chat_settings", chat_id=chat_id)
     if row and isinstance(row.get("settings"), dict):
+        settings = dict(FILTER_DEFAULTS)
         settings.update(row["settings"])
-    _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-    _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
+        _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
+    elif cached is not None:
+        settings = dict(cached)
+        # Briefly defer another refresh so every incoming message doesn't trigger
+        # its own retry storm while Supabase is unavailable.
+        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
+    else:
+        settings = dict(FILTER_DEFAULTS)
+        _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
     if len(_CHAT_SETTINGS_CACHE) > 2000:
         cutoff = now - _CHAT_SETTINGS_CACHE_TTL * 4
         for cached_chat, stamp in list(_CHAT_SETTINGS_CACHE_TIME.items()):
