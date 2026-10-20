@@ -1703,8 +1703,9 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
         # Internal warnings are stored by Pear CM and do not require Telegram restrict rights.
         return True
     try:
-        me = await bot.get_me()
-        member = await bot.get_chat_member(message.chat.id, me.id)
+        # Bot ID is encoded in its token; avoid a getMe HTTP round-trip on every
+        # moderation command. Reuse the short-lived member cache as well.
+        member = await get_chat_member_cached(bot, message.chat.id, bot.id)
     except TelegramForbiddenError:
         await message.answer("⛔ Бот не имеет доступа к чату. Добавьте его обратно и выдайте права администратора.")
         return False
@@ -1723,9 +1724,14 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
+    # Reject an obviously incomplete command before any Telegram/Supabase permission
+    # checks. This keeps bare «мут» instant instead of making several network calls.
+    original_text = (message.text or "").strip()
+    if not message.reply_to_message and not re.search(r"@\w+|(?<!\d)\d{7,}(?!\d)", original_text):
+        await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известному чату @username/ID.")
+        return
     if not await check_mod(message):
         return
-    original_text = (message.text or "").strip()
     raw_args = re.split(r"(?i)^\s*[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:мут|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)\s*", original_text, maxsplit=1)[-1].split()
     if original_text.startswith("@"):
         raw_args = re.sub(r"(?i)^@\w+\s+(?:мут|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)\s*", "", original_text).split()
@@ -2032,9 +2038,13 @@ async def kick_cmd(message: Message) -> None:
 @router.message(Command("warn"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ам|ами|ах)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
+    # A bare «варн» has no target; answer immediately without DB/rank lookups.
+    raw_args = args_after_command(message)
+    if not message.reply_to_message and not raw_args:
+        await message.answer("Ответьте на сообщение участника или укажите известному чату @username/ID.")
+        return
     if not await check_mod(message, require_restrict=False):
         return
-    raw_args = args_after_command(message)
     target = await resolve_target(message, [] if message.reply_to_message else raw_args[:1])
     if not target:
         await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
