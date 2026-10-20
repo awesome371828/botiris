@@ -75,20 +75,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             self.assertIn(fragment, schema.lower())
 
     def test_natural_temporary_ban_duration_phrases(self):
-        selected = []
-        for node in self.tree.body:
-            if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "_TIME_UNITS"
-                for target in node.targets
-            ):
-                selected.append(node)
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
-                "_unit_seconds", "parse_duration_prefix"
-            }:
-                selected.append(node)
-        namespace = {"re": re, "timedelta": timedelta}
-        exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), namespace)
-        parse = namespace["parse_duration_prefix"]
+        from pear_core import parse_duration_prefix
 
         cases = [
             (["1", "день"], timedelta(days=1), 2),
@@ -99,16 +86,18 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             (["год"], timedelta(days=365), 1),
             (["2", "дня", "и", "3", "часа", "флуд"], timedelta(days=2, hours=3), 5),
             (["1", "час", "30", "минут", "причина"], timedelta(hours=1, minutes=30), 4),
-            (["день"], timedelta(days=1), 1),
-            (["год"], timedelta(days=365), 1),
+            (["30м"], timedelta(minutes=30), 1),
+            (["1ч"], timedelta(hours=1), 1),
+            (["два", "часа"], timedelta(hours=2), 2),
+            (["полчаса"], timedelta(minutes=30), 1),
         ]
         for tokens, expected_duration, expected_consumed in cases:
             with self.subTest(tokens=tokens):
-                result = parse(tokens)
+                result = parse_duration_prefix(tokens)
                 self.assertIsNotNone(result)
                 self.assertEqual(result[0], expected_duration)
                 self.assertEqual(result[1], expected_consumed)
-        self.assertIsNone(parse(["2", "года"]))
+        self.assertIsNone(parse_duration_prefix(["2", "года"]))
 
 
     def test_moderation_and_runtime_safety_guards_are_present(self):
