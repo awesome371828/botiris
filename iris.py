@@ -1832,9 +1832,6 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
         return False
     return True
 
-@router.message(Command("mute"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
 _SHORT_MUTE_TASKS: dict[tuple[int, int], asyncio.Task] = {}
 
 def _cancel_short_mute_expiry(chat_id: int, user_id: int) -> None:
@@ -1876,6 +1873,9 @@ def _schedule_short_mute_expiry(chat_id: int, user_id: int, seconds: float) -> N
         name=f"pear-short-mute-expiry-{chat_id}-{user_id}",
     )
 
+@router.message(Command("mute"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
 async def mute_cmd(message: Message) -> None:
     # Reject an obviously incomplete command before any Telegram/Supabase permission
     # checks. This keeps bare «мут» instant instead of making several network calls.
