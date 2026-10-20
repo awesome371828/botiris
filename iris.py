@@ -2141,6 +2141,7 @@ async def delete_message_cmd(message: Message) -> None:
                     log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
                     return False
 
+        # Delete individually: Telegram Bot API has no bulk-delete endpoint; bound concurrency to stay within API limits.
         # Delete exactly the requested number of preceding message IDs where possible.
         # The command itself is deleted afterwards and is not included in this count.
         results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
