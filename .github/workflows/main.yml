@@ -2,6 +2,8 @@ name: Pear CM regression checks
 
 on:
   push:
+    branches: [main, reliability-hardening-20261020]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
