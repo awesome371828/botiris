@@ -88,6 +88,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
             (["1", "час", "30", "минут", "причина"], timedelta(hours=1, minutes=30), 4),
             (["30м"], timedelta(minutes=30), 1),
             (["1ч"], timedelta(hours=1), 1),
+            (["1", "секунда"], timedelta(seconds=1), 2),
+            (["1сек"], timedelta(seconds=1), 1),
+            (["одну", "секунду"], timedelta(seconds=1), 2),
             (["два", "часа"], timedelta(hours=2), 2),
             (["полчаса"], timedelta(minutes=30), 1),
         ]
@@ -245,6 +248,16 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         body = self.source[start:end]
         self.assertIn("default_permissions = getattr(chat_info, \"permissions\", None)", body)
         self.assertIn("ChatPermissions(**default_permissions.model_dump(exclude_none=True))", body)
+
+    def test_sub_30_second_mutes_use_exact_timer_and_telegram_fallback(self):
+        start = self.source.index("async def mute_cmd")
+        end = self.source.index('@router.message(Command("unmute")', start)
+        body = self.source[start:end]
+        self.assertIn("requested_seconds < 30", body)
+        self.assertIn("timedelta(seconds=35)", body)
+        self.assertIn("_schedule_short_mute_expiry(message.chat.id, target[0], requested_seconds)", body)
+        self.assertIn("async def _expire_short_mute", self.source)
+        self.assertIn("_cancel_short_mute_expiry(message.chat.id, target[0])", self.source)
 
     def test_chat_lock_restores_saved_telegram_permissions(self):
         self.assertIn("current_permissions = getattr(chat_info, \"permissions\", None)", self.source)
