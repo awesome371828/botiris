@@ -23,6 +23,12 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 
+from pear_core import (
+    acknowledge_activity, activity_spool_size, check_schema, format_panel,
+    parse_duration_prefix as _shared_parse_duration_prefix,
+    pending_activity, spool_activity,
+)
+
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
@@ -812,77 +818,8 @@ def parse_duration(value: str) -> timedelta | None:
     return parsed[0] if parsed else None
 
 def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | None:
-    """Parse shorthand and natural Russian duration phrases; consumed counts original tokens."""
-    number_words = {
-        "один": 1, "одна": 1, "одно": 1, "одну": 1, "одного": 1, "одной": 1, "одном": 1,
-        "два": 2, "две": 2, "двух": 2, "три": 3, "трех": 3, "трёх": 3,
-        "четыре": 4, "четырех": 4, "четырёх": 4, "пять": 5, "пяти": 5,
-        "шесть": 6, "шести": 6, "семь": 7, "семи": 7, "восемь": 8, "восьми": 8,
-        "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
-    }
-    total = 0
-    consumed = 0
-    shown: list[str] = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i].strip().lower().strip(",.;:")
-        if total == 0 and token == "в" and i + 1 < len(tokens) and tokens[i + 1].lower().strip(",.;:") == "течение":
-            consumed += 2
-            i += 2
-            continue
-        if total == 0 and token == "сроком" and i + 1 < len(tokens) and tokens[i + 1].lower().strip(",.;:") == "на":
-            consumed += 2
-            i += 2
-            continue
-        if total == 0 and token == "на":
-            consumed += 1
-            i += 1
-            continue
-        if token == "и" and total > 0:
-            consumed += 1
-            i += 1
-            continue
-        word_amount = number_words.get(token)
-        numeric = re.fullmatch(r"(\d{1,7})\s*([a-zа-яё]+)?", token, re.I)
-        if numeric or word_amount is not None:
-            amount = int(numeric.group(1)) if numeric else int(word_amount)
-            unit = numeric.group(2) if numeric else None
-            used = 1
-            if not unit:
-                if i + 1 >= len(tokens):
-                    break
-                possible_unit = tokens[i + 1].lower().strip(",.;:")
-                seconds = _unit_seconds(possible_unit)
-                if seconds is None:
-                    break
-                unit = possible_unit
-                used = 2
-            else:
-                seconds = _unit_seconds(unit)
-                if seconds is None:
-                    break
-        else:
-            seconds = _unit_seconds(token)
-            if seconds is None:
-                break
-            amount = 1
-            unit = token
-            used = 1
-        if amount < 1:
-            return None
-        total += amount * seconds
-        shown.append(f"{amount} {unit}")
-        consumed += used
-        i += used
-        if i >= len(tokens):
-            break
-        next_token = tokens[i].strip().lower().strip(",.;:")
-        if next_token != "и" and not re.match(r"^\d", next_token) and next_token not in number_words and _unit_seconds(next_token) is None:
-            break
-    # Telegram treats bans at/over the 366-day boundary as permanent; cap timed bans at 365 days.
-    if consumed == 0 or total <= 0 or total > 365 * 86400:
-        return None
-    return timedelta(seconds=total), consumed, " ".join(shown)
+    """Shared parser for compact durations and Russian grammatical forms."""
+    return _shared_parse_duration_prefix(tokens)
 
 def split_duration_reason(tokens: list[str]) -> tuple[timedelta | None, str | None, str | None]:
     """Return duration, human-readable duration, and the remaining reason."""
@@ -1326,12 +1263,11 @@ async def my_warns(message: Message) -> None:
                 f"<i>{created}</i>"
             )
         body = f"👤 {display}\n\n" + "\n\n".join(cards)
-    await message.answer(
-        "╭ <b>МОИ ПРЕДУПРЕЖДЕНИЯ</b>\n"
-        "╰━━━━━━━━━━━━━━━━━━\n"
-        f"{body}\n\n"
-        f"<i>Активно: {len(entries)} · срок каждого варна — 7 дней</i>"
-    )
+    await message.answer(format_panel(
+        "МОИ ПРЕДУПРЕЖДЕНИЯ",
+        f"{body}\n\n<i>Активно: {len(entries)} · срок каждого варна — 7 дней</i>",
+        "Модерация · личная сводка",
+    ))
 
 
 @router.message(F.text.regexp(r"(?i)^[.!/]?варны(?:\s|$)"))
@@ -1361,12 +1297,11 @@ async def chat_warns(message: Message) -> None:
             f"   Выдал: {actor} · до {format_moscow_time(entry['expires_at'])}"
         )
     tail = f"\n\n<i>Показаны первые 50 из {len(entries)}.</i>" if len(entries) > 50 else ""
-    await message.answer(
-        "╭ <b>ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА</b>\n"
-        "╰━━━━━━━━━━━━━━━━━━\n"
-        + "\n\n".join(lines) + tail
-        + f"\n\n<i>На текущий момент: {len(entries)} активных предупреждений · срок — 7 дней</i>"
-    )
+    await message.answer(format_panel(
+        "ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА",
+        "\n\n".join(lines) + tail + f"\n\n<i>Сейчас активно: {len(entries)} · срок варна — 7 дней</i>",
+        "Модерация · данные этого чата",
+    ))
 
 @router.message(F.text == "💍 Брак")
 async def marriage_menu(message: Message) -> None:
@@ -1522,6 +1457,13 @@ async def _activity_writer_loop() -> None:
             first = _ACTIVITY_OVERFLOW.popleft()
             queued_count = 0
         else:
+            # Replay durable SQLite-spooled events after restarts and DB outages.
+            if _ACTIVITY_QUEUE.empty():
+                for pending_item in await asyncio.to_thread(pending_activity, 100):
+                    try:
+                        _ACTIVITY_QUEUE.put_nowait(pending_item)
+                    except asyncio.QueueFull:
+                        break
             first = await _ACTIVITY_QUEUE.get()
             queued_count = 1
         _ACTIVITY_WRITER_BUSY = True
@@ -1548,6 +1490,7 @@ async def _activity_writer_loop() -> None:
                     try:
                         await asyncio.to_thread(_persist_activity_batch_sync, batch)
                         persisted = True
+                        await asyncio.to_thread(acknowledge_activity, batch)
                         break
                     except Exception:
                         log.exception("Activity batch persistence failed (attempt %s/3; size=%s)", attempt + 1, len(batch))
@@ -1581,6 +1524,8 @@ async def track_activity(message: Message) -> None:
         message.from_user.full_name, datetime.now(timezone.utc).isoformat(),
         message.message_id,
     )
+    if not spool_activity(item):
+        log.critical("Could not durably spool activity event chat=%s user=%s message=%s", message.chat.id, message.from_user.id, message.message_id)
     try:
         _ACTIVITY_QUEUE.put_nowait(item)
     except asyncio.QueueFull:
@@ -2116,6 +2061,22 @@ async def delete_message_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
     if match:
+        # Reply form: bare «-смс» removes only the replied-to message, plus the command.
+        # Numbered forms remain a recent-message purge and keep their 1..100 semantics.
+        if message.reply_to_message and match.group(1) is None:
+            target_message = message.reply_to_message
+            try:
+                await target_message.delete()
+                try:
+                    await message.delete()
+                except Exception as exc:
+                    log.debug("Could not delete reply-delete command: %s", exc)
+                audit(message.chat.id, message.from_user.id if message.from_user else 0,
+                      "delete_reply", target_message.from_user.id if target_message.from_user else None,
+                      f"target_message_id={target_message.message_id}")
+            except Exception as exc:
+                await safe_error(message, exc)
+            return
         # "-смс" defaults to 100 recent messages. The command message is
         # deleted separately and never counts toward the requested amount.
         requested = int(match.group(1)) if match.group(1) else 100
@@ -5739,6 +5700,17 @@ async def extra_moderation_aliases(message: Message) -> None:
 
 async def main() -> None:
     acquire_single_instance_lock()
+    if db is not None:
+        schema_problems = await asyncio.to_thread(check_schema, db)
+        if schema_problems:
+            log.error("Supabase schema compatibility check found %s issue(s): %s",
+                      len(schema_problems), " | ".join(schema_problems))
+        else:
+            log.info("Supabase schema compatibility check passed")
+    # The durable spool survives process restarts when the host keeps its working directory.
+    pending_count = activity_spool_size()
+    if pending_count:
+        log.warning("Replaying %s persisted activity events from the local spool", pending_count)
     # Меню команд разделено по контекстам: в группах — только управление чатом,
     # обычным пользователям в личке — пользовательские функции, овнерские команды —
     # только в личном чате владельца бота.
