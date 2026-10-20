@@ -157,7 +157,7 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
                 unit = None
             else:
                 break
-            if unit is None and amount_word is not None:
+            if unit is None and (amount_word is not None or (m is not None and m.group(2) is None and bare_unit_seconds is None)):
                 if i + used >= len(words):
                     break
                 unit = words[i+used].strip(".,;:!?").casefold()
