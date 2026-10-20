@@ -498,7 +498,7 @@ def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: st
             stored_rank = max(0, min(5, int(current.get("rank", 0) or 0)))
         except (TypeError, ValueError):
             stored_rank = 0
-        rank = 4 if user_id == OWNER_ID else stored_rank
+        rank = 5 if user_id == OWNER_ID else stored_rank
         db_upsert("bot_users", {
             "user_id": user_id, "chat_id": chat_id, "username": username,
             "first_name": first_name or "Пользователь", "rank": rank,
@@ -507,7 +507,7 @@ def ensure_user(user_id: int, chat_id: int, username: str | None, first_name: st
         current.update({"username": username, "first_name": first_name or "Пользователь", "rank": rank})
         invalidate_user_rank(chat_id, user_id)
         return current
-    rank = 4 if user_id == OWNER_ID else 0
+    rank = 5 if user_id == OWNER_ID else 0
     row = db_upsert("bot_users", {
         "user_id": user_id, "chat_id": chat_id, "username": username,
         "first_name": first_name or "Пользователь", "warns": 0, "rank": rank,
@@ -1523,15 +1523,17 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
         await message.answer("⛔ Нельзя применять это действие к владельцу бота.")
         return None
     if message.from_user and target[0] != message.from_user.id:
-        actor_is_admin = await is_admin(bot, message.chat.id, message.from_user.id)
-        if not actor_is_admin:
-            actor_rank, target_rank = await asyncio.gather(
-                asyncio.to_thread(user_rank, message.chat.id, message.from_user.id),
-                asyncio.to_thread(user_rank, message.chat.id, target[0]),
-            )
-            if target_rank >= actor_rank and target_rank > 0:
-                await message.answer("⛔ Нельзя модерировать участника с равным или более высоким внутренним рангом.")
-                return None
+        # Internal Pear ranks apply even when the actor is a Telegram administrator.
+        # Only the real chat creator and configured bot owner are hierarchy overrides.
+        actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+        actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR) or message.from_user.id == OWNER_ID
+        actor_rank, target_rank = await asyncio.gather(
+            asyncio.to_thread(user_rank, message.chat.id, message.from_user.id),
+            asyncio.to_thread(user_rank, message.chat.id, target[0]),
+        )
+        if not actor_is_creator and target_rank > 0 and target_rank >= actor_rank:
+            await message.answer("⛔ Нельзя модерировать участника с равным или более высоким внутренним рангом.")
+            return None
     return target
 
 async def ensure_moderation_target_safe(
@@ -1893,12 +1895,14 @@ async def warn_cmd(message: Message) -> None:
         return
     if not await ensure_moderation_target_safe(message, target, "warn", protect_admins=False):
         return
-    if message.from_user and target[0] != message.from_user.id and not await is_admin(bot, message.chat.id, message.from_user.id):
+    if message.from_user and target[0] != message.from_user.id:
+        actor_member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+        actor_is_creator = bool(actor_member and actor_member.status == ChatMemberStatus.CREATOR) or message.from_user.id == OWNER_ID
         actor_rank, target_rank = await asyncio.gather(
             asyncio.to_thread(user_rank, message.chat.id, message.from_user.id),
             asyncio.to_thread(user_rank, message.chat.id, target[0]),
         )
-        if target_rank >= actor_rank and target_rank > 0:
+        if not actor_is_creator and target_rank > 0 and target_rank >= actor_rank:
             await message.answer("⛔ Нельзя выдавать предупреждения участнику с равным или более высоким внутренним рангом.")
             return
     actor_id = message.from_user.id if message.from_user else 0
@@ -3243,9 +3247,6 @@ async def rank_cmd(message: Message) -> None:
         return
     if not is_chat_creator and target_existing_rank >= effective_actor_rank and target_existing_rank > 0:
         await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
-        return
-    if message.from_user.id == OWNER_ID and rank > 4:
-        await message.answer("⛔ Вы — старший администратор (ранг 4). Ранг 5 принадлежит создателю Telegram-чата и не назначается через Pear CM.")
         return
     user = target_existing
     saved = await asyncio.to_thread(db_upsert, "bot_users", {**user, "user_id": target[0], "chat_id": message.chat.id,
