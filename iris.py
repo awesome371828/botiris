@@ -118,6 +118,13 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Highest-priority dispatch for the marriage directory. Register this BEFORE all
+# other message handlers so generic text handlers can never swallow these aliases.
+@router.message(F.text.regexp(r"(?i)^\\s*[.!/]?(?:браки|все\\s+браки|список\\s+браков)(?:[.!?…]*)\\s*$"))
+async def marriages_directory_dispatch_first(message: Message) -> None:
+    await marriages_list_cmd(message)
+
+
 @router.message.outer_middleware
 async def normalize_dot_dk_prefix(handler, event, data):
     """Let .дк prefix reuse existing command handlers without duplicating command logic.
