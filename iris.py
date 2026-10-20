@@ -1778,7 +1778,7 @@ async def mute_cmd(message: Message) -> None:
     else:
         until = issued_at + duration
 
-    reason = escape(_reason_from_preset(message.chat.id, "mute", reason or "не указана"))
+    reason = escape(await _reason_from_preset(message.chat.id, "mute", reason or "не указана"))
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     try:
         # Telegram cannot restrict a chat creator or administrator.
@@ -1953,7 +1953,7 @@ async def ban_cmd(message: Message) -> None:
                 return
             reason = " ".join(remainder).strip() or None
 
-    reason = escape(_reason_from_preset(message.chat.id, "ban", reason or "нарушение правил")[:300])
+    reason = escape(await _reason_from_preset(message.chat.id, "ban", reason or "нарушение правил")[:300])
     issued_at = moscow_now()
     until = issued_at + duration if duration else None
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
@@ -2022,7 +2022,7 @@ async def kick_cmd(message: Message) -> None:
     if not await ensure_moderation_target_safe(message, target, "kick"):
         return
     raw_args = args_after_command(message)
-    reason = _reason_from_preset(message.chat.id, "kick", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
+    reason = await _reason_from_preset(message.chat.id, "kick", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
@@ -2079,7 +2079,7 @@ async def warn_cmd(message: Message) -> None:
         for key, stamp in list(_WARN_RECENT.items()):
             if now_mono - stamp > 60:
                 _WARN_RECENT.pop(key, None)
-    reason = _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
+    reason = await _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     # Each warning expires after seven days.
     # Fetch the current warning ledger and user row concurrently; neither depends on the other.
     before, user = await asyncio.gather(
@@ -4476,11 +4476,14 @@ def _is_trusted_user(chat_id: int, user_id: int) -> bool:
 def _invalidate_trusted(chat_id: int, user_id: int) -> None:
     _TRUSTED_CACHE.pop((chat_id, user_id), None)
 
-def _reason_from_preset(chat_id: int, action: str, raw_reason: str | None) -> str:
+async def _reason_from_preset(chat_id: int, action: str, raw_reason: str | None) -> str:
+    """Resolve a moderation reason without blocking the asyncio event loop on Supabase."""
     reason = (raw_reason or "").strip()
     if not reason or reason.lower() in {"не указана", "не указано", "нет"}:
         return reason or "не указана"
-    settings = get_chat_settings(chat_id)
+    # get_chat_settings performs synchronous Supabase I/O on a cache miss, so it
+    # must always run in a worker thread when called from a Telegram handler.
+    settings = await asyncio.to_thread(get_chat_settings, chat_id)
     presets = settings.get("punishment_reasons", {})
     if not isinstance(presets, dict):
         return reason
@@ -4597,7 +4600,7 @@ async def temporary_ban_cmd(message: Message) -> None:
         await message.answer("Укажите срок: <code>врембан 1 день</code>, <code>врембан день</code>, <code>врембан 1 месяц</code>, <code>врембан год</code> или <code>врембан 2ч причина</code>. Срок временного бана — не больше 365 дней. Ответьте на сообщение цели или укажите @username/ID.")
         return
     duration, consumed, duration_label = parsed
-    reason = _reason_from_preset(message.chat.id, "ban", " ".join(duration_tokens[consumed:]).strip() or "не указана")
+    reason = await _reason_from_preset(message.chat.id, "ban", " ".join(duration_tokens[consumed:]).strip() or "не указана")
     until = datetime.now(timezone.utc) + duration
     try:
         target_member = await bot.get_chat_member(message.chat.id, target[0])
