@@ -958,12 +958,14 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
             return f"@{username.lstrip('@')}"
         return first_name or fallback or f"ID {user_id}"
 
-    if message.reply_to_message and message.reply_to_message.from_user:
-        u = message.reply_to_message.from_user
-        if not u.is_bot:
-            return u.id, display_name(u.id, u.username, u.full_name, str(u.id))
+    # Explicit target arguments always win over a reply. Otherwise a reply to a
+    # previous bot response (or to the command author's own message) can cause
+    # moderation to accidentally resolve the actor as the target.
+    has_explicit_target = any(
+        str(value).strip().strip(",;:") for value in args
+    )
 
-    # Accept a reply, ID, @username, plain username, or exact displayed name.
+    # Accept a numeric ID, @username, plain username, or exact displayed name.
     # Numeric rank/duration arguments are ignored rather than mistaken for user IDs.
     for raw_value in args:
         raw = raw_value.strip().strip(",;:")
@@ -1017,6 +1019,16 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
         first = first_name.casefold()
         if any(candidate == user_name or candidate == first for candidate in candidates):
             return uid, display_name(uid, username, first_name, candidates[0])
+
+    # Only use a replied-to user if no explicit target was supplied. Never
+    # substitute the actor when the reply is to a bot or has no Telegram user.
+    if not has_explicit_target and message.reply_to_message:
+        replied_user = message.reply_to_message.from_user
+        if replied_user and not replied_user.is_bot:
+            return (
+                replied_user.id,
+                display_name(replied_user.id, replied_user.username, replied_user.full_name, str(replied_user.id)),
+            )
     return None
 
 def args_after_command(message: Message) -> list[str]:
