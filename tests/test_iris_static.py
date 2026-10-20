@@ -131,7 +131,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
     def test_activity_counters_are_idempotent_and_retryable(self):
         self.assertIn('"message_id": int(message_id)', self.source)
         self.assertIn('db.rpc("record_bot_activity_batch"', self.source)
-        self.assertIn("Activity batch persistence failed (attempt %s/3; size=%s)", self.source)
+        self.assertIn("Activity batch persistence failed (attempt %s/2; size=%s)", self.source)
         schema = SCHEMA.read_text(encoding="utf-8").lower()
         self.assertIn("alter table public.bot_activity_events add column if not exists message_id bigint", schema)
         self.assertIn("bot_activity_events_chat_message_uidx", schema)
@@ -254,7 +254,8 @@ class PearCMStaticRegressionTests(unittest.TestCase):
     def test_delete_command_is_bounded(self):
         self.assertIn("requested < 1", self.source)
         self.assertIn("requested > 100", self.source)
-        self.assertIn('requested = int(match.group(1)) if match.group(1) else 100', self.source)
+        self.assertIn('if match.group(1) is None:', self.source)
+        self.assertIn('requested = int(match.group(1))', self.source)
         self.assertIn("count = requested", self.source)
         self.assertIn("deleted_messages = sum(1 for result in results if result)", self.source)
         self.assertIn("Команда <code>-смс</code> удаляется отдельно", self.source)
@@ -297,7 +298,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         marriage_start = self.source.index("async def marry_cmd")
         marriage_end = self.source.index("@router.callback_query(F.data.startswith(\"marriage:\"))", marriage_start)
         marriage = self.source[marriage_start:marriage_end]
-        self.assertIn("(?:брак|браки|брачок|брачиться", self.source)
+        self.assertIn("(?:брак|брачок|брачиться", marriage)
+        self.assertIn("async def marriages_directory_dispatch_first", self.source)
+        self.assertIn("(?:браки|все\\\\s+браки|список\\\\s+браков)", self.source)
         self.assertIn('брак да', self.source)
         self.assertIn('брак нет', self.source)
         self.assertTrue(marriage.rstrip().endswith(")"))
