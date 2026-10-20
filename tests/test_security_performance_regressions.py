@@ -49,8 +49,9 @@ class SecurityAndPerformanceRegressions(unittest.TestCase):
         self.assertIn("Slow update handler (target <1s)", SOURCE)
 
     def test_sensitive_settings_and_user_queries_are_chat_scoped(self):
-        self.assertIn('.eq("chat_id", chat_id)', SOURCE)
+        self.assertIn('db_one("bot_users", user_id=user_id, chat_id=chat_id)', SOURCE)
         self.assertIn('"user_id": user_id, "chat_id": chat_id', SOURCE)
+        self.assertIn('on_conflict="user_id,chat_id"', SOURCE)
         self.assertIn('primary key (user_id, chat_id)', SCHEMA.lower())
 
     def test_duplicate_activity_messages_are_idempotent(self):
