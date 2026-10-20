@@ -1712,8 +1712,8 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
     except TelegramBadRequest:
         await message.answer("⛔ Не удалось проверить права бота. Убедитесь, что он состоит в чате и назначен администратором.")
         return False
-    if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-        await message.answer("⛔ Pear CM не администратор чата. Назначьте его администратором.")
+    if not member or member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+        await message.answer("⛔ Pear CM не администратор чата или не удалось проверить его статус. Назначьте его администратором.")
         return False
     if member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(member, "can_restrict_members", False):
         await message.answer("⛔ У Pear CM нет права «Ограничение участников». Включите его в настройках администраторов.")
@@ -1728,7 +1728,7 @@ async def mute_cmd(message: Message) -> None:
     # checks. This keeps bare «мут» instant instead of making several network calls.
     original_text = (message.text or "").strip()
     if not message.reply_to_message and not re.search(r"@\w+|(?<!\d)\d{7,}(?!\d)", original_text):
-        await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известному чату @username/ID.")
+        await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
     if not await check_mod(message):
         return
