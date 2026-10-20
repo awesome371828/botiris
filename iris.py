@@ -333,13 +333,21 @@ class CommandRateLimitMiddleware(BaseMiddleware):
 
 router.message.middleware(CommandRateLimitMiddleware())
 
-# Track real message IDs observed during this process. Telegram Bot API has no history endpoint.
+# Track observed message IDs by chat AND forum topic. Telegram message IDs are
+# shared across topics in a supergroup, so a chat-wide purge can otherwise delete
+# messages from unrelated topics (e.g. "Флудилка"). Bot API has no history endpoint.
 _RECENT_MESSAGE_IDS: dict[int, deque[int]] = defaultdict(lambda: deque(maxlen=5000))
+_RECENT_TOPIC_MESSAGE_IDS: dict[tuple[int, int], deque[int]] = defaultdict(lambda: deque(maxlen=5000))
+
+def _message_topic_key(message: Message) -> tuple[int, int]:
+    # 0 is the regular non-topic chat context; forum messages carry their thread ID.
+    return (message.chat.id, int(getattr(message, "message_thread_id", None) or 0))
 
 async def _remember_message_id(handler, event: Message, data):
     started = time.monotonic()
     if isinstance(event, Message):
         _RECENT_MESSAGE_IDS[event.chat.id].append(event.message_id)
+        _RECENT_TOPIC_MESSAGE_IDS[_message_topic_key(event)].append(event.message_id)
     raw = (event.text or event.caption or "").strip() if isinstance(event, Message) else ""
     # Owner audit trail: record every slash command and the important text aliases.
     # Keep logging asynchronous so ordinary chat commands remain responsive.
@@ -2317,19 +2325,16 @@ async def delete_message_cmd(message: Message) -> None:
 
         count = requested
         first_id = max(1, message.message_id - count)
+        # Only purge messages observed in THIS topic. Do not scan a numeric ID
+        # range as a fallback: IDs are global across forum topics, and that would
+        # delete messages from another topic by mistake. The bot cannot fetch chat
+        # history through the Bot API, so only known messages can be safely selected.
+        topic_key = _message_topic_key(message)
         observed = [
-            mid for mid in _RECENT_MESSAGE_IDS.get(message.chat.id, ())
-            if first_id <= mid < message.message_id
+            mid for mid in _RECENT_TOPIC_MESSAGE_IDS.get(topic_key, ())
+            if mid < message.message_id
         ]
         candidates = list(dict.fromkeys(reversed(observed)))[:count]
-        candidate_set = set(candidates)
-        if len(candidates) < count:
-            for mid in range(message.message_id - 1, first_id - 1, -1):
-                if mid not in candidate_set:
-                    candidates.append(mid)
-                    candidate_set.add(mid)
-                    if len(candidates) >= count:
-                        break
 
         forbidden = False
         semaphore = asyncio.Semaphore(5)
@@ -2377,7 +2382,7 @@ async def delete_message_cmd(message: Message) -> None:
 
         audit(
             message.chat.id, message.from_user.id, "purge_recent",
-            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={deleted_messages}",
+            details=f"requested={count};topic_id={topic_key[1]};first_id={first_id};last_id={message.message_id - 1};deleted={deleted_messages}",
         )
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
