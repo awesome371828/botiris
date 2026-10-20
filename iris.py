@@ -57,7 +57,8 @@ def acquire_single_instance_lock() -> None:
     lock_path = os.getenv("BOT_LOCK_PATH", "/tmp/pear_cm_polling.lock")
     handle = open(lock_path, "w", encoding="utf-8")
     # Fail fast instead of hanging indefinitely when a second local process starts.
-    # This lock only coordinates processes sharing this filesystem; it cannot prevent
+    # A blocking flock(handle.fileno(), fcntl.LOCK_EX) would wait forever here;
+    # this lock only coordinates processes sharing this filesystem and cannot prevent
     # a second container/host from polling the same Telegram token.
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
