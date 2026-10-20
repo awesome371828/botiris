@@ -37,6 +37,17 @@ class SecurityAndPerformanceRegressions(unittest.TestCase):
         self.assertIn("target_rank >= actor_rank", body)
         self.assertIn("actor_is_creator", body)
 
+    def test_rank_five_is_immune_to_moderation_and_demotion(self):
+        safe_start = SOURCE.index("async def ensure_moderation_target_safe(")
+        safe_end = SOURCE.index("async def check_mod(", safe_start)
+        safe = SOURCE[safe_start:safe_end]
+        self.assertIn("if target_rank >= 5:", safe)
+        demote_start = SOURCE.index("async def demote_rank_cmd(")
+        demote_end = SOURCE.index("@router.message", demote_start + 20)
+        demote = SOURCE[demote_start:demote_end]
+        self.assertIn("if current == 5:", demote)
+        self.assertNotIn("if current == 5 and not", demote)
+
     def test_economy_mutations_are_transactional_and_bounded(self):
         self.assertIn("create or replace function public.pear_economy_action", SCHEMA.lower())
         self.assertIn("for update", SCHEMA.lower())
