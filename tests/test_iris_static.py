@@ -300,7 +300,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         marriage = self.source[marriage_start:marriage_end]
         self.assertIn("(?:брак|брачок|брачиться", self.source)
         self.assertIn("async def marriages_directory_dispatch_first", self.source)
-        self.assertIn("(?:браки|все\\\\s+браки|список\\\\s+браков)", self.source)
+        self.assertIn("(?:браки|все\\s+браки|список\\s+браков)", self.source)
         self.assertIn('брак да', self.source)
         self.assertIn('брак нет', self.source)
         self.assertTrue(marriage.rstrip().endswith(")"))
