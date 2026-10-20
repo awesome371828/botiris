@@ -191,6 +191,55 @@ async def bot_commands_topic_toggle_dispatch(message: Message) -> None:
 
 
 @router.message.outer_middleware
+def _normalize_natural_moderation_phrase(raw: str) -> str:
+    """Deterministically normalize common Russian inflections to existing command aliases.
+
+    This is rule-based command understanding, not an LLM: only the beginning of a
+    message is normalized, and ordinary conversation text is left untouched.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return value
+    # Keep command prefixes, Telegram bot mentions, and all arguments intact.
+    prefix = ""
+    match = re.match(r"^([.!]?)(.*)$", value, flags=re.S)
+    if match:
+        prefix, value = match.group(1), match.group(2).lstrip()
+    # Multi-word requests must be handled before single-word stems.
+    multiword = (
+        (r"^(?:снять|сними|снимите|убрать|убери|уберите)\\s+(?:мут(?:а|у|ом|е|ы|ов|ам|ами|ах)?|заглушку)\\b", "анмут"),
+        (r"^(?:снять|сними|снимите|убрать|убери|уберите)\\s+(?:варн(?:а|у|ом|е|ы|ов|ам|ами|ах)?|предупреждени(?:е|я|ю|ем|и|й|ями|ях))\\b", "анварн"),
+        (r"^(?:снять|сними|снимите|убрать|убери|уберите)\\s+бан\\b", "разбан"),
+        (r"^(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\\s+(?:мут(?:а|у|ом|е|ы|ов|ам|ами|ах)?)\\b", "мут"),
+        (r"^(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\\s+(?:варн(?:а|у|ом|е|ы|ов|ам|ами|ах)?|предупреждени(?:е|я|ю|ем|и|й|ями|ях))\\b", "варн"),
+        (r"^(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\\s+бан\\b", "бан"),
+    )
+    for pattern, canonical in multiword:
+        found = re.match(pattern, value, flags=re.I)
+        if found:
+            value = canonical + value[found.end():]
+            return (prefix + " " if prefix else "") + value.lstrip()
+    aliases = {
+        "мут": r"мут(?:а|у|ом|е|ы|ов|ам|ами|ах|ить|ь|и|ьте|ите)?",
+        "анмут": r"(?:анмут(?:ить|и|ь|ьте|ите)?|размут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|унмут|снятьмут(?:а|у)?|убратьмут)",
+        "варн": r"(?:варн(?:а|у|ом|е|ы|ов|ам|ами|ах|ить)?|предупреждени(?:е|я|ю|ем|и|й|ями|ях)|предупред(?:ить|и|ите))",
+        "анварн": r"(?:анварн|разварн|снятьварн|убратьварн|снятьпредупреждени(?:е|я|е)?|убратьпредупреждени(?:е|я|е)?)",
+        "бан": r"(?:бан(?:а|у|ом|е|ы|ов|ами|ах|ить)?|забан(?:ить|ь|ьте|ьтe)?|забань|забаньте)",
+        "разбан": r"(?:разбан(?:ить|а|у|ь|ьте)?|анбан)",
+        "кик": r"(?:кик(?:нуть|ни|нись|а|у|ом|е|и|ов|ами)?|выгнать|выгони|выгоните|исключить|исключи|исключите)",
+        "повысить": r"(?:повысить(?:\\s*[- ]?\\s*ранг)?|повышени(?:е|я|ю|ем|и)|повышай|повышайся|поднять\\s+ранг|продвинуть)",
+        "понизить": r"(?:понизить(?:\\s*[- ]?\\s*ранг)?|понижени(?:е|я|ю|ем|и)|понижай|понизь|снять\\s+ранг|разжаловать)",
+        "анпин": r"(?:анпин|открепить|снять\\s+закреп|убрать\\s+закреп)",
+        "пин": r"(?:пин(?:ить|а|у|ом|е)?|закрепить|закрепи|закрепите)",
+    }
+    for canonical, pattern in aliases.items():
+        found = re.match(r"(?i)^" + pattern + r"(?=\\s|$)", value)
+        if found:
+            value = canonical + value[found.end():]
+            break
+    return (prefix + " " if prefix else "") + value.lstrip()
+
+
 async def normalize_dot_dk_prefix(handler, event, data):
     """Let .дк prefix reuse existing command handlers without duplicating command logic.
 
@@ -198,6 +247,7 @@ async def normalize_dot_dk_prefix(handler, event, data):
     Commands beginning with + or - are never mistaken for access-rule configuration.
     """
     if isinstance(event, Message) and event.text:
+        event.text = _normalize_natural_moderation_phrase(event.text)
         raw = event.text.strip()
 
         # Commands are enabled uniformly across every topic in every group.
