@@ -120,7 +120,7 @@ dp.include_router(router)
 
 # Highest-priority dispatch for the marriage directory. Register this BEFORE all
 # other message handlers so generic text handlers can never swallow these aliases.
-@router.message(F.text.regexp(r"(?i)^\\s*[.!/]?(?:браки|все\\s+браки|список\\s+браков)(?:[.!?…]*)\\s*$"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:браки|все\s+браки|список\s+браков)(?:[.!?…]*)\s*$"))
 async def marriages_directory_dispatch_first(message: Message) -> None:
     await marriages_list_cmd(message)
 
