@@ -2129,7 +2129,7 @@ async def warn_cmd(message: Message) -> None:
         for key, stamp in list(_WARN_RECENT.items()):
             if now_mono - stamp > 60:
                 _WARN_RECENT.pop(key, None)
-    reason = await _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
+    reason = await _reason_from_preset(message.chat.id, "warn", " ".join(target_tokens if message.reply_to_message else target_tokens[1:]).strip() or "не указана")
     # Each warning expires after seven days.
     # The RPC locks the target row and writes the audit event + profile counter
     # in one Postgres transaction, so concurrent moderators cannot lose a warning.
