@@ -1715,17 +1715,21 @@ async def mute_cmd(message: Message) -> None:
               f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}")
         if until:
             when = format_moscow_time(until)
-            await message.answer(
+            await message.answer(format_panel(
+                "ОГРАНИЧЕНИЕ ВЫДАНО",
                 f"🔇 {mention(target[0], target[1])} замучен на <b>{escape(duration_label or 'указанный срок')}</b> "
                 f"по причине: <b>{reason}</b>.\n"
                 f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
-                f"⏳ Истекает: {when}\n👮 Модератор: {actor}."
-            )
+                f"⏳ Истекает: {when}\n👮 Модератор: {actor}.",
+                "Модерация · действие выполнено",
+            ))
         else:
-            await message.answer(
+            await message.answer(format_panel(
+                "ОГРАНИЧЕНИЕ ВЫДАНО",
                 f"🔇 {mention(target[0], target[1])} замучен <b>бессрочно</b> "
-                f"по причине: <b>{reason}</b>.\n👮 Модератор: {actor}."
-            )
+                f"по причине: <b>{reason}</b>.\n👮 Модератор: {actor}.",
+                "Модерация · действие выполнено",
+            ))
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -1753,7 +1757,11 @@ async def unmute_cmd(message: Message) -> None:
             )
         await bot.restrict_chat_member(message.chat.id, target[0], permissions=permissions)
         audit(message.chat.id, message.from_user.id, "unmute", target[0])
-        await message.answer(f"🔊 Ограничения сняты с {mention(target[0], target[1])}.")
+        await message.answer(format_panel(
+        "ОГРАНИЧЕНИЕ СНЯТО",
+        f"🔊 Ограничения сняты с {mention(target[0], target[1])}.",
+        "Модерация · действие выполнено",
+    ))
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -1857,17 +1865,21 @@ async def ban_cmd(message: Message) -> None:
             f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}",
         )
         if until:
-            await message.answer(
+            await message.answer(format_panel(
+                "БЛОКИРОВКА ВЫДАНА",
                 f"⛔ {mention(target[0], target[1])} заблокирован на <b>{escape(duration_label)}</b>. "
                 f"Причина: <b>{reason}</b>.\n"
                 f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
-                f"⏳ Истекает: {format_moscow_time(until)}\n👮 Модератор: {actor}."
-            )
+                f"⏳ Истекает: {format_moscow_time(until)}\n👮 Модератор: {actor}.",
+                "Модерация · действие выполнено",
+            ))
         else:
-            await message.answer(
+            await message.answer(format_panel(
+                "БЛОКИРОВКА ВЫДАНА",
                 f"⛔ {mention(target[0], target[1])} заблокирован <b>навсегда</b>. "
-                f"Причина: <b>{reason}</b>.\n👮 Модератор: {actor}."
-            )
+                f"Причина: <b>{reason}</b>.\n👮 Модератор: {actor}.",
+                "Модерация · действие выполнено",
+            ))
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -1911,7 +1923,11 @@ async def kick_cmd(message: Message) -> None:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
         audit(message.chat.id, message.from_user.id, "kick", target[0], f"reason={reason}")
-        await message.answer(f"👢 {mention(target[0], target[1])} исключён из чата. Причина: <b>{escape(reason[:300])}</b>.")
+        await message.answer(format_panel(
+            "УЧАСТНИК ИСКЛЮЧЁН",
+            f"👢 {mention(target[0], target[1])} исключён из чата. Причина: <b>{escape(reason[:300])}</b>.",
+            "Модерация · действие выполнено",
+        ))
     except Exception as exc:
         await safe_error(message, exc)
 
