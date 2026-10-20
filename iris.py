@@ -1558,6 +1558,10 @@ async def ensure_moderation_target_safe(
     if member and member.status == ChatMemberStatus.CREATOR:
         await message.answer("⛔ Нельзя применять это действие к создателю чата.")
         return False
+    target_rank = await asyncio.to_thread(user_rank, message.chat.id, target_id)
+    if target_rank >= 5:
+        await message.answer("⛔ Участники с рангом 5 защищены от модерации.")
+        return False
     if protect_admins and member and member.status == ChatMemberStatus.ADMINISTRATOR:
         await message.answer("⛔ Telegram не позволяет боту применять это действие к администратору чата.")
         return False
@@ -3239,8 +3243,8 @@ async def rank_cmd(message: Message) -> None:
     if target[0] == OWNER_ID and message.from_user.id != OWNER_ID:
         await message.answer("⛔ Ранг владельца Pear CM защищён от изменений.")
         return
-    if target_existing_rank >= 5 and not is_chat_creator:
-        await message.answer("⛔ Ранг 5 защищён: изменить его может только настоящий создатель Telegram-чата.")
+    if target_existing_rank >= 5:
+        await message.answer("⛔ Ранг 5 защищён от изменения.")
         return
     if not is_chat_creator and rank >= effective_actor_rank:
         await message.answer("⛔ Вы можете назначать только ранг ниже своего. Ранг 5 может назначать только создатель чата или владелец Pear CM.")
