@@ -260,4 +260,23 @@ def check_schema(client: Any) -> list[str]:
             client.table(table).select(columns).limit(0).execute()
         except Exception as exc:
             problems.append(f"{table}: {type(exc).__name__}: {str(exc)[:180]}")
+
+    # These probes intentionally pass null IDs: the functions return a harmless
+    # invalid_request result before making any writes. This catches a missing RPC
+    # migration at startup rather than letting moderation/clan commands fail later.
+    required_rpcs = {
+        "pear_issue_warning": {
+            "p_chat_id": None, "p_actor_id": None,
+            "p_target_id": None, "p_reason": "schema_probe",
+        },
+        "pear_clan_action": {
+            "p_action": "schema_probe", "p_chat_id": None,
+            "p_user_id": None, "p_target_id": None, "p_name": "",
+        },
+    }
+    for function, params in required_rpcs.items():
+        try:
+            client.rpc(function, params).execute()
+        except Exception as exc:
+            problems.append(f"RPC {function}: {type(exc).__name__}: {str(exc)[:180]}")
     return problems
