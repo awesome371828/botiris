@@ -2088,17 +2088,23 @@ async def delete_message_cmd(message: Message) -> None:
         # Numbered forms remain a recent-message purge and keep their 1..100 semantics.
         if message.reply_to_message and match.group(1) is None:
             target_message = message.reply_to_message
+            target_error = None
             try:
                 await target_message.delete()
-                try:
-                    await message.delete()
-                except Exception as exc:
-                    log.debug("Could not delete reply-delete command: %s", exc)
+            except Exception as exc:
+                target_error = exc
+                log.warning("Could not delete replied-to message chat=%s message=%s: %s",
+                            message.chat.id, target_message.message_id, exc)
+            try:
+                await message.delete()
+            except Exception as exc:
+                log.debug("Could not delete reply-delete command: %s", exc)
+            if target_error is not None:
+                await safe_error(message, target_error)
+            else:
                 audit(message.chat.id, message.from_user.id if message.from_user else 0,
                       "delete_reply", target_message.from_user.id if target_message.from_user else None,
                       f"target_message_id={target_message.message_id}")
-            except Exception as exc:
-                await safe_error(message, exc)
             return
         # "-смс" defaults to 100 recent messages. The command message is
         # deleted separately and never counts toward the requested amount.
