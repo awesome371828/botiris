@@ -3014,7 +3014,7 @@ async def logs_cmd(message: Message) -> None:
 
 # ── Simple marriage feature ───────────────────────────────────────────────────
 @router.message(Command("marry", "proposemarriage", "wed"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|браки|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)\s*[!?.,]*$"))
+@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)\s*[!?.,]*$"))
 async def marry_cmd(message: Message) -> None:
     if not message.from_user or not is_group(message):
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
@@ -6380,12 +6380,27 @@ async def marriages_list_cmd(message: Message) -> None:
     if not pairs:
         await message.answer("💔 В этом чате пока нет зарегистрированных браков.")
         return
-    lines = ["💍 <b>Браки участников чата</b>"]
-    for row in pairs[:100]:
-        lines.append(f"• {mention(int(row.get('user1_id') or 0), str(row.get('user1_name') or 'Участник'))} ❤️ {mention(int(row.get('user2_id') or 0), str(row.get('user2_name') or 'Участник'))}")
-    if len(pairs) > 100:
-        lines.append(f"…и ещё {len(pairs)-100} пар.")
-    await message.answer("\n".join(lines))
+    lines = ["💍 <b>Все браки участников чата</b>", f"Всего браков: <b>{len(pairs)}</b>", ""]
+    for index, row in enumerate(pairs, 1):
+        lines.append(
+            f"{index}. {mention(int(row.get('user1_id') or 0), str(row.get('user1_name') or 'Участник'))}"
+            f" ❤️ {mention(int(row.get('user2_id') or 0), str(row.get('user2_name') or 'Участник'))}"
+        )
+    # Telegram limits each message to 4096 characters. Split the complete list
+    # into chunks instead of truncating the output to the first 100 marriages.
+    chunks = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > 3800 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await message.answer(chunk)
 
 @router.message(Command("awards"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:награда|выдать награду|награды)(?:\s|$)"))
