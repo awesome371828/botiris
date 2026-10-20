@@ -335,6 +335,17 @@ _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
 _CHAT_SETTINGS_CACHE_TIME: dict[int, float] = {}
 # Settings change infrequently. A longer cache avoids one PostgREST read per chat burst.
 _CHAT_SETTINGS_CACHE_TTL = 60.0
+_CHAT_SETTINGS_LOCKS: dict[int, threading.Lock] = {}
+_CHAT_SETTINGS_LOCKS_GUARD = threading.Lock()
+
+def _chat_settings_lock(chat_id: int) -> threading.Lock:
+    with _CHAT_SETTINGS_LOCKS_GUARD:
+        lock = _CHAT_SETTINGS_LOCKS.get(chat_id)
+        if lock is None:
+            lock = threading.Lock()
+            _CHAT_SETTINGS_LOCKS[chat_id] = lock
+        return lock
+
 _FLOOD_TIMES: dict[tuple[int, int], deque[float]] = defaultdict(deque)
 _SPAM_LAST: dict[tuple[int, int], tuple[str, float]] = {}
 _SPAM_HISTORY: dict[tuple[int, int], deque[tuple[float, str, int]]] = defaultdict(lambda: deque(maxlen=30))
@@ -3291,37 +3302,41 @@ async def divorce_cmd(message: Message) -> None:
 # ── Integrated moderation stages from moderation.py ──────────────────────────
 # Stage A: durable per-chat filter settings and human-readable time/reason parsing.
 def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, Any]:
-    now = time.monotonic()
-    cached = _CHAT_SETTINGS_CACHE.get(chat_id)
-    cached_at = _CHAT_SETTINGS_CACHE_TIME.get(chat_id, 0.0)
-    if not force_refresh and cached is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
-        return dict(cached)
+    # Collapse concurrent cache misses: a busy chat should cause one DB read,
+    # not one Supabase request per update. Caller must keep blocking DB reads
+    # in asyncio.to_thread().
+    lock = _chat_settings_lock(chat_id)
+    with lock:
+        now = time.monotonic()
+        cached = _CHAT_SETTINGS_CACHE.get(chat_id)
+        cached_at = _CHAT_SETTINGS_CACHE_TIME.get(chat_id, 0.0)
+        if not force_refresh and cached is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
+            return dict(cached)
 
-    # A cache miss can coincide with a Supabase outage. Never replace known-good
-    # settings with defaults just because a read timed out; keep serving the last
-    # successful snapshot and refresh it on the next TTL expiry.
-    row = db_one("bot_chat_settings", chat_id=chat_id)
-    if row and isinstance(row.get("settings"), dict):
-        settings = dict(FILTER_DEFAULTS)
-        settings.update(row["settings"])
-        _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
-    elif cached is not None:
-        settings = dict(cached)
-        # Briefly defer another refresh so every incoming message doesn't trigger
-        # its own retry storm while Supabase is unavailable.
-        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
-    else:
-        settings = dict(FILTER_DEFAULTS)
-        _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-        _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
-    if len(_CHAT_SETTINGS_CACHE) > 2000:
-        cutoff = now - _CHAT_SETTINGS_CACHE_TTL * 4
-        for cached_chat, stamp in list(_CHAT_SETTINGS_CACHE_TIME.items()):
-            if stamp < cutoff:
-                _CHAT_SETTINGS_CACHE.pop(cached_chat, None)
-                _CHAT_SETTINGS_CACHE_TIME.pop(cached_chat, None)
-    return dict(settings)
+        # Never replace known-good settings with defaults after a temporary DB
+        # failure. Keep serving the last successful snapshot.
+        row = db_one("bot_chat_settings", chat_id=chat_id)
+        if row and isinstance(row.get("settings"), dict):
+            settings = dict(FILTER_DEFAULTS)
+            settings.update(row["settings"])
+            _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
+        elif cached is not None:
+            settings = dict(cached)
+            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
+        else:
+            settings = dict(FILTER_DEFAULTS)
+            _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
+            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
+
+        if len(_CHAT_SETTINGS_CACHE) > 2000:
+            cutoff = time.monotonic() - _CHAT_SETTINGS_CACHE_TTL * 4
+            for cached_chat, stamp in list(_CHAT_SETTINGS_CACHE_TIME.items()):
+                if stamp < cutoff:
+                    _CHAT_SETTINGS_CACHE.pop(cached_chat, None)
+                    _CHAT_SETTINGS_CACHE_TIME.pop(cached_chat, None)
+                    _CHAT_SETTINGS_LOCKS.pop(cached_chat, None)
+        return dict(settings)
 
 def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
     # Update the in-memory state immediately; persist in a worker thread so a
