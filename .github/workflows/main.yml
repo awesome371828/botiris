@@ -1,4 +1,4 @@
-name: Retired Pear CM bot runner
+name: Pear CM regression checks
 
 on:
   push:
@@ -8,23 +8,24 @@ on:
 permissions:
   contents: read
 
-# The bot runs on RelaxDev; this workflow deliberately does NOT start iris.py.
-# Keep the historical polling-conflict guard documented for regression tests:
-# elif [ "$code" -eq 23 ]; then
-# echo "::error::Telegram polling conflict detected; stopping instead of restarting forever because another deployment is using this token."
-
-# Reuse the old polling workflow concurrency group to cancel any stale bot process.
-# This group intentionally differs from the CI workflow's group.
+# The bot runtime is hosted on RelaxDev. This workflow validates source only;
+# it never starts a second Telegram polling process.
 concurrency:
-  group: pear-cm-bot
+  group: pear-cm-ci
   cancel-in-progress: true
 
 jobs:
-  confirm-hosting-migration:
+  regression:
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
-      - name: Confirm bot is hosted externally
-        run: |
-          echo "Pear CM bot runtime is hosted on RelaxDev."
-          echo "GitHub Actions does not start iris.py."
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python sources
+        run: python -m py_compile iris.py moderation_full.py pear_core.py
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
