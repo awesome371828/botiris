@@ -18,6 +18,8 @@ class DurationParserTests(unittest.TestCase):
             (["30м"], timedelta(minutes=30), 1),
             (["30", "минут"], timedelta(minutes=30), 2),
             (["1ч"], timedelta(hours=1), 1),
+            (["1ч30м"], timedelta(hours=1, minutes=30), 1),
+            (["2д3ч"], timedelta(days=2, hours=3), 1),
             (["1", "часа"], timedelta(hours=1), 2),
             (["1", "час", "30", "минут", "флуд"], timedelta(hours=1, minutes=30), 4),
             (["два", "часа"], timedelta(hours=2), 2),
