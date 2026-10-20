@@ -26,7 +26,7 @@ from typing import Any
 from pear_core import (
     acknowledge_activity, activity_spool_size, check_schema, format_panel,
     parse_duration_prefix as _shared_parse_duration_prefix,
-    pending_activity, spool_activity,
+    pending_activity, spool_activity, spool_activity_batch,
 )
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
@@ -1543,6 +1543,10 @@ async def _activity_writer_loop() -> None:
                     break
         persisted = False
         try:
+            # One SQLite transaction per batch protects events across process restarts
+            # without forcing every incoming message to synchronously fsync the disk.
+            if not await asyncio.to_thread(spool_activity_batch, batch):
+                log.error("Could not durably spool activity batch (size=%s); continuing with Supabase", len(batch))
             async with _ACTIVITY_WRITE_SEMAPHORE:
                 for attempt in range(3):
                     try:
@@ -1582,11 +1586,15 @@ async def track_activity(message: Message) -> None:
         message.from_user.full_name, datetime.now(timezone.utc).isoformat(),
         message.message_id,
     )
-    if not spool_activity(item):
-        log.critical("Could not durably spool activity event chat=%s user=%s message=%s", message.chat.id, message.from_user.id, message.message_id)
+    # Keep the hot message path in memory. Durable SQLite writes are batched by
+    # the background writer, rather than opening/fsyncing SQLite for every message.
     try:
         _ACTIVITY_QUEUE.put_nowait(item)
     except asyncio.QueueFull:
+        # Rare overflow path: persist this event off the event loop before buffering it.
+        if not await asyncio.to_thread(spool_activity, item):
+            log.critical("Could not spool overflow activity event chat=%s user=%s message=%s",
+                         message.chat.id, message.from_user.id, message.message_id)
         if len(_ACTIVITY_OVERFLOW) < _ACTIVITY_OVERFLOW_MAX:
             _ACTIVITY_OVERFLOW.append(item)
             log.warning("Activity queue is full; buffered event chat=%s user=%s overflow=%s",
