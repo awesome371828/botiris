@@ -6079,6 +6079,28 @@ async def roleplay_relationship_cmd(message: Message) -> None:
 # Virtual economy
 @router.message(Command("economy"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:баланс|кошелек|кошелёк|ежедневный бонус|бонус|передать|перевести|магазин|купить)(?:\s|$)"))
+async def _economy_rpc(chat_id: int, user_id: int, action: str,
+                       target_id: int | None = None, amount: int = 0, title: str = "") -> dict[str, Any] | None:
+    """Apply economy mutations in one PostgreSQL transaction to prevent race conditions."""
+    if db is None:
+        return None
+    try:
+        result = await asyncio.to_thread(
+            lambda: db.rpc("pear_economy_action", {
+                "p_chat_id": int(chat_id), "p_user_id": int(user_id),
+                "p_action": str(action), "p_target_id": target_id,
+                "p_amount": int(amount), "p_title": str(title)[:80],
+            }).execute()
+        )
+        data = result.data
+        if isinstance(data, list) and data:
+            data = data[0]
+        return data if isinstance(data, dict) else None
+    except Exception:
+        log.exception("Atomic economy RPC failed: action=%s chat=%s user=%s", action, chat_id, user_id)
+        return None
+
+
 async def economy_cmd(message: Message) -> None:
     if not message.from_user:
         return
@@ -6086,52 +6108,41 @@ async def economy_cmd(message: Message) -> None:
     norm = _feature_normalize(raw)
     if norm == "/economy":
         norm = "баланс"
-    uid = message.from_user.id
-    current = await asyncio.to_thread(db_one, "bot_economy", chat_id=message.chat.id, user_id=uid) or {
-        "chat_id":message.chat.id,"user_id":uid,"balance":0
-    }
-    if norm in {"баланс","кошелек","кошелёк"}:
-        await message.answer(f"🪙 Баланс: <b>{int(current.get('balance') or 0)}</b> Pear Coins.")
+    uid, chat_id = message.from_user.id, message.chat.id
+
+    # All economy mutations run atomically in PostgreSQL; this prevents double bonuses,
+    # overspending, and partially completed transfers during concurrent commands.
+    if norm in {"бонус", "ежедневный бонус"}:
+        result = await _economy_rpc(chat_id, uid, "bonus")
+        if not result:
+            await message.answer("⚠️ Не удалось обработать бонус. Проверь подключение Supabase.")
+        elif result.get("ok"):
+            await message.answer(f"🎁 Ежедневный бонус: +100 Pear Coins!\n🪙 Баланс: <b>{int(result.get('balance') or 0)}</b>")
+        else:
+            await message.answer("⏳ Бонус уже получен. Попробуй позже.")
         return
-    if norm in {"бонус","ежедневный бонус"}:
-        last = current.get("last_bonus")
-        if last:
-            try:
-                elapsed = datetime.now(timezone.utc)-datetime.fromisoformat(str(last).replace("Z","+00:00"))
-                if elapsed < timedelta(hours=20):
-                    wait = timedelta(hours=20)-elapsed
-                    await message.answer(f"⏳ Бонус уже получен. Попробуй через {int(wait.total_seconds()//3600)} ч {int((wait.total_seconds()%3600)//60)} мин.")
-                    return
-            except Exception:
-                pass
-        balance = int(current.get("balance") or 0)+100
-        saved = await asyncio.to_thread(db_upsert, "bot_economy", {
-            **current,"chat_id":message.chat.id,"user_id":uid,"balance":balance,
-            "last_bonus":datetime.now(timezone.utc).isoformat(),"updated_at":datetime.now(timezone.utc).isoformat()
-        }, "chat_id,user_id")
-        await message.answer(f"🎁 Ежедневный бонус: +100 Pear Coins!\n🪙 Баланс: <b>{balance}</b>" if saved else "Не удалось сохранить бонус. Проверь таблицу bot_economy в schema.sql.")
-        return
+
     if norm == "магазин":
         await message.answer("<b>🛍 Магазин Pear Coins</b>\n• Титул «Активный» — 250 монет\n• Титул «Легенда» — 1000 монет\nПокупка: <code>купить активный</code> или <code>купить легенда</code>.")
         return
+
     if norm.startswith("купить "):
         item = norm.split(maxsplit=1)[1]
-        prices = {"активный":250,"титул активный":250,"легенда":1000,"титул легенда":1000}
+        prices = {"активный": 250, "титул активный": 250, "легенда": 1000, "титул легенда": 1000}
         price = prices.get(item)
         if price is None:
             await message.answer("В магазине доступны: активный (250) и легенда (1000).")
             return
-        balance = int(current.get("balance") or 0)
-        if balance < price:
-            await message.answer(f"Не хватает монет: нужно {price}, у тебя {balance}.")
-            return
-        saved = await asyncio.to_thread(db_upsert, "bot_economy", {
-            **current,"chat_id":message.chat.id,"user_id":uid,"balance":balance-price,
-            "title":item,"updated_at":datetime.now(timezone.utc).isoformat()
-        }, "chat_id,user_id")
-        await message.answer("🛍 Покупка оформлена!" if saved else "Не удалось оформить покупку.")
+        result = await _economy_rpc(chat_id, uid, "purchase", amount=price, title=item)
+        if not result:
+            await message.answer("⚠️ Не удалось оформить покупку. Проверь подключение Supabase.")
+        elif result.get("ok"):
+            await message.answer("🛍 Покупка оформлена!")
+        else:
+            await message.answer(f"Не хватает монет: нужно {price}, у тебя {int(result.get('balance') or 0)}.")
         return
-    if norm.startswith(("передать ","перевести ")):
+
+    if norm.startswith(("передать ", "перевести ")):
         m = re.search(r"(?i)^(?:передать|перевести)\s+(?:(.+?)\s+)?(\d+)\s*$", raw)
         target = await _feature_target(message, (m.group(1) or "").strip() or None) if m else None
         amount = int(m.group(2)) if m else 0
@@ -6142,18 +6153,20 @@ async def economy_cmd(message: Message) -> None:
         if to_uid == uid or amount <= 0 or amount > 1000000:
             await message.answer("Укажи другого участника и сумму от 1 до 1 000 000.")
             return
-        receiver = await asyncio.to_thread(db_one, "bot_economy", chat_id=message.chat.id, user_id=to_uid) or {"chat_id":message.chat.id,"user_id":to_uid,"balance":0}
-        sender_balance = int(current.get("balance") or 0)
-        if sender_balance < amount:
-            await message.answer("Недостаточно монет.")
-            return
-        now = datetime.now(timezone.utc).isoformat()
-        sender_saved = await asyncio.to_thread(db_upsert, "bot_economy", {**current,"chat_id":message.chat.id,"user_id":uid,"balance":sender_balance-amount,"updated_at":now}, "chat_id,user_id")
-        receiver_saved = await asyncio.to_thread(db_upsert, "bot_economy", {**receiver,"chat_id":message.chat.id,"user_id":to_uid,"balance":int(receiver.get("balance") or 0)+amount,"updated_at":now}, "chat_id,user_id")
-        if not sender_saved or not receiver_saved:
-            await message.answer("⚠️ Перевод выполнен не полностью. Нужна проверка базы; не повторяй операцию сразу.")
-            return
-        await message.answer(f"🪙 Переведено <b>{amount}</b> монет участнику {mention(to_uid,str(target.get('first_name') or 'Участник'))}.")
+        result = await _economy_rpc(chat_id, uid, "transfer", target_id=to_uid, amount=amount)
+        if not result:
+            await message.answer("⚠️ Не удалось выполнить перевод. Проверь подключение Supabase.")
+        elif result.get("ok"):
+            await message.answer(f"🪙 Переведено <b>{amount}</b> монет участнику {mention(to_uid, str(target.get('first_name') or 'Участник'))}.")
+        else:
+            await message.answer(f"Недостаточно монет. Текущий баланс: {int(result.get('balance') or 0)}.")
+        return
+
+    current = await asyncio.to_thread(db_one, "bot_economy", chat_id=chat_id, user_id=uid) or {
+        "chat_id": chat_id, "user_id": uid, "balance": 0
+    }
+    if norm in {"баланс", "кошелек", "кошелёк"}:
+        await message.answer(f"🪙 Баланс: <b>{int(current.get('balance') or 0)}</b> Pear Coins.")
         return
     await message.answer("Команды экономики: баланс, ежедневный бонус, передать, магазин, купить.")
 
