@@ -303,6 +303,32 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("CommandRateLimitMiddleware", self.source)
         self.assertIn("command_match = re.match", self.source)
 
+    def test_service_role_key_is_required_and_public_key_fallback_is_disabled(self):
+        config = self.source[self.source.index("SUPABASE_URL ="):self.source.index("LOG_LEVEL =")]
+        self.assertIn('os.getenv("SUPABASE_SERVICE_KEY", "").strip()', config)
+        self.assertNotIn("SUPABASE_ANON", config)
+        self.assertNotIn("SUPABASE_PUBL", config)
+        self.assertIn("Запуск без постоянной БД запрещён", self.source)
+
+    def test_slow_database_operations_and_one_second_handlers_are_observable(self):
+        self.assertIn("Slow Supabase operation", self.source)
+        self.assertIn("elapsed >= 1.0", self.source)
+        self.assertIn("Slow update handler (target <1s)", self.source)
+
+    def test_economy_mutations_use_atomic_rpc(self):
+        start = self.source.index("async def economy_cmd")
+        end = self.source.index("# Clans", start)
+        body = self.source[start:end]
+        self.assertIn("async def _economy_rpc", body)
+        self.assertIn('"bonus"', body)
+        self.assertIn('"purchase"', body)
+        self.assertIn('"transfer"', body)
+        self.assertNotIn('db_upsert, "bot_economy"', body)
+        schema = SCHEMA.read_text(encoding="utf-8")
+        self.assertIn("create or replace function public.pear_economy_action", schema)
+        self.assertIn("for update", schema.lower())
+        self.assertIn("grant execute on function public.pear_economy_action", schema.lower())
+
     def test_top_defaults_to_current_chat_in_groups(self):
         self.assertIn("chat_only = is_group(message) and not global_scope", self.source)
         self.assertIn('global_scope = arg.startswith(("все чаты"', self.source)
