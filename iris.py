@@ -171,32 +171,17 @@ async def bot_commands_topic_toggle(message: Message) -> None:
         await message.answer("⚠️ Не удалось проверить права. Попробуй ещё раз.")
         return
 
-    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
-    topic_id = int(message.message_thread_id)
-    enabled_topics = settings.get("bot_commands_enabled_topics", [])
-    if not isinstance(enabled_topics, list):
-        enabled_topics = []
-    enabled_topics = list(dict.fromkeys(int(x) for x in enabled_topics if str(x).lstrip("-").isdigit()))
-    settings["bot_commands_topics_mode"] = True
-
     if match.group(1) == "+":
-        if topic_id not in enabled_topics:
-            enabled_topics.append(topic_id)
-        settings["bot_commands_enabled_topics"] = enabled_topics
-        save_chat_settings(message.chat.id, settings)
         await message.answer(
-            "✅ <b>Pear CM включён в этой теме.</b>\n"
-            "Команды бота будут работать здесь. В остальных темах они отключены.\n"
-            "Отключить: <code>-боткоманд</code>"
+            "✅ <b>Pear CM работает во всех темах этой группы.</b>\\n"
+            "Команды, модерация и ответы доступны одинаково во всех разделах. "
+            "Эта команда больше не ограничивает другие темы."
         )
     else:
-        enabled_topics = [x for x in enabled_topics if x != topic_id]
-        settings["bot_commands_enabled_topics"] = enabled_topics
-        save_chat_settings(message.chat.id, settings)
         await message.answer(
-            "🔕 <b>Pear CM отключён в этой теме.</b>\n"
-            "Команды бота здесь больше не обрабатываются. Чтобы включить обратно, отправь "
-            "<code>+боткоманд</code> в этой теме."
+            "ℹ️ <b>Pear CM продолжает работать во всех темах.</b>\\n"
+            "Отключение команд по отдельным темам убрано, чтобы команды не пропадали "
+            "в «Общалке», «Новостях» и других разделах."
         )
 
 
