@@ -3380,8 +3380,8 @@ async def demote_rank_cmd(message: Message) -> None:
     if target_member and target_member.status == ChatMemberStatus.CREATOR:
         await message.answer("⛔ Нельзя изменять ранг создателя Telegram-чата.")
         return
-    if current == 5 and not (actor_is_owner or actor_is_creator):
-        await message.answer("⛔ Понижать ранг 5 «Создатель» может только создатель чата или владелец Pear CM.")
+    if current == 5:
+        await message.answer("⛔ Ранг 5 защищён от понижения.")
         return
     actor_is_telegram_admin = bool(actor_member and actor_member.status == ChatMemberStatus.ADMINISTRATOR)
     actor_rank = 5 if (actor_is_owner or actor_is_creator) else max(int(actor_rank_loaded or 0), 4 if actor_is_telegram_admin else 0)
