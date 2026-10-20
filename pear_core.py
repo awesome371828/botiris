@@ -240,7 +240,19 @@ def check_schema(client: Any) -> list[str]:
         "bot_audit": "chat_id,actor_id,action,target_id,details,created_at",
         "bot_activity_events": "chat_id,user_id,message_id,username,first_name,created_at",
         "bot_activity_daily": "chat_id,user_id,day,username,first_name,messages,updated_at",
-        "bot_member_profiles": "chat_id,user_id,display_name,updated_at",
+        "bot_member_profiles": "chat_id,user_id,display_name,interests,about,updated_at",
+        "bot_marriages": "chat_id,user1_id,user1_name,user2_id,user2_name,status,created_at,accepted_at",
+        "bot_global_bans": "user_id,active,reason,actor_id,created_at,expires_at",
+        "bot_operators": "user_id,active,created_by,created_at",
+        "bot_reports": "id,chat_id,user_id,reporter_id,target_id,message_id,body,details,status,closed_by,closed_reason,created_at,closed_at",
+        "bot_appeals": "id,chat_id,user_id,body,status,closed_by,closed_reason,created_at,closed_at",
+        "bot_notes": "id,user_id,content,created_at,chat_id,actor_id",
+        "bot_trusted_users": "chat_id,user_id,active,actor_id,created_at",
+        "bot_economy": "chat_id,user_id,balance,last_bonus,title,updated_at",
+        "bot_clans": "id,chat_id,name,leader_id,created_at",
+        "bot_clan_members": "chat_id,user_id,clan_name,role,joined_at",
+        "bot_awards": "id,chat_id,user_id,award,actor_id,created_at",
+        "bot_relationships": "chat_id,user1_id,user2_id,points,updated_at",
     }
     problems: list[str] = []
     for table, columns in required.items():
