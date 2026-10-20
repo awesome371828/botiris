@@ -3895,15 +3895,33 @@ async def auto_moderation_filters(message: Message) -> None:
         return
     if message.from_user.id == OWNER_ID:
         return
+
+    # Hot path: read settings from memory first. Most chats have every automatic
+    # filter disabled, so ordinary messages should not create worker-thread jobs
+    # or query the trusted-user table at all.
+    now = time.monotonic()
+    cached_settings = _CHAT_SETTINGS_CACHE.get(message.chat.id)
+    cached_at = _CHAT_SETTINGS_CACHE_TIME.get(message.chat.id, 0.0)
+    if cached_settings is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
+        settings = dict(cached_settings)
+    else:
+        try:
+            settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+        except Exception:
+            log.exception("Could not load monitor-only filter settings chat=%s", message.chat.id)
+            return
+
+    active_filter_keys = (
+        "antispam", "antiflood", "antiinvite", "antilink", "antifishing",
+        "antimat", "antireklama", "antikripta", "antiall", "anticaps",
+    )
+    if not any(settings.get(flag) for flag in active_filter_keys):
+        return
+
+    # Trusted-user lookup is needed only when at least one automatic filter is enabled.
     if await asyncio.to_thread(_is_trusted_user, message.chat.id, message.from_user.id):
         return
-    # Monitor-only: avoid per-message Telegram admin calls and blocking DB rank lookups.
-    try:
-        settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
-    except Exception:
-        log.exception("Could not load monitor-only filter settings chat=%s", message.chat.id)
-        return
-    now = time.monotonic()
+
     key = (message.chat.id, message.from_user.id)
     normalized = re.sub(r"[^\w\s]", " ", text_value.lower(), flags=re.UNICODE)
     normalized = re.sub(r"\s+", " ", normalized).strip()
