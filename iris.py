@@ -3016,6 +3016,12 @@ async def logs_cmd(message: Message) -> None:
 @router.message(Command("marry", "proposemarriage", "wed"))
 @router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)\s*[!?.,]*$"))
 async def marry_cmd(message: Message) -> None:
+    # Safety guard: listing marriages must never be interpreted as a proposal,
+    # even if another alias/handler accidentally routes «браки» here.
+    marriage_text = _feature_normalize(message.text or "")
+    if marriage_text in {"браки", "все браки", "список браков"}:
+        await marriages_list_cmd(message)
+        return
     if not message.from_user or not is_group(message):
         await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
         return
