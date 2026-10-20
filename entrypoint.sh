@@ -24,8 +24,13 @@ while true; do
   child=""
 
   if [ "$code" -eq 23 ]; then
-    echo "[pear-entrypoint] STOP: Telegram polling conflict (exit 23). Stop the other instance before restarting."
-    exit 23
+    echo "[pear-entrypoint] Telegram polling conflict: another instance is using this token. Retrying in 60s."
+    sleep 60 &
+    child=$!
+    wait "$child" || true
+    child=""
+    delay=2
+    continue
   fi
 
   ended="$(date +%s)"
