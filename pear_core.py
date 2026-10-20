@@ -139,6 +139,25 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
     words = list(tokens)
     while i < len(words):
         token = words[i].strip(".,;:!?").casefold()
+        # Accept compact combined forms such as «1ч30м» or «2д3ч» as one token.
+        combined_parts = re.findall(r"(\d{1,7})(сек|секунд|мин|минут|час|ч|дн|д|нед|н|мес|месяц|г|год|лет|с|м|h|m|d|w|y)", token, re.I)
+        if combined_parts and "".join(amount + unit for amount, unit in combined_parts).casefold() == token:
+            combined_seconds = 0
+            combined_labels = []
+            valid_combined = True
+            for amount_text, unit_text in combined_parts:
+                seconds_part = unit_seconds(unit_text)
+                if seconds_part is None:
+                    valid_combined = False
+                    break
+                combined_seconds += int(amount_text) * seconds_part
+                combined_labels.append(f"{amount_text} {unit_text}")
+            if valid_combined and combined_seconds > 0:
+                total += combined_seconds
+                labels.extend(combined_labels)
+                consumed += 1
+                i += 1
+                continue
         if total == 0 and token in {"на", "сроком"}:
             consumed += 1; i += 1
             continue
