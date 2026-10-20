@@ -146,13 +146,18 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
         else:
             m = re.fullmatch(r"(\d{1,7})([a-zа-яё.]+)?", token, re.I)
             amount_word = _NUMBER_WORDS.get(token)
+            bare_unit_seconds = unit_seconds(token)
             if m:
                 amount = int(m.group(1)); unit = m.group(2); used = 1
             elif amount_word is not None:
                 amount = amount_word; unit = None; used = 1
+            elif bare_unit_seconds is not None:
+                amount = 1; seconds = bare_unit_seconds; used = 1
+                label = f"1 {token}"
+                unit = None
             else:
                 break
-            if unit is None:
+            if unit is None and amount_word is not None:
                 if i + used >= len(words):
                     break
                 unit = words[i+used].strip(".,;:!?").casefold()
@@ -160,11 +165,12 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
                 if seconds is None:
                     break
                 used += 1
-            else:
+            elif unit is not None:
                 seconds = unit_seconds(unit)
                 if seconds is None:
                     break
-            label = f"{amount} {unit}"
+            if not (bare_unit_seconds is not None and amount_word is None and m is None):
+                label = f"{amount} {unit}"
         if amount < 1 and not (token.startswith("пол") and amount == 0.5):
             return None
         total += int(amount * seconds)
