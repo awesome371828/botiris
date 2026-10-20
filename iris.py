@@ -61,11 +61,9 @@ def acquire_single_instance_lock() -> None:
 OWNER_ID = int(os.getenv("BOT_OWNER_ID", "6652898792"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_SERVICE_KEY", "").strip()
-    or os.getenv("SUPABASE_ANON", "").strip()
-    or os.getenv("SUPABASE_PUBL", "").strip()
-)
+# Never silently fall back to an anon/public key: moderation, ranks and economy
+# require the server-side service-role credential and strict database access.
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 MINI_APP_URL = "https://awesome371828.github.io/botiris/?v=20261014-6"
@@ -97,7 +95,7 @@ if SUPABASE_URL and SUPABASE_KEY:
     except Exception:
         log.exception("Не удалось создать клиент Supabase")
 else:
-    log.warning("Supabase не настроен: данные будут храниться только в рамках процесса.")
+    raise RuntimeError("Не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Запуск без постоянной БД запрещён, чтобы не терять данные и не обходить проверки прав.")
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
 dp = Dispatcher()
@@ -270,10 +268,10 @@ async def _remember_message_id(handler, event: Message, data):
     finally:
         elapsed = time.monotonic() - started
         _COMMAND_LATENCIES.append((elapsed, type(event).__name__))
-        if elapsed >= 2.0:
+        if elapsed >= 1.0:
             raw_text = (getattr(event, "text", None) or getattr(event, "caption", None) or "").replace("\n", " ")[:100]
             log.warning(
-                "Slow update handler: %.3fs type=%s chat=%s user=%s message=%s text=%r",
+                "Slow update handler (target <1s): %.3fs type=%s chat=%s user=%s message=%s text=%r",
                 elapsed, type(event).__name__,
                 getattr(getattr(event, "chat", None), "id", "?"),
                 getattr(getattr(event, "from_user", None), "id", "?"),
@@ -390,9 +388,15 @@ def _is_transient_db_error(exc: Exception) -> bool:
 
 def _db_read_with_retry(table: str, operation: str, build_query):
     """Retry idempotent Supabase reads/upserts on transient failures with bounded backoff."""
+    started = time.monotonic()
     for attempt in range(3):
         try:
-            return build_query()
+            result = build_query()
+            elapsed = time.monotonic() - started
+            if elapsed >= 0.35:
+                log.warning("Slow Supabase operation: table=%s operation=%s elapsed_ms=%.0f attempts=%s",
+                            table, operation, elapsed * 1000, attempt + 1)
+            return result
         except Exception as exc:
             if attempt < 2 and _is_transient_db_error(exc):
                 # Never sleep/retry synchronously on the asyncio event-loop thread.
