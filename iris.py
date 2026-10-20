@@ -138,7 +138,7 @@ if SUPABASE_URL and SUPABASE_KEY:
             db = None
             log.exception("Supabase compatibility fallback also failed; DB-dependent features will report unavailable")
 else:
-    raise RuntimeError("Не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
+    raise RuntimeError("Запуск без постоянной БД запрещён: не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
 dp = Dispatcher()
