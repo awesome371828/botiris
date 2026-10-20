@@ -1903,7 +1903,11 @@ async def unban_cmd(message: Message) -> None:
     try:
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
         audit(message.chat.id, message.from_user.id if message.from_user else 0, "unban", target[0], "manual unban")
-        await message.answer(f"✅ {mention(target[0], target[1])} разблокирован в этом чате.")
+        await message.answer(format_panel(
+            "БЛОКИРОВКА СНЯТА",
+            f"✅ {mention(target[0], target[1])} разблокирован в этом чате.",
+            "Модерация · действие выполнено",
+        ))
     except Exception as exc:
         await safe_error(message, exc)
 
@@ -2049,7 +2053,11 @@ async def unwarn_cmd(message: Message) -> None:
     if not saved:
         await message.answer("⚠️ Снятие зарегистрировано в журнале, но счётчик профиля не обновился. Не повторяй команду; проверь базу.")
         return
-    await message.answer(f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{new_count}</b>.")
+    await message.answer(format_panel(
+        "ПРЕДУПРЕЖДЕНИЕ СНЯТО",
+        f"✅ Снято одно действующее предупреждение у {mention(target[0], target[1])}. Осталось: <b>{new_count}</b>.",
+        "Модерация · действие выполнено",
+    ))
     
 @router.message(Command("clearwarns"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:сбросварнов|обнулитьварны)(?:\s|$)"))
@@ -2073,7 +2081,11 @@ async def clearwarns_cmd(message: Message) -> None:
     if not saved:
         await message.answer("⚠️ Сброс записан в журнале, но счётчик профиля не обновился. Не повторяй команду; проверь базу.")
         return
-    await message.answer(f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.")
+    await message.answer(format_panel(
+        "ПРЕДУПРЕЖДЕНИЯ СБРОШЕНЫ",
+        f"🧹 Предупреждения сброшены для {mention(target[0], target[1])}.",
+        "Модерация · действие выполнено",
+    ))
 
 # ── Message tools ─────────────────────────────────────────────────────────────
 @router.message(Command("del"))
