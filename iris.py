@@ -56,9 +56,17 @@ def acquire_single_instance_lock() -> None:
         return
     lock_path = os.getenv("BOT_LOCK_PATH", "/tmp/pear_cm_polling.lock")
     handle = open(lock_path, "w", encoding="utf-8")
-    # Wait for the current local instance to exit rather than repeatedly restarting
-    # and hammering getUpdates. flock releases automatically when the process dies.
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    # Fail fast instead of hanging indefinitely when a second local process starts.
+    # A blocking flock(handle.fileno(), fcntl.LOCK_EX) would wait forever here;
+    # this lock only coordinates processes sharing this filesystem and cannot prevent
+    # a second container/host from polling the same Telegram token.
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise RuntimeError(
+            f"Another Pear CM process already holds {lock_path}; refusing duplicate polling"
+        ) from exc
     _PROCESS_LOCK_HANDLE = handle  # Keep the descriptor open for the entire process lifetime.
     log.info("Single-instance polling lock acquired: %s", lock_path)
 
@@ -2081,31 +2089,32 @@ async def warn_cmd(message: Message) -> None:
                 _WARN_RECENT.pop(key, None)
     reason = await _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     # Each warning expires after seven days.
-    # Fetch the current warning ledger and user row concurrently; neither depends on the other.
-    before, user = await asyncio.gather(
-        asyncio.to_thread(active_warn_count, message.chat.id, target[0]),
-        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
-    )
-    user = user or {}
-    # The audit ledger is the source of truth for seven-day warning expiry/counts.
-    # Persist it first; never announce a warning if the ledger write failed.
-    audit_saved = await audit_wait(
-        message.chat.id, message.from_user.id if message.from_user else 0,
-        "warn", target[0], f"reason={reason}; expires_in_days=7",
-    )
-    if not audit_saved:
-        await message.answer("⚠️ Варн не зарегистрирован: база не подтвердила запись в журнал. Попробуй позже.")
+    # The RPC locks the target row and writes the audit event + profile counter
+    # in one Postgres transaction, so concurrent moderators cannot lose a warning.
+    try:
+        if db is None:
+            raise RuntimeError("Supabase client is not configured")
+        response = await asyncio.to_thread(
+            lambda: db.rpc("pear_issue_warning", {
+                "p_chat_id": message.chat.id,
+                "p_actor_id": message.from_user.id if message.from_user else 0,
+                "p_target_id": target[0],
+                "p_reason": reason[:500],
+            }).execute()
+        )
+        result = response.data
+        if isinstance(result, list):
+            result = result[0] if result else None
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError(f"warning RPC returned unexpected result: {result!r}")
+        before = int(result.get("before_count") or 0)
+        count = int(result.get("active_count") or (before + 1))
+    except Exception:
+        log.exception("Atomic warning issuance failed chat=%s target=%s", message.chat.id, target[0])
+        await message.answer("⚠️ Варн не выдан: база не подтвердила атомарную запись. Проверь schema.sql в Supabase и попробуй позже.")
         return
-    count = before + 1
-    saved = await asyncio.to_thread(db_upsert, "bot_users", {
-        **user, "user_id": target[0], "chat_id": message.chat.id,
-        "warns": count, "rank": int(user.get("rank") or 0),
-        "messages": int(user.get("messages") or 0),
-    }, "user_id,chat_id")
-    if not saved:
-        log.error("Warning audit saved but profile counter update failed chat=%s user=%s", message.chat.id, target[0])
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
-    profile_note = "" if saved else "\n⚠️ Журнал сохранён, но счётчик профиля не обновился. Не повторяй команду."
+    profile_note = ""
     await message.answer(format_panel(
         "ПРЕДУПРЕЖДЕНИЕ ВЫДАНО",
         f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
@@ -3392,9 +3401,13 @@ def save_chat_settings(chat_id: int, settings: dict[str, Any]) -> None:
         try:
             saved = await asyncio.to_thread(db_upsert, "bot_chat_settings", payload, "chat_id")
             if not saved:
-                log.error("Could not persist chat settings chat=%s keys=%s", chat_id, sorted(snapshot.keys()))
+                log.error("Could not persist chat settings chat=%s keys=%s; invalidating cache", chat_id, sorted(snapshot.keys()))
+                _CHAT_SETTINGS_CACHE.pop(chat_id, None)
+                _CHAT_SETTINGS_CACHE_TIME.pop(chat_id, None)
         except Exception:
-            log.exception("Could not persist chat settings chat=%s", chat_id)
+            log.exception("Could not persist chat settings chat=%s; invalidating cache", chat_id)
+            _CHAT_SETTINGS_CACHE.pop(chat_id, None)
+            _CHAT_SETTINGS_CACHE_TIME.pop(chat_id, None)
     try:
         asyncio.get_running_loop().create_task(persist())
     except RuntimeError:
@@ -6000,6 +6013,32 @@ async def extra_moderation_aliases(message: Message) -> None:
         return
 
 
+async def _worker_watchdog(
+    tasks: dict[str, asyncio.Task],
+    factories: dict[str, Any],
+) -> None:
+    """Restart crashed background workers and report event-loop stalls."""
+    previous = time.monotonic()
+    while True:
+        await asyncio.sleep(5)
+        now = time.monotonic()
+        lag = now - previous - 5
+        previous = now
+        if lag > 2:
+            log.error("Event loop lag detected: %.2fs; a synchronous/blocking handler may be stalling updates", lag)
+        for name, task in list(tasks.items()):
+            if task.done():
+                try:
+                    error = task.exception()
+                except asyncio.CancelledError:
+                    error = None
+                if error:
+                    log.error("Background worker %s crashed: %r; restarting", name, error)
+                else:
+                    log.error("Background worker %s stopped unexpectedly; restarting", name)
+                tasks[name] = asyncio.create_task(factories[name](), name=name)
+
+
 async def main() -> None:
     acquire_single_instance_lock()
     if db is not None:
@@ -6139,8 +6178,18 @@ async def main() -> None:
     if not webhook_removed:
         raise RuntimeError("Could not remove Telegram webhook after 5 attempts; polling cannot start")
     log.info("Bot started")
-    activity_writer = asyncio.create_task(_activity_writer_loop(), name="pear-activity-writer")
-    schedule_worker = asyncio.create_task(_schedule_worker(), name="pear-chat-scheduler")
+    worker_factories = {
+        "pear-activity-writer": _activity_writer_loop,
+        "pear-chat-scheduler": _schedule_worker,
+    }
+    worker_tasks = {
+        name: asyncio.create_task(factory(), name=name)
+        for name, factory in worker_factories.items()
+    }
+    watchdog = asyncio.create_task(
+        _worker_watchdog(worker_tasks, worker_factories),
+        name="pear-worker-watchdog",
+    )
     try:
         # Bound concurrent update handlers. An unlimited backlog can fan out hundreds
         # of handlers at once, burst Telegram replies, exhaust DB connections and make
@@ -6162,13 +6211,16 @@ async def main() -> None:
             await _drain_activity_queue(timeout=15.0)
         except Exception:
             log.exception("Could not drain activity queue during shutdown")
-        activity_writer.cancel()
-        schedule_worker.cancel()
-        for task in (activity_writer, schedule_worker):
+        watchdog.cancel()
+        for task in worker_tasks.values():
+            task.cancel()
+        for task in [watchdog, *worker_tasks.values()]:
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                log.exception("Background worker failed during shutdown")
         await bot.session.close()
 
 
@@ -6626,27 +6678,49 @@ async def clan_cmd(message: Message) -> None:
         if current:
             await message.answer("Ты уже состоишь в клане. Сначала выйди: <code>клан выйти</code>.")
             return
-        saved = await asyncio.to_thread(db_insert, "bot_clans", {"chat_id":chat_id,"name":name,"leader_id":uid,"created_at":datetime.now(timezone.utc).isoformat()})
-        if not saved:
-            await message.answer("Не удалось создать клан. Возможно, название уже занято или таблица bot_clans не создана.")
-            return
-        joined = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"leader","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
-        await message.answer(f"🏰 Клан <b>{escape(name)}</b> создан! Ты его лидер." if joined else "Клан создан, но не удалось записать лидера в состав.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "create", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": None, "p_name": name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            reason = result.get("reason", "") if isinstance(result, dict) else "invalid_result"
+        except Exception:
+            log.exception("Atomic clan creation failed chat=%s user=%s", chat_id, uid)
+            ok, reason = False, "database_error"
+        if ok:
+            await message.answer(f"🏰 Клан <b>{escape(name)}</b> создан! Ты его лидер.")
+        else:
+            await message.answer("Не удалось создать клан атомарно. Проверь schema.sql в Supabase; причина: <code>" + escape(str(reason)[:100]) + "</code>.")
         return
     if action in {"вступить","вступитьв","join"}:
         if not name:
             await message.answer("Формат: <code>клан вступить Название</code>.")
             return
-        existing = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
-        clan = await asyncio.to_thread(db_one, "bot_clans", chat_id=chat_id, name=name)
-        if existing:
-            await message.answer("Ты уже в клане. Сначала выйди из него.")
-            return
-        if not clan:
-            await message.answer("Клан не найден.")
-            return
-        saved = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"member","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
-        await message.answer(f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if saved else "Не удалось вступить в клан.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "join", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": None, "p_name": name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            reason = result.get("reason", "") if isinstance(result, dict) else "invalid_result"
+        except Exception:
+            log.exception("Atomic clan join failed chat=%s user=%s", chat_id, uid)
+            ok, reason = False, "database_error"
+        await message.answer(
+            f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if ok
+            else "Не удалось вступить в клан: <code>" + escape(str(reason)[:100]) + "</code>."
+        )
         return
     if action in {"распустить","удалить"}:
         member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
@@ -6680,11 +6754,21 @@ async def clan_cmd(message: Message) -> None:
             await message.answer("Новый лидер должен состоять в твоём клане.")
             return
         clan_name = str(member.get("clan_name") or "")
-        now = datetime.now(timezone.utc).isoformat()
-        ok1 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**member,"role":"member","joined_at":member.get("joined_at") or now}, "chat_id,user_id")
-        ok2 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**new_member,"role":"leader","joined_at":new_member.get("joined_at") or now}, "chat_id,user_id")
-        ok3 = await asyncio.to_thread(lambda: db.table("bot_clans").update({"leader_id":new_uid}).eq("chat_id",chat_id).eq("name",clan_name).execute() if db is not None else None)
-        await message.answer("👑 Лидерство передано." if ok1 and ok2 and ok3 else "Не удалось полностью передать лидерство. Проверь записи клана.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "transfer", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": new_uid, "p_name": clan_name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+        except Exception:
+            log.exception("Atomic clan leadership transfer failed chat=%s clan=%s", chat_id, clan_name)
+            ok = False
+        await message.answer("👑 Лидерство передано." if ok else "Не удалось передать лидерство атомарно. Проверь schema.sql в Supabase.")
         return
     if action in {"выйти","покинуть","leave"}:
         member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)

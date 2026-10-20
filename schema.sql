@@ -611,3 +611,114 @@ $$;
 
 revoke all on function public.increment_bot_activity_daily_batch(jsonb) from public, anon, authenticated;
 grant execute on function public.increment_bot_activity_daily_batch(jsonb) to service_role;
+
+
+-- Atomic warning ledger + profile counter. Concurrent warnings for the same target
+-- serialize on an advisory transaction lock; audit and profile update commit together.
+create or replace function public.pear_issue_warning(
+    p_chat_id bigint,
+    p_actor_id bigint,
+    p_target_id bigint,
+    p_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_before integer;
+    v_count integer;
+    v_now timestamptz := now();
+begin
+    if p_chat_id is null or p_actor_id is null or p_target_id is null or p_target_id = 0 then
+        return jsonb_build_object('ok', false, 'reason', 'invalid_request');
+    end if;
+    perform pg_advisory_xact_lock(hashtext(p_chat_id::text), hashtext(p_target_id::text));
+    select count(*)::integer into v_before
+    from public.bot_audit
+    where chat_id = p_chat_id and target_id = p_target_id
+      and action = 'warn' and created_at >= v_now - interval '7 days';
+    insert into public.bot_audit(chat_id, actor_id, action, target_id, details, created_at)
+    values (p_chat_id, p_actor_id, 'warn', p_target_id,
+            left(coalesce(p_reason, ''), 500) || '; expires_in_days=7', v_now);
+    v_count := v_before + 1;
+    insert into public.bot_users(user_id, chat_id, warns, rank, messages, first_name)
+    values (p_target_id, p_chat_id, v_count, 0, 0, 'Пользователь')
+    on conflict (user_id, chat_id) do update
+      set warns = excluded.warns;
+    return jsonb_build_object('ok', true, 'before_count', v_before, 'active_count', v_count);
+end;
+$$;
+revoke all on function public.pear_issue_warning(bigint, bigint, bigint, text) from public, anon, authenticated;
+grant execute on function public.pear_issue_warning(bigint, bigint, bigint, text) to service_role;
+
+
+-- Atomic clan membership changes; avoids duplicate membership and partial transfers.
+create or replace function public.pear_clan_action(
+    p_action text,
+    p_chat_id bigint,
+    p_user_id bigint,
+    p_target_id bigint default null,
+    p_name text default ''
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_name text := left(trim(coalesce(p_name, '')), 40);
+    v_member public.bot_clan_members%rowtype;
+    v_target public.bot_clan_members%rowtype;
+begin
+    if p_chat_id is null or p_user_id is null then
+        return jsonb_build_object('ok', false, 'reason', 'invalid_request');
+    end if;
+    perform pg_advisory_xact_lock(hashtext(p_chat_id::text), 7001);
+    if p_action = 'create' then
+        if length(v_name) < 2 then
+            return jsonb_build_object('ok', false, 'reason', 'invalid_name');
+        end if;
+        if exists(select 1 from public.bot_clan_members where chat_id=p_chat_id and user_id=p_user_id) then
+            return jsonb_build_object('ok', false, 'reason', 'already_in_clan');
+        end if;
+        insert into public.bot_clans(chat_id,name,leader_id) values(p_chat_id,v_name,p_user_id);
+        insert into public.bot_clan_members(chat_id,user_id,clan_name,role)
+          values(p_chat_id,p_user_id,v_name,'leader');
+        return jsonb_build_object('ok', true);
+    elsif p_action = 'join' then
+        if exists(select 1 from public.bot_clan_members where chat_id=p_chat_id and user_id=p_user_id) then
+            return jsonb_build_object('ok', false, 'reason', 'already_in_clan');
+        end if;
+        if not exists(select 1 from public.bot_clans where chat_id=p_chat_id and name=v_name) then
+            return jsonb_build_object('ok', false, 'reason', 'clan_not_found');
+        end if;
+        insert into public.bot_clan_members(chat_id,user_id,clan_name,role)
+          values(p_chat_id,p_user_id,v_name,'member');
+        return jsonb_build_object('ok', true);
+    elsif p_action = 'transfer' then
+        select * into v_member from public.bot_clan_members
+          where chat_id=p_chat_id and user_id=p_user_id for update;
+        select * into v_target from public.bot_clan_members
+          where chat_id=p_chat_id and user_id=p_target_id for update;
+        if v_member.user_id is null or v_member.role <> 'leader'
+           or v_target.user_id is null or v_target.clan_name <> v_member.clan_name
+           or v_member.clan_name <> v_name then
+            return jsonb_build_object('ok', false, 'reason', 'leader_or_target_invalid');
+        end if;
+        update public.bot_clan_members set role='member'
+          where chat_id=p_chat_id and user_id=p_user_id;
+        update public.bot_clan_members set role='leader'
+          where chat_id=p_chat_id and user_id=p_target_id;
+        update public.bot_clans set leader_id=p_target_id
+          where chat_id=p_chat_id and name=v_name;
+        return jsonb_build_object('ok', true);
+    end if;
+    return jsonb_build_object('ok', false, 'reason', 'unknown_action');
+exception when unique_violation then
+    return jsonb_build_object('ok', false, 'reason', 'already_exists');
+end;
+$$;
+revoke all on function public.pear_clan_action(text, bigint, bigint, bigint, text) from public, anon, authenticated;
+grant execute on function public.pear_clan_action(text, bigint, bigint, bigint, text) to service_role;

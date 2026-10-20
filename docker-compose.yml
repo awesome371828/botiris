@@ -10,9 +10,16 @@ services:
       - .env
     environment:
       PYTHONUNBUFFERED: "1"
+      PEAR_ACTIVITY_SPOOL_PATH: /var/lib/pear-cm/activity.sqlite3
+    volumes:
+      - pear_activity_data:/var/lib/pear-cm
     stop_grace_period: 30s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  pear_activity_data:
+    name: pear_activity_data
