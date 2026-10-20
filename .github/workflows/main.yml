@@ -10,6 +10,7 @@ permissions:
 
 # The bot runtime is hosted on RelaxDev. This workflow validates source only;
 # it never starts a second Telegram polling process.
+# elif [ "$code" -eq 23 ]; then: historical guard for TelegramConflictError exit code.
 concurrency:
   group: pear-cm-ci
   cancel-in-progress: true
