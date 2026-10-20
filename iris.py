@@ -201,7 +201,7 @@ class CommandRateLimitMiddleware(BaseMiddleware):
         )
         # /start and help must remain responsive even when Supabase is cold or slow.
         # They only display basic information and do not perform privileged actions.
-        start_or_help = bool(re.match(r"(?i)^/(?:start|help|commands)(?:@\\w+)?(?:\\s|$)", text_value))
+        start_or_help = bool(re.match(r"(?i)^/(?:start|help|commands)(?:@\w+)?(?:\s|$)", text_value))
         # The helper has a TTL cache; only check command-like updates and keep DB I/O
         # off the asyncio event loop.
         if command_like and not start_or_help and event.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, event.from_user.id):
@@ -258,7 +258,7 @@ async def _remember_message_id(handler, event: Message, data):
     raw = (event.text or event.caption or "").strip() if isinstance(event, Message) else ""
     # Owner audit trail: record every slash command and the important text aliases.
     # Keep logging asynchronous so ordinary chat commands remain responsive.
-    routine_public_command = bool(re.match(r"(?i)^/(?:start|help|commands)(?:@\\w+)?(?:\\s|$)", raw))
+    routine_public_command = bool(re.match(r"(?i)^/(?:start|help|commands)(?:@\w+)?(?:\s|$)", raw))
     if isinstance(event, Message) and event.from_user and raw and not routine_public_command and (
         raw.startswith(("/", "!", ".")) or re.match(
             r"(?i)^(калл|колл|call|сбор|общий сбор|вызов участников|мут|бан|кик|варн|размут|анмут|разбан|очистить|профиль|команды|помощь)(?:\\s|$)",
