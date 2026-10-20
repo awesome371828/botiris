@@ -1184,15 +1184,34 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
         return
     action = (callback.data or "").split(":", 1)[-1]
     if action == "profile" and callback.from_user:
-        user = await asyncio.to_thread(ensure_user, callback.from_user.id, callback.message.chat.id, callback.from_user.username, callback.from_user.full_name)
-        body = (f"👤 <b>Профиль</b>\n{mention(callback.from_user.id, callback.from_user.full_name)}\n\n"
-                f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>\n\n"
-                + await await_bot_rights_hint(callback.message.chat.id))
+        user = await asyncio.to_thread(
+            ensure_user, callback.from_user.id, callback.message.chat.id,
+            callback.from_user.username, callback.from_user.full_name
+        )
+        body = (
+            f"👤 <b>Профиль</b>\n{mention(callback.from_user.id, callback.from_user.full_name)}\n\n"
+            f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n"
+            f"🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n"
+            f"⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>\n\n"
+            + await await_bot_rights_hint(callback.message.chat.id)
+        )
     else:
-        body = ("📚 <b>Основные команды Pear CM</b>\n• /profile — профиль и статистика\n• /top — топ участников\n• /admins — список администраторов\n• /warns — предупреждения\n• /help — все команды\n\n"
-                + await await_bot_rights_hint(callback.message.chat.id))
+        body = (
+            "📚 <b>Основные команды Pear CM</b>\n"
+            "• /profile — профиль и статистика\n• /top — топ участников\n"
+            "• /admins — список администраторов\n• /warns — предупреждения\n"
+            "• /help — все команды\n\n"
+            + await await_bot_rights_hint(callback.message.chat.id)
+        )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
+    ])
+    try:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.debug("Could not edit group menu message: %s", exc)
     await callback.answer()
-    await callback.message.answer(body)
 
 @router.message(F.text.in_({"🏅 Чаты: топ дня", "🏆 Супер топ чатов", "Топ чат", "Чаты топ дня"}))
 async def removed_chat_top_button(message: Message) -> None:
@@ -5135,7 +5154,7 @@ async def inline_menu_callback(callback: CallbackQuery) -> None:
         ])
     elif action == "warns":
         try:
-            records = await asyncio.to_thread(db_rows, "warnings", filters={"chat_id": chat_id, "user_id": user_id}, limit=30)
+            records = await asyncio.to_thread(active_warn_entries, chat_id, user_id)
             if not records:
                 body = "⚠️ <b>Мои предупреждения</b>\n\nУ тебя нет активных предупреждений."
             else:
