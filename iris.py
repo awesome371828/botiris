@@ -2088,12 +2088,6 @@ async def warn_cmd(message: Message) -> None:
                 _WARN_RECENT.pop(key, None)
     reason = await _reason_from_preset(message.chat.id, "warn", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
     # Each warning expires after seven days.
-    # Fetch the current warning ledger and user row concurrently; neither depends on the other.
-    before, user = await asyncio.gather(
-        asyncio.to_thread(active_warn_count, message.chat.id, target[0]),
-        asyncio.to_thread(db_one, "bot_users", user_id=target[0], chat_id=message.chat.id),
-    )
-    user = user or {}
     # The RPC locks the target row and writes the audit event + profile counter
     # in one Postgres transaction, so concurrent moderators cannot lose a warning.
     try:
@@ -6683,27 +6677,49 @@ async def clan_cmd(message: Message) -> None:
         if current:
             await message.answer("Ты уже состоишь в клане. Сначала выйди: <code>клан выйти</code>.")
             return
-        saved = await asyncio.to_thread(db_insert, "bot_clans", {"chat_id":chat_id,"name":name,"leader_id":uid,"created_at":datetime.now(timezone.utc).isoformat()})
-        if not saved:
-            await message.answer("Не удалось создать клан. Возможно, название уже занято или таблица bot_clans не создана.")
-            return
-        joined = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"leader","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
-        await message.answer(f"🏰 Клан <b>{escape(name)}</b> создан! Ты его лидер." if joined else "Клан создан, но не удалось записать лидера в состав.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "create", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": None, "p_name": name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            reason = result.get("reason", "") if isinstance(result, dict) else "invalid_result"
+        except Exception:
+            log.exception("Atomic clan creation failed chat=%s user=%s", chat_id, uid)
+            ok, reason = False, "database_error"
+        if ok:
+            await message.answer(f"🏰 Клан <b>{escape(name)}</b> создан! Ты его лидер.")
+        else:
+            await message.answer("Не удалось создать клан атомарно. Проверь schema.sql в Supabase; причина: <code>" + escape(str(reason)[:100]) + "</code>.")
         return
     if action in {"вступить","вступитьв","join"}:
         if not name:
             await message.answer("Формат: <code>клан вступить Название</code>.")
             return
-        existing = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
-        clan = await asyncio.to_thread(db_one, "bot_clans", chat_id=chat_id, name=name)
-        if existing:
-            await message.answer("Ты уже в клане. Сначала выйди из него.")
-            return
-        if not clan:
-            await message.answer("Клан не найден.")
-            return
-        saved = await asyncio.to_thread(db_upsert, "bot_clan_members", {"chat_id":chat_id,"user_id":uid,"clan_name":name,"role":"member","joined_at":datetime.now(timezone.utc).isoformat()}, "chat_id,user_id")
-        await message.answer(f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if saved else "Не удалось вступить в клан.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "join", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": None, "p_name": name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            reason = result.get("reason", "") if isinstance(result, dict) else "invalid_result"
+        except Exception:
+            log.exception("Atomic clan join failed chat=%s user=%s", chat_id, uid)
+            ok, reason = False, "database_error"
+        await message.answer(
+            f"🏰 Ты вступил в клан <b>{escape(name)}</b>." if ok
+            else "Не удалось вступить в клан: <code>" + escape(str(reason)[:100]) + "</code>."
+        )
         return
     if action in {"распустить","удалить"}:
         member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
@@ -6737,11 +6753,21 @@ async def clan_cmd(message: Message) -> None:
             await message.answer("Новый лидер должен состоять в твоём клане.")
             return
         clan_name = str(member.get("clan_name") or "")
-        now = datetime.now(timezone.utc).isoformat()
-        ok1 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**member,"role":"member","joined_at":member.get("joined_at") or now}, "chat_id,user_id")
-        ok2 = await asyncio.to_thread(db_upsert, "bot_clan_members", {**new_member,"role":"leader","joined_at":new_member.get("joined_at") or now}, "chat_id,user_id")
-        ok3 = await asyncio.to_thread(lambda: db.table("bot_clans").update({"leader_id":new_uid}).eq("chat_id",chat_id).eq("name",clan_name).execute() if db is not None else None)
-        await message.answer("👑 Лидерство передано." if ok1 and ok2 and ok3 else "Не удалось полностью передать лидерство. Проверь записи клана.")
+        try:
+            response = await asyncio.to_thread(
+                lambda: db.rpc("pear_clan_action", {
+                    "p_action": "transfer", "p_chat_id": chat_id, "p_user_id": uid,
+                    "p_target_id": new_uid, "p_name": clan_name,
+                }).execute()
+            )
+            result = response.data
+            if isinstance(result, list):
+                result = result[0] if result else None
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+        except Exception:
+            log.exception("Atomic clan leadership transfer failed chat=%s clan=%s", chat_id, clan_name)
+            ok = False
+        await message.answer("👑 Лидерство передано." if ok else "Не удалось передать лидерство атомарно. Проверь schema.sql в Supabase.")
         return
     if action in {"выйти","покинуть","leave"}:
         member = await asyncio.to_thread(db_one, "bot_clan_members", chat_id=chat_id, user_id=uid)
