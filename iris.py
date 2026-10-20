@@ -3642,7 +3642,7 @@ async def premium_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     parts = raw.split()
     action = parts[1].lower() if len(parts) > 1 else "info"
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     enabled = bool(settings.get("pear_premium", False))
 
     if action in {"on", "вкл", "включить", "активировать", "enable"}:
@@ -3985,7 +3985,7 @@ async def configure_antispam_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     args = args_after_command(message)
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     if args and args[0].lower() in ("вкл", "on", "включить"):
         settings["antispam"] = True
     elif args and args[0].lower() in ("выкл", "off", "выключить"):
@@ -4006,7 +4006,7 @@ async def configure_antiraid_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     args = args_after_command(message)
-    settings = get_chat_settings(message.chat.id)
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
     if args and args[0].lower() in ("вкл", "on", "включить"):
         settings["antiraid"] = True
     elif args and args[0].lower() in ("выкл", "off", "выключить"):
