@@ -1277,11 +1277,11 @@ async def chat_warns(message: Message) -> None:
         return
     entries = await asyncio.to_thread(active_warn_entries, message.chat.id)
     if not entries:
-        await message.answer(
-            "╭ <b>ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА</b>\n"
-            "╰━━━━━━━━━━━━━━━━━━\n"
-            "<blockquote>Сейчас в этом чате нет действующих предупреждений.</blockquote>"
-        )
+        await message.answer(format_panel(
+            "ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА",
+            "<blockquote>Сейчас в этом чате нет действующих предупреждений.</blockquote>",
+            "Модерация · только текущие предупреждения",
+        ))
         return
     users = await asyncio.to_thread(db_rows, "bot_users", 1000, None, chat_id=message.chat.id)
     names = {int(row.get("user_id") or 0): str(row.get("first_name") or row.get("username") or "Участник") for row in users}
@@ -5151,7 +5151,11 @@ async def owner_ping(message: Message) -> None:
             db_result = f"OK · {(time.perf_counter()-start)*1000:.0f} мс"
         except Exception as exc:
             db_result = f"ошибка ({type(exc).__name__})"
-    await message.answer(f"🏓 Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>")
+    await message.answer(format_panel(
+        "ПРОВЕРКА СОЕДИНЕНИЯ",
+        f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>",
+        "Pear CM · технический статус",
+    ))
 
 @router.message(Command("diag", "diagnostics"))
 @router.message(F.text.regexp(r"(?i)^\s*диагностика\s*$"))
@@ -5180,7 +5184,18 @@ async def owner_diagnostics(message: Message) -> None:
         ordered = sorted(recent_latencies)
         p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
         lines.append(f"• Обработчики: p50={ordered[len(ordered)//2]*1000:.0f} мс; p95={p95*1000:.0f} мс (последние {len(ordered)} обновлений)")
-    await message.answer("<b>🧪 Диагностика</b>\n" + "\n".join(lines) + "\n\nСекретные значения не выводятся.")
+    lines.append(f"• Очередь статистики: {_ACTIVITY_QUEUE.qsize()} в памяти")
+    lines.append(f"• Локальный журнал статистики: {activity_spool_size()} событий")
+    schema_problems = await asyncio.to_thread(check_schema, db) if db is not None else ["Supabase не настроен"]
+    lines.append(f"• Схема Supabase: {'OK' if not schema_problems else 'есть проблемы (' + str(len(schema_problems)) + ')'}")
+    details = "\n".join(lines)
+    if schema_problems:
+        details += "\n\n<b>Проблемы схемы:</b>\n" + "\n".join(escape(x) for x in schema_problems)
+    await message.answer(format_panel(
+        "ТЕХНИЧЕСКАЯ ДИАГНОСТИКА",
+        details,
+        "Pear CM · секретные значения не выводятся",
+    ))
 
 @router.message(Command("globalstats", "глобальнаястатистика"))
 @router.message(F.text.regexp(r"(?i)^\s*глобальная статистика\s*$"))
