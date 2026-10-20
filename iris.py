@@ -185,9 +185,23 @@ class CommandRateLimitMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         if not isinstance(event, Message) or not event.from_user or event.from_user.is_bot:
             return await handler(event, data)
-        # Enforce the bot's global-ban table before any command/feature handler runs.
-        # The helper has a TTL cache; run its cold Supabase lookup off the event loop.
-        if event.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, event.from_user.id):
+        text_value = (event.text or event.caption or "").strip()
+        # Global restrictions are relevant to bot commands, not ordinary chat messages.
+        # Avoid a cache miss / Supabase lookup for every regular message in a busy group.
+        command_like = bool(
+            re.match(r"^[/!.][\w]+(?:@\w+)?", text_value, re.I)
+            or re.match(
+                r"(?i)^(?:мут|бан|кик|варн|размут|анмут|разбан|анварн|снять варн|очистить|"
+                r"профиль|команды|помощь|топ|стата|статистика|админы|кто админ|варны|"
+                r"браки|брак|развод|развестись|калл|колл|call|сбор|общий сбор|"
+                r"антифлуд|антиспам|антиссылка|приветствие|заметка|заметки|жалоба|репорт|"
+                r"апелляция|калькулятор|рандом|кубик|время|дата)(?:\s|$)",
+                text_value,
+            )
+        )
+        # The helper has a TTL cache; only check command-like updates and keep DB I/O
+        # off the asyncio event loop.
+        if command_like and event.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, event.from_user.id):
             now = time.monotonic()
             notice_at = _GLOBAL_BAN_NOTICE_LAST.get(event.from_user.id, 0.0)
             if event.chat.type == ChatType.PRIVATE and now - notice_at >= 10:
@@ -197,7 +211,6 @@ class CommandRateLimitMiddleware(BaseMiddleware):
                 except Exception:
                     pass
             return None
-        text_value = (event.text or "").strip()
         command_match = re.match(r"^([/!.][\w]+)(?:@\w+)?", text_value, re.I)
         plain_match = re.match(
             r"^(мут|бан|кик|варн|размут|анмут|разбан|очистить|профиль|команды|помощь)(?:\s|$)",
