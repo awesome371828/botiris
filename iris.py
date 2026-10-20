@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import time
+import threading
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -4404,22 +4405,35 @@ async def close_chat_cmd(message: Message) -> None:
 
 # ── Advanced chat administration: temporary bans, notes, trusted users, settings ──
 _TRUSTED_CACHE: dict[tuple[int, int], tuple[bool, float]] = {}
-_TRUSTED_CACHE_TTL = 30.0
+_TRUSTED_CACHE_TTL = 60.0
+_TRUSTED_LOCKS: dict[tuple[int, int], threading.Lock] = {}
+_TRUSTED_LOCKS_GUARD = threading.Lock()
+
+def _trusted_lock(key: tuple[int, int]) -> threading.Lock:
+    # Avoid duplicate Supabase lookups on concurrent cache misses for one user.
+    with _TRUSTED_LOCKS_GUARD:
+        lock = _TRUSTED_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _TRUSTED_LOCKS[key] = lock
+        return lock
 
 def _is_trusted_user(chat_id: int, user_id: int) -> bool:
     key = (chat_id, user_id)
-    now = time.monotonic()
-    cached = _TRUSTED_CACHE.get(key)
-    if cached and cached[1] > now:
-        return cached[0]
-    row = db_one("bot_trusted_users", chat_id=chat_id, user_id=user_id, active=True)
-    value = bool(row and row.get("active"))
-    _TRUSTED_CACHE[key] = (value, now + _TRUSTED_CACHE_TTL)
-    if len(_TRUSTED_CACHE) > 10000:
-        for old_key, (_, expiry) in list(_TRUSTED_CACHE.items()):
-            if expiry < now:
-                _TRUSTED_CACHE.pop(old_key, None)
-    return value
+    with _trusted_lock(key):
+        now = time.monotonic()
+        cached = _TRUSTED_CACHE.get(key)
+        if cached and cached[1] > now:
+            return cached[0]
+        row = db_one("bot_trusted_users", chat_id=chat_id, user_id=user_id, active=True)
+        value = bool(row and row.get("active"))
+        _TRUSTED_CACHE[key] = (value, now + _TRUSTED_CACHE_TTL)
+        if len(_TRUSTED_CACHE) > 10000:
+            for old_key, (_, expiry) in list(_TRUSTED_CACHE.items()):
+                if expiry < now:
+                    _TRUSTED_CACHE.pop(old_key, None)
+                    _TRUSTED_LOCKS.pop(old_key, None)
+        return value
 
 def _invalidate_trusted(chat_id: int, user_id: int) -> None:
     _TRUSTED_CACHE.pop((chat_id, user_id), None)
