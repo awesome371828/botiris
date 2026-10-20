@@ -190,7 +190,6 @@ async def bot_commands_topic_toggle_dispatch(message: Message) -> None:
     await bot_commands_topic_toggle(message)
 
 
-@router.message.outer_middleware
 def _normalize_natural_moderation_phrase(raw: str) -> str:
     """Deterministically normalize common Russian inflections to existing command aliases.
 
@@ -6123,11 +6122,14 @@ async def online_cmd(message: Message) -> None:
 
 
 # ── Global error handling / startup ──────────────────────────────────────────
+# Prevent an exception affecting multiple incoming updates from spamming the chat.
+_ERROR_NOTICE_LAST_SENT: dict[int, float] = {}
+_ERROR_NOTICE_COOLDOWN_SECONDS = 60.0
+
 @dp.errors()
 async def global_error_handler(event) -> bool:
     exc = getattr(event, "exception", event)
-    log.exception("Unhandled update error: %r", exc)
-    # Never leave a user with complete silence after a handler crashes.
+    log.error("Unhandled update error: %r", exc, exc_info=(type(exc), exc, exc.__traceback__))
     update = getattr(event, "update", None)
     message = (
         getattr(update, "message", None)
@@ -6135,13 +6137,19 @@ async def global_error_handler(event) -> bool:
         or getattr(getattr(update, "callback_query", None), "message", None)
     )
     if message is not None:
-        try:
-            await message.answer(
-                "⚠️ Команда вызвала внутреннюю ошибку. Ошибка записана в журнал; "
-                "повтори команду позже или сообщи владельцу бота."
-            )
-        except Exception:
-            log.exception("Could not send the user-facing internal-error notice")
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        now = time.monotonic()
+        # Log every failure, but send at most one user-facing notice per chat/minute.
+        if chat_id is not None and now - _ERROR_NOTICE_LAST_SENT.get(chat_id, 0.0) >= _ERROR_NOTICE_COOLDOWN_SECONDS:
+            _ERROR_NOTICE_LAST_SENT[chat_id] = now
+            try:
+                await message.answer(
+                    "⚠️ Внутренняя ошибка бота. Подробности записаны в журнал."
+                )
+            except TelegramRetryAfter as send_exc:
+                log.warning("Error notice rate-limited by Telegram; retry after %s seconds", send_exc.retry_after)
+            except Exception:
+                log.exception("Could not send the user-facing internal-error notice")
     return True
 
 # Extra Russian moderation aliases. Normalize synonyms before invoking the existing
