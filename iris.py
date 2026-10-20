@@ -152,6 +152,65 @@ async def marriages_directory_dispatch_first(message: Message) -> None:
     await marriages_list_cmd(message)
 
 
+_BOT_COMMAND_TOPIC_TOGGLES = re.compile(r"^\s*([+-])боткоманд\s*$", re.IGNORECASE)
+
+
+async def bot_commands_topic_toggle(message: Message) -> None:
+    """Enable/disable Pear CM commands for the current Telegram forum topic."""
+    match = _BOT_COMMAND_TOPIC_TOGGLES.fullmatch(message.text or "")
+    if not match or not message.from_user or not is_group(message):
+        return
+    if message.message_thread_id is None:
+        await message.answer(
+            "⚠️ Эта команда работает внутри темы форума. Открой нужную тему и отправь "
+            "<code>+боткоманд</code> или <code>-боткоманд</code> там."
+        )
+        return
+
+    try:
+        member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
+        if not member or member.status not in {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}:
+            await message.answer("⛔ Включать и отключать команды Pear CM в теме могут только администраторы чата.")
+            return
+    except Exception:
+        log.exception("Could not verify topic-toggle permissions chat=%s user=%s", message.chat.id, message.from_user.id)
+        await message.answer("⚠️ Не удалось проверить права. Попробуй ещё раз.")
+        return
+
+    settings = await asyncio.to_thread(get_chat_settings, message.chat.id)
+    topic_id = int(message.message_thread_id)
+    enabled_topics = settings.get("bot_commands_enabled_topics", [])
+    if not isinstance(enabled_topics, list):
+        enabled_topics = []
+    enabled_topics = list(dict.fromkeys(int(x) for x in enabled_topics if str(x).lstrip("-").isdigit()))
+    settings["bot_commands_topics_mode"] = True
+
+    if match.group(1) == "+":
+        if topic_id not in enabled_topics:
+            enabled_topics.append(topic_id)
+        settings["bot_commands_enabled_topics"] = enabled_topics
+        save_chat_settings(message.chat.id, settings)
+        await message.answer(
+            "✅ <b>Pear CM включён в этой теме.</b>\n"
+            "Команды бота будут работать здесь. В остальных темах они отключены.\n"
+            "Отключить: <code>-боткоманд</code>"
+        )
+    else:
+        enabled_topics = [x for x in enabled_topics if x != topic_id]
+        settings["bot_commands_enabled_topics"] = enabled_topics
+        save_chat_settings(message.chat.id, settings)
+        await message.answer(
+            "🔕 <b>Pear CM отключён в этой теме.</b>\n"
+            "Команды бота здесь больше не обрабатываются. Чтобы включить обратно, отправь "
+            "<code>+боткоманд</code> в этой теме."
+        )
+
+
+@router.message(F.text.regexp(r"(?i)^\s*[+-]боткоманд\s*$"))
+async def bot_commands_topic_toggle_dispatch(message: Message) -> None:
+    await bot_commands_topic_toggle(message)
+
+
 @router.message.outer_middleware
 async def normalize_dot_dk_prefix(handler, event, data):
     """Let .дк prefix reuse existing command handlers without duplicating command logic.
@@ -161,6 +220,27 @@ async def normalize_dot_dk_prefix(handler, event, data):
     """
     if isinstance(event, Message) and event.text:
         raw = event.text.strip()
+
+        # Topic command gate: once a chat uses +боткоманд, process updates only
+        # inside explicitly enabled forum topics. The two toggle commands always pass.
+        if is_group(event):
+            toggle_match = _BOT_COMMAND_TOPIC_TOGGLES.fullmatch(raw)
+            if not toggle_match:
+                try:
+                    settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
+                    if settings.get("bot_commands_topics_mode"):
+                        allowed = settings.get("bot_commands_enabled_topics", [])
+                        topic_id = event.message_thread_id
+                        if topic_id is None or int(topic_id) not in {
+                            int(value) for value in allowed
+                            if str(value).lstrip("-").isdigit()
+                        }:
+                            return
+                except Exception:
+                    # Fail open on a settings read failure to avoid accidentally
+                    # disabling moderation throughout the group.
+                    log.exception("Could not check topic command gate chat=%s", event.chat.id)
+
         match = re.match(r"(?is)^\.дк\s+(.+)$", raw)
         if match:
             body = match.group(1).strip()
