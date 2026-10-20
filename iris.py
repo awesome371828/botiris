@@ -5034,42 +5034,140 @@ _ADMIN_INPUT_STATE: dict[int, str] = {}
 
 @router.callback_query(F.data.startswith("home:"))
 async def home_inline_callback(callback: CallbackQuery) -> None:
-    if not callback.message:
+    if not callback.message or not callback.from_user:
         await callback.answer()
         return
     action = (callback.data or "").split(":", 1)[1]
-    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
-    if action == "start":
-        await callback.message.answer(
-            "👋 <b>Pear CM</b> управляет группой: модерация, статистика, фильтры и инструменты администраторов.",
-            reply_markup=welcome_inline_keyboard(callback.from_user.id, callback.message.chat.type),
+    user_id = callback.from_user.id
+    chat_type = callback.message.chat.type
+    privileged = chat_type == ChatType.PRIVATE and (
+        user_id == OWNER_ID or await asyncio.to_thread(_operator_active, user_id)
+    )
+    if action in {"start", "home"}:
+        body = (
+            "👋 <b>Главное меню Pear CM</b>\n\n"
+            "Выберите нужный раздел. Все разделы открываются в этом сообщении — чат не засоряется."
         )
+        keyboard = welcome_inline_keyboard(user_id, chat_type, privileged)
     elif action == "help":
-        synthetic = synthetic.model_copy(update={"text": "🔗 Команды"})
-        await help_command(synthetic)
+        body = (
+            "📚 <b>Команды Pear CM</b>\n\n"
+            "<b>Профиль и статистика</b>\n"
+            "• /profile — профиль и статистика\n• /top — топ участников\n"
+            "• /admins — список администраторов\n• /warns — мои предупреждения\n\n"
+            "<b>Модерация</b>\n"
+            "• Ответьте на сообщение: мут 30 минут / бан / кик / варн\n"
+            "• -смс N — удалить последние N сообщений (до 100)\n"
+            "• -смс ответом — удалить сообщение, на которое ответили\n"
+            "• -чат / +чат — закрыть / открыть чат\n\n"
+            "Для модерации боту нужны соответствующие права администратора."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Профиль", callback_data="home:profile")],
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")],
+        ])
     elif action == "profile":
-        synthetic = synthetic.model_copy(update={"text": "💠 Профиль"})
-        await profile(synthetic)
+        try:
+            user = await asyncio.to_thread(
+                ensure_user, user_id, callback.message.chat.id,
+                callback.from_user.username, callback.from_user.full_name
+            )
+            body = (
+                f"💠 <b>Твой профиль</b>\n\n"
+                f"👤 {mention(user_id, callback.from_user.full_name)}\n"
+                f"💬 Сообщений: <b>{int(user.get('messages', 0))}</b>\n"
+                f"🏅 Ранг: <b>{int(user.get('rank', 0))}</b>\n"
+                f"⚠️ Предупреждений: <b>{int(user.get('warns', 0))}</b>"
+            )
+        except Exception:
+            body = "💠 <b>Профиль</b>\nНе удалось загрузить статистику. Попробуйте ещё раз."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")],
+        ])
+    else:
+        await callback.answer("Неизвестный раздел.")
+        return
+    try:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.debug("Could not edit menu message: %s", exc)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("menu:"))
 async def inline_menu_callback(callback: CallbackQuery) -> None:
-    if not callback.message:
+    if not callback.message or not callback.from_user:
         await callback.answer()
         return
     action = (callback.data or "").split(":", 1)[1]
-    synthetic = callback.message.model_copy(update={"from_user": callback.from_user})
-    handlers = {
-        "marriage": ("💍 Брак", marriage_menu),
-        "installation": ("🛠 Установка", installation_help),
-        "warns": ("⚠️ Мои варны", my_warns),
-        "admins": ("🛡 Кто админ", admins),
-    }
-    item = handlers.get(action)
-    if item:
-        synthetic = synthetic.model_copy(update={"text": item[0]})
-        await item[1](synthetic)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    chat_type = callback.message.chat.type
+    if action == "installation":
+        body = (
+            "🛠 <b>Установка Pear CM</b>\n\n"
+            "1. Нажмите «➕ Добавить в чат» в главном меню.\n"
+            "2. Выберите группу и подтвердите добавление.\n"
+            "3. В настройках группы назначьте Pear CM администратором.\n"
+            "4. Включите нужные права: удаление сообщений, блокировка и ограничение участников. "
+            "Для «-чат» и «+чат» нужны права управления чатом.\n\n"
+            "Если нужна только статистика, не выдавайте права модерации."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить в чат", url="https://t.me/pear_cm_bot?startgroup=true")],
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")],
+        ])
+    elif action == "admins":
+        try:
+            admins = await bot.get_chat_administrators(chat_id)
+            rows = ["🛡 <b>Администраторы чата</b>\n"]
+            for admin in admins[:40]:
+                member = admin.user
+                label = escape(member.full_name or str(member.id))
+                rows.append(f"• <a href=\"tg://user?id={member.id}\">{label}</a>")
+            body = "\n".join(rows) if len(rows) > 1 else "🛡 Список администраторов пуст."
+        except Exception:
+            body = "🛡 Не удалось получить список администраторов. Проверьте доступ бота к чату."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
+        ])
+    elif action == "warns":
+        try:
+            records = await asyncio.to_thread(db_rows, "warnings", filters={"chat_id": chat_id, "user_id": user_id}, limit=30)
+            if not records:
+                body = "⚠️ <b>Мои предупреждения</b>\n\nУ тебя нет активных предупреждений."
+            else:
+                rows = ["⚠️ <b>Мои предупреждения</b>\n"]
+                for item in records[:15]:
+                    reason = escape(str(item.get("reason") or "Без причины"))
+                    rows.append(f"• {reason}")
+                body = "\n".join(rows)
+        except Exception:
+            body = "⚠️ <b>Мои предупреждения</b>\nНе удалось загрузить предупреждения. Попробуйте команду /warns."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
+        ])
+    elif action == "marriage":
+        body = (
+            "💍 <b>Брак в чате</b>\n\n"
+            "Чтобы предложить брак, ответьте на сообщение пользователя командой <code>брак</code>.\n"
+            "Партнёр сможет принять или отклонить предложение."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
+        ])
+    else:
+        await callback.answer("Неизвестный раздел.")
+        return
+    try:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.debug("Could not edit section message: %s", exc)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("admin:"))
 async def admin_inline_callback(callback: CallbackQuery) -> None:
@@ -5082,56 +5180,78 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
     if callback.from_user.id != OWNER_ID and not await asyncio.to_thread(_operator_active, callback.from_user.id):
         await callback.answer("Нет доступа к админ-панели.", show_alert=True)
         return
+
     action = (callback.data or "").split(":", 1)[1]
-    if action == "open":
-        await callback.message.answer("🛠 <b>Админ-панель Pear CM</b>\nВыберите действие:", reply_markup=admin_inline_keyboard())
+    uid = callback.from_user.id
+    back_admin = InlineKeyboardButton(text="↩️ Назад в админ-панель", callback_data="admin:open")
+    back_home = InlineKeyboardButton(text="🏠 Выход в главное меню", callback_data="admin:home")
+
+    if action in {"open", "cancel"}:
+        _ADMIN_INPUT_STATE.pop(uid, None)
+        body = "🛠 <b>Админ-панель Pear CM</b>\n\nВыберите действие:"
+        keyboard = admin_inline_keyboard()
     elif action in {"ban", "unban"}:
-        _ADMIN_INPUT_STATE[callback.from_user.id] = action
+        _ADMIN_INPUT_STATE[uid] = action
         verb = "бан" if action == "ban" else "разбан"
-        await callback.message.answer(
+        body = (
             f"Введите одним сообщением: <code>@username или Telegram_ID [срок] причина</code> для действия «{verb}».\n"
             "Примеры: <code>@username 1 день спам</code>, <code>123456789 навсегда мошенничество</code>.\n"
-            "Для разбана достаточно ID или @username. Username должен быть уже известен боту.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")]])
+            "Username должен быть уже известен боту."
         )
-    elif action == "cancel":
-        _ADMIN_INPUT_STATE.pop(callback.from_user.id, None)
-        await callback.message.answer("Действие отменено.", reply_markup=admin_inline_keyboard())
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:cancel")],
+            [back_admin], [back_home],
+        ])
     elif action == "operators":
-        await callback.message.answer("Управление операторами: /operators, /operator ID, /revokeoperator ID. Назначайте операторов только тем, кому доверяете.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📋 Показать операторов", callback_data="admin:operators_list")],[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
-    elif action == "operators_list":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/operators"})
-        await owner_list_operators(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
-    elif action == "globalstats":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/globalstats"})
-        await owner_global_stats(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
-    elif action == "logs":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/logs"})
-        await owner_logs(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
-    elif action == "modules":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/modules"})
-        await owner_modules(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
-    elif action == "maintenance":
-        await callback.message.answer("Режим обслуживания: отправьте <code>/maintenance on</code> или <code>/maintenance off</code>. Это глобально ограничивает функции бота, поэтому изменение требует явной команды.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
-    elif action == "filters":
-        await callback.message.answer("Фильтры текущей группы: <code>фильтры</code>, <code>+антиссылка</code>, <code>-антиссылка</code>, <code>+антифлуд</code>, <code>-антифлуд</code>. Настройки применяются к группе, где вы их вводите.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:open")]]))
+        body = "👮 <b>Управление операторами</b>\n\nКоманды: <code>/operators</code>, <code>/operator ID</code>, <code>/revokeoperator ID</code>.\nНазначайте операторов только тем, кому доверяете."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Показать операторов", callback_data="admin:operators_list")],
+            [back_admin], [back_home],
+        ])
+    elif action in {"maintenance", "filters"}:
+        if action == "maintenance":
+            body = "🛠 <b>Обслуживание</b>\n\nДля изменения режима используйте <code>/maintenance on</code> или <code>/maintenance off</code>. Это глобально ограничивает функции бота."
+        else:
+            body = "🧰 <b>Фильтры</b>\n\nКоманды: <code>фильтры</code>, <code>+антиссылка</code>, <code>-антиссылка</code>, <code>+антифлуд</code>, <code>-антифлуд</code>. Настройки применяются к группе, где вы их вводите."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[back_admin], [back_home]])
     elif action == "stats":
         rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
-        await callback.message.answer(f"📊 <b>Статистика</b>\nЗаписей пользователей в выборке: <b>{len(rows)}</b>.", reply_markup=admin_inline_keyboard())
-    elif action == "status":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/status"})
-        await owner_status(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
-    elif action == "diag":
-        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": "/diag"})
-        await owner_diagnostics(synthetic)
-        await callback.message.answer("🛠 Админ-панель:", reply_markup=admin_inline_keyboard())
+        body = f"📊 <b>Статистика Pear CM</b>\n\nЗаписей пользователей в выборке: <b>{len(rows)}</b>."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[back_admin], [back_home]])
+    elif action in {"operators_list", "globalstats", "logs", "modules", "status", "diag"}:
+        commands = {
+            "operators_list": "/operators",
+            "globalstats": "/globalstats",
+            "logs": "/logs",
+            "modules": "/modules",
+            "status": "/status",
+            "diag": "/diag",
+        }
+        synthetic = callback.message.model_copy(update={"from_user": callback.from_user, "text": commands[action]})
+        handler = {
+            "operators_list": owner_list_operators,
+            "globalstats": owner_global_stats,
+            "logs": owner_logs,
+            "modules": owner_modules,
+            "status": owner_status,
+            "diag": owner_diagnostics,
+        }[action]
+        # Existing owner commands may emit a report; keep navigation available in the same panel.
+        await handler(synthetic)
+        await callback.answer()
+        return
     elif action == "home":
-        await callback.message.answer("Главное меню:", reply_markup=welcome_inline_keyboard(callback.from_user.id))
+        body = "👋 <b>Главное меню Pear CM</b>\n\nВыберите нужный раздел."
+        keyboard = welcome_inline_keyboard(uid, ChatType.PRIVATE, True)
+    else:
+        await callback.answer("Неизвестное действие.")
+        return
+
+    try:
+        await callback.message.edit_text(body, reply_markup=keyboard)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.debug("Could not edit admin menu message: %s", exc)
     await callback.answer()
 
 @router.message(F.chat.type == ChatType.PRIVATE, F.text, lambda message: bool(message.from_user and message.from_user.id in _ADMIN_INPUT_STATE))
