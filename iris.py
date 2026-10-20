@@ -1835,6 +1835,47 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
 @router.message(Command("mute"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте)\s+)?(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^@\w+\s+(?:мут(?:ить|а|у|ом|е|ы|ов|ами|ах)?|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)(?:\s|$)"))
+_SHORT_MUTE_TASKS: dict[tuple[int, int], asyncio.Task] = {}
+
+def _cancel_short_mute_expiry(chat_id: int, user_id: int) -> None:
+    task = _SHORT_MUTE_TASKS.pop((chat_id, user_id), None)
+    if task and not task.done():
+        task.cancel()
+
+async def _expire_short_mute(chat_id: int, user_id: int, seconds: float) -> None:
+    key = (chat_id, user_id)
+    current_task = asyncio.current_task()
+    try:
+        await asyncio.sleep(max(0.0, seconds))
+        chat_info = await bot.get_chat(chat_id)
+        default_permissions = getattr(chat_info, "permissions", None)
+        if default_permissions is not None:
+            permissions = ChatPermissions(**default_permissions.model_dump(exclude_none=True))
+        else:
+            permissions = ChatPermissions(
+                can_send_messages=True, can_send_audios=True, can_send_documents=True,
+                can_send_photos=True, can_send_videos=True, can_send_video_notes=True,
+                can_send_voice_notes=True, can_send_polls=True, can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            )
+        await bot.restrict_chat_member(chat_id, user_id, permissions=permissions)
+        log.info("Short mute expired automatically chat=%s user=%s after %.3fs", chat_id, user_id, seconds)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Telegram's own 35-second expiry is a fallback if this process stops.
+        log.exception("Automatic short-mute expiry failed chat=%s user=%s", chat_id, user_id)
+    finally:
+        if _SHORT_MUTE_TASKS.get(key) is current_task:
+            _SHORT_MUTE_TASKS.pop(key, None)
+
+def _schedule_short_mute_expiry(chat_id: int, user_id: int, seconds: float) -> None:
+    _cancel_short_mute_expiry(chat_id, user_id)
+    _SHORT_MUTE_TASKS[(chat_id, user_id)] = asyncio.create_task(
+        _expire_short_mute(chat_id, user_id, seconds),
+        name=f"pear-short-mute-expiry-{chat_id}-{user_id}",
+    )
+
 async def mute_cmd(message: Message) -> None:
     # Reject an obviously incomplete command before any Telegram/Supabase permission
     # checks. This keeps bare «мут» instant instead of making several network calls.
@@ -1906,6 +1947,15 @@ async def mute_cmd(message: Message) -> None:
             # Let restrict_chat_member return the precise error for an unknown/non-member target.
             pass
 
+        # Telegram treats until_date values less than 30 seconds in the future as
+        # indefinite. Use a 35-second API fallback for sub-30-second mutes, then
+        # restore the chat's default permissions locally at the requested exact time.
+        requested_seconds = duration.total_seconds() if duration is not None else None
+        telegram_until = (
+            issued_at + timedelta(seconds=35)
+            if requested_seconds is not None and requested_seconds < 30
+            else until
+        )
         await bot.restrict_chat_member(
             chat_id=message.chat.id,
             user_id=target[0],
@@ -1921,8 +1971,12 @@ async def mute_cmd(message: Message) -> None:
                 can_send_other_messages=False,
                 can_add_web_page_previews=False,
             ),
-            until_date=until,
+            until_date=telegram_until,
         )
+        if requested_seconds is not None and requested_seconds < 30:
+            _schedule_short_mute_expiry(message.chat.id, target[0], requested_seconds)
+        else:
+            _cancel_short_mute_expiry(message.chat.id, target[0])
         audit(message.chat.id, message.from_user.id if message.from_user else 0, "mute", target[0],
               f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}")
         if until:
@@ -1968,6 +2022,7 @@ async def unmute_cmd(message: Message) -> None:
                 can_add_web_page_previews=True,
             )
         await bot.restrict_chat_member(message.chat.id, target[0], permissions=permissions)
+        _cancel_short_mute_expiry(message.chat.id, target[0])
         audit(message.chat.id, message.from_user.id, "unmute", target[0])
         await message.answer(format_panel(
         "ОГРАНИЧЕНИЕ СНЯТО",
