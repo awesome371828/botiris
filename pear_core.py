@@ -45,20 +45,31 @@ def _open_spool():
     finally:
         conn.close()
 
-def spool_activity(item: tuple[int, int, str | None, str, str, int]) -> bool:
-    """Durably spool a message event before acknowledging it in memory."""
-    chat_id, user_id, username, first_name, created_at, message_id = item
+def spool_activity_batch(items: Iterable[tuple[int, int, str | None, str, str, int]]) -> bool:
+    """Durably spool a batch of message events in one SQLite transaction."""
+    rows = []
+    for item in items:
+        chat_id, user_id, username, first_name, created_at, message_id = item
+        rows.append((
+            int(chat_id), int(message_id), int(user_id), username,
+            first_name or "Пользователь", str(created_at),
+        ))
+    if not rows:
+        return True
     try:
         with _SPOOL_LOCK, _open_spool() as conn:
-            conn.execute(
+            conn.executemany(
                 "INSERT OR IGNORE INTO activity_spool "
                 "(chat_id,message_id,user_id,username,first_name,created_at) VALUES (?,?,?,?,?,?)",
-                (int(chat_id), int(message_id), int(user_id), username, first_name or "Пользователь",
-                 str(created_at)),
+                rows,
             )
         return True
     except Exception:
         return False
+
+def spool_activity(item: tuple[int, int, str | None, str, str, int]) -> bool:
+    """Compatibility wrapper for persisting a single event."""
+    return spool_activity_batch([item])
 
 def acknowledge_activity(items: Iterable[tuple[int, int, str | None, str, str, int]]) -> None:
     keys = [(int(item[0]), int(item[5])) for item in items]
