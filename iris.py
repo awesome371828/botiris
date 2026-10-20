@@ -1157,10 +1157,26 @@ async def help_command(message: Message) -> None:
             "• глобальный бан ID причина / глобальный разбан ID — глобальная блокировка или снятие блокировки\n"
             "• проверка прав — проверить разрешения бота в текущем чате"
         )
-    await message.answer(
-        help_text,
-        reply_markup=main_keyboard(user_id, message.chat.type, is_privileged),
-    )
+    # Telegram limits each message to 4096 characters. The full command
+    # catalogue can exceed that limit, which used to raise TelegramBadRequest
+    # and show the generic internal-error reply. Split only at line boundaries.
+    chunks: list[str] = []
+    current = ""
+    for line in help_text.splitlines():
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > 3800 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for index, chunk in enumerate(chunks):
+        await message.answer(
+            chunk,
+            reply_markup=main_keyboard(user_id, message.chat.type, is_privileged)
+            if index == len(chunks) - 1 else None,
+        )
 
 @router.message(F.text.in_({"📋 Меню", "Меню"}))
 async def menu_button(message: Message) -> None:
