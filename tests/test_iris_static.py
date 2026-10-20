@@ -265,11 +265,23 @@ class PearCMStaticRegressionTests(unittest.TestCase):
     def test_delete_command_is_bounded(self):
         self.assertIn("requested < 1", self.source)
         self.assertIn("requested > 100", self.source)
-        self.assertIn("previous_count = max(0, count - 1)", self.source)
-        self.assertIn("deleted_total = individually_deleted + int(command_deleted)", self.source)
+        self.assertIn('requested = int(match.group(1)) if match.group(1) else 100', self.source)
+        self.assertIn("count = requested", self.source)
+        self.assertIn("deleted_messages = sum(1 for result in results if result)", self.source)
+        self.assertIn("Команда <code>-смс</code> удаляется отдельно", self.source)
         self.assertIn("Delete individually", self.source)
         self.assertIn("Удалено сообщений:", self.source)
         self.assertIn("За один раз можно удалить максимум", self.source)
+
+
+    def test_nickname_commands_accept_target_username_or_telegram_id(self):
+        start = self.source.index("async def set_chat_nickname_cmd")
+        end = self.source.index('@router.message(Command("nicks"))', start)
+        body = self.source[start:end]
+        self.assertIn("is_target_token", body)
+        self.assertIn("resolved = await resolve_target(message, [first])", body)
+        self.assertIn("nickname = parts[1].strip() if len(parts) > 1 else", body)
+        self.assertIn("target = await resolve_target(message, rest.split()[:1])", body)
 
     def test_marriage_flow_authorizes_buttons_and_confirms_database_transitions(self):
         callback_start = self.source.index("async def marriage_proposal_callback")
