@@ -41,7 +41,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
 )
 from supabase import Client, create_client
-from supabase.lib.client_options import ClientOptions
+from supabase.client import ClientOptions
 
 try:
     import fcntl
@@ -107,10 +107,8 @@ if not BOT_TOKEN:
 db: Client | None = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        # Supabase's default HTTP timeout can leave a synchronous request waiting
-        # for ~120 seconds. Under group traffic this exhausts asyncio's worker pool
-        # and makes unrelated Telegram updates appear to freeze. Bound every DB
-        # request so a cold/unreachable database degrades gracefully instead.
+        # Keep the DB request timeout short: the SDK's default can wait for
+        # minutes and stall unrelated command handlers when Supabase is unhealthy.
         db = create_client(
             SUPABASE_URL,
             SUPABASE_KEY,
@@ -121,10 +119,26 @@ if SUPABASE_URL and SUPABASE_KEY:
             ),
         )
         log.info("Supabase client configured (request timeout=4s)")
-    except Exception:
-        log.exception("Не удалось создать клиент Supabase")
+    except Exception as options_exc:
+        # Some supabase-py releases have a ClientOptions initialization regression.
+        # A working default client is much better than silently running with db=None.
+        log.exception("Supabase client with timeout options failed; trying safe compatibility fallback")
+        try:
+            db = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Best-effort cap the synchronous PostgREST HTTP session timeout as well.
+            postgrest = getattr(db, "postgrest", None)
+            session = getattr(postgrest, "session", None)
+            if session is not None and hasattr(session, "timeout"):
+                session.timeout = 4
+            log.warning(
+                "Supabase compatibility fallback active; SDK timeout options were rejected (%s)",
+                type(options_exc).__name__,
+            )
+        except Exception:
+            db = None
+            log.exception("Supabase compatibility fallback also failed; DB-dependent features will report unavailable")
 else:
-    raise RuntimeError("Не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Запуск без постоянной БД запрещён, чтобы не терять данные и не обходить проверки прав.")
+    raise RuntimeError("Не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
 dp = Dispatcher()
