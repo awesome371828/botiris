@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -34,11 +35,21 @@ def _spool_connect() -> sqlite3.Connection:
     """)
     return conn
 
+@contextmanager
+def _open_spool():
+    """Commit/rollback and always close each short-lived SQLite connection."""
+    conn = _spool_connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
 def spool_activity(item: tuple[int, int, str | None, str, str, int]) -> bool:
     """Durably spool a message event before acknowledging it in memory."""
     chat_id, user_id, username, first_name, created_at, message_id = item
     try:
-        with _SPOOL_LOCK, _spool_connect() as conn:
+        with _SPOOL_LOCK, _open_spool() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO activity_spool "
                 "(chat_id,message_id,user_id,username,first_name,created_at) VALUES (?,?,?,?,?,?)",
