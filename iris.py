@@ -958,12 +958,30 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
             return f"@{username.lstrip('@')}"
         return first_name or fallback or f"ID {user_id}"
 
-    # Explicit target arguments always win over a reply. Otherwise a reply to a
-    # previous bot response (or to the command author's own message) can cause
-    # moderation to accidentally resolve the actor as the target.
+    # In reply-based moderation the replied-to human is the default target.
+    # A reason/duration/rank token (for example "111", "1ч", or "нарушение")
+    # must never disable reply targeting. Only a clearly explicit Telegram target
+    # (@username, long numeric ID, id:123, tg://user?id=123, or t.me link)
+    # overrides the reply.
     has_explicit_target = any(
-        str(value).strip().strip(",;:") for value in args
+        (
+            str(value).strip().startswith("@")
+            or re.fullmatch(r"\d{7,}", str(value).strip().strip(",;:"))
+            or re.match(r"^(?:id\s*[:=]?\s*\d+|tg://user\?id=\d+)$", str(value).strip(), flags=re.I)
+            or re.match(r"^(?:https?://)?t\.me/\w+", str(value).strip(), flags=re.I)
+        )
+        for value in args
     )
+    if message.reply_to_message and not has_explicit_target:
+        replied_user = message.reply_to_message.from_user
+        if replied_user and not replied_user.is_bot:
+            return (
+                replied_user.id,
+                display_name(
+                    replied_user.id, replied_user.username,
+                    replied_user.full_name, str(replied_user.id)
+                ),
+            )
 
     # Accept a numeric ID, @username, plain username, or exact displayed name.
     # Numeric rank/duration arguments are ignored rather than mistaken for user IDs.
