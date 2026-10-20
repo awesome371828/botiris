@@ -6077,8 +6077,6 @@ async def roleplay_relationship_cmd(message: Message) -> None:
         await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
 
 # Virtual economy
-@router.message(Command("economy"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:баланс|кошелек|кошелёк|ежедневный бонус|бонус|передать|перевести|магазин|купить)(?:\s|$)"))
 async def _economy_rpc(chat_id: int, user_id: int, action: str,
                        target_id: int | None = None, amount: int = 0, title: str = "") -> dict[str, Any] | None:
     """Apply economy mutations in one PostgreSQL transaction to prevent race conditions."""
@@ -6101,6 +6099,8 @@ async def _economy_rpc(chat_id: int, user_id: int, action: str,
         return None
 
 
+@router.message(Command("economy"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:баланс|кошелек|кошелёк|ежедневный бонус|бонус|передать|перевести|магазин|купить)(?:\s|$)"))
 async def economy_cmd(message: Message) -> None:
     if not message.from_user:
         return
