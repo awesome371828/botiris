@@ -82,7 +82,8 @@ def format_moscow_time(value: datetime) -> str:
     """Format an aware/UTC datetime in Moscow time."""
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(MOSCOW_TZ).strftime("%d.%m.%Y в %H:%M:%S.%f МСК")[:-3] + " МСК"
+    dt = value.astimezone(MOSCOW_TZ)
+    return dt.strftime("%d.%m.%Y в %H:%M:%S") + f".{dt.microsecond // 1000:03d} МСК"
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
