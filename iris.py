@@ -2143,9 +2143,15 @@ async def delete_message_cmd(message: Message) -> None:
     raw = (message.text or "").strip()
     match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
     if match:
-        # Reply form: bare «-смс» removes only the replied-to message, plus the command.
-        # Numbered forms remain a recent-message purge and keep their 1..100 semantics.
-        if message.reply_to_message and match.group(1) is None:
+        # Без числа команда работает только как удаление сообщения-ответа.
+        # Массовое удаление запускается исключительно явно: «-смс 10», «-смс 100».
+        if match.group(1) is None:
+            if not message.reply_to_message:
+                await message.answer(
+                    "Ответь командой <code>-смс</code> на сообщение, которое нужно удалить. "
+                    "Для массового удаления используй <code>-смс 100</code>."
+                )
+                return
             target_message = message.reply_to_message
             target_error = None
             try:
@@ -2165,9 +2171,7 @@ async def delete_message_cmd(message: Message) -> None:
                       "delete_reply", target_message.from_user.id if target_message.from_user else None,
                       f"target_message_id={target_message.message_id}")
             return
-        # "-смс" defaults to 100 recent messages. The command message is
-        # deleted separately and never counts toward the requested amount.
-        requested = int(match.group(1)) if match.group(1) else 100
+        requested = int(match.group(1))
         if requested < 1:
             await message.answer("Укажи число от 1 до 100: <code>-смс 10</code>.")
             return
