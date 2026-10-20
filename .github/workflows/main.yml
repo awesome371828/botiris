@@ -1,102 +1,25 @@
-name: Run Pear CM
+name: Retired Pear CM bot runner
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
-  # Best-effort free hosting: recycle the temporary runner every five hours.
-  schedule:
-    - cron: "17 */5 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# Keep a single polling instance for this Telegram token.
-# GitHub-hosted runners are temporary; this is a free workaround, not a true 24/7 guarantee.
+# The Telegram bot now runs on RelaxDev. Reuse the old concurrency group once
+# to stop any already-running GitHub-hosted polling process on the same token.
 concurrency:
   group: pear-cm-bot
   cancel-in-progress: true
 
 jobs:
-  run-bot:
+  confirm-hosting-migration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    timeout-minutes: 2
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install dependencies
+      - name: Confirm GitHub Actions no longer starts the Telegram bot
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-      - name: Validate syntax and command regression tests
-        run: |
-          python -m py_compile iris.py
-          python -m py_compile moderation_full.py
-          python -m unittest discover -s tests -v
-      - name: Check required secrets and Telegram token
-        shell: bash
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
-            echo "::error::TELEGRAM_BOT_TOKEN is missing in Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          python - <<'PY'
-          import json, os, sys, urllib.request
-          token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
-          request = urllib.request.Request(
-              f"https://api.telegram.org/bot{token}/getMe",
-              headers={"User-Agent": "PearCM-startup-check"}
-          )
-          try:
-              with urllib.request.urlopen(request, timeout=20) as response:
-                  data = json.load(response)
-          except Exception as exc:
-              print(f"::error::Telegram getMe request failed: {type(exc).__name__}: {exc}")
-              sys.exit(1)
-          if not data.get("ok"):
-              print("::error::Telegram rejected TELEGRAM_BOT_TOKEN. Replace the Actions secret with the current BotFather token.")
-              sys.exit(1)
-          bot = data.get("result", {})
-          print(f"Telegram token OK: @{bot.get('username', 'unknown')} (id={bot.get('id', 'unknown')})")
-          print("Supabase URL configured:", bool(os.getenv("SUPABASE_URL")))
-          print("Supabase service key configured:", bool(os.getenv("SUPABASE_SERVICE_KEY")))
-          PY
-      - name: Keep bot running and restart it if it exits
-        shell: bash
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          BOT_OWNER_ID: ${{ vars.BOT_OWNER_ID || '6652898792' }}
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -uo pipefail
-          while true; do
-            echo "Starting Pear CM at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            # --foreground keeps GNU timeout from signaling the surrounding shell.
-            # The if/else captures non-zero exits despite GitHub Actions bash -e.
-            if timeout --foreground --signal=TERM --kill-after=20s 17400s python -u iris.py; then
-              code=0
-            else
-              code=$?
-            fi
-            echo "Pear CM process exited with code $code at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
-              echo "Restart interval reached; starting a fresh Pear CM process."
-            elif [ "$code" -eq 23 ]; then
-              echo "::error::Telegram polling conflict detected; stopping instead of restarting forever because another deployment is using this token."
-              exit 23
-            fi
-            echo "Restarting Pear CM in 10 seconds."
-            sleep 10
-          done
+          echo "Pear CM bot runtime is hosted on RelaxDev."
+          echo "This workflow intentionally does not start iris.py."
