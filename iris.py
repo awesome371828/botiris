@@ -1953,7 +1953,7 @@ async def ban_cmd(message: Message) -> None:
                 return
             reason = " ".join(remainder).strip() or None
 
-    reason = escape(await _reason_from_preset(message.chat.id, "ban", reason or "нарушение правил")[:300])
+    reason = escape((await _reason_from_preset(message.chat.id, "ban", reason or "нарушение правил"))[:300])
     issued_at = moscow_now()
     until = issued_at + duration if duration else None
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
