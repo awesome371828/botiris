@@ -6003,12 +6003,16 @@ async def extra_moderation_aliases(message: Message) -> None:
 async def main() -> None:
     acquire_single_instance_lock()
     if db is not None:
-        schema_problems = await asyncio.to_thread(check_schema, db)
-        if schema_problems:
-            log.error("Supabase schema compatibility check found %s issue(s): %s",
-                      len(schema_problems), " | ".join(schema_problems))
-        else:
-            log.info("Supabase schema compatibility check passed")
+        try:
+            schema_problems = await asyncio.to_thread(check_schema, db)
+            if schema_problems:
+                log.error("Supabase schema compatibility check found %s issue(s): %s",
+                          len(schema_problems), " | ".join(schema_problems))
+            else:
+                log.info("Supabase schema compatibility check passed")
+        except Exception:
+            # A temporary Supabase outage must not kill the whole bot before polling starts.
+            log.exception("Supabase schema check failed during startup; continuing with runtime retries")
     # The durable spool survives process restarts when the host keeps its working directory.
     pending_count = activity_spool_size()
     if pending_count:
@@ -6108,10 +6112,32 @@ async def main() -> None:
         log.info("Telegram Mini App menu button configured: %s", MINI_APP_URL)
     except Exception:
         log.exception("Не удалось обновить кнопку Mini App в меню Telegram")
-    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
-    await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
-    await bot.set_my_commands(private_commands + owner_commands, scope=BotCommandScopeChat(chat_id=OWNER_ID))
-    await bot.delete_webhook(drop_pending_updates=False)
+    # Menu/command registration is cosmetic; a transient Telegram API error here
+    # must not prevent the bot from entering long polling.
+    for label, commands, scope in (
+        ("group commands", group_commands, BotCommandScopeAllGroupChats()),
+        ("private commands", private_commands, BotCommandScopeAllPrivateChats()),
+        ("owner commands", private_commands + owner_commands, BotCommandScopeChat(chat_id=OWNER_ID)),
+    ):
+        try:
+            await bot.set_my_commands(commands, scope=scope)
+        except Exception:
+            log.exception("Could not register %s during startup; continuing", label)
+
+    # Long polling requires the webhook to be removed. Retry temporary API/network
+    # failures instead of exiting immediately and leaving the service down.
+    webhook_removed = False
+    for attempt in range(1, 6):
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+            webhook_removed = True
+            break
+        except Exception:
+            log.exception("deleteWebhook failed (attempt %s/5)", attempt)
+            if attempt < 5:
+                await asyncio.sleep(min(2 ** attempt, 15))
+    if not webhook_removed:
+        raise RuntimeError("Could not remove Telegram webhook after 5 attempts; polling cannot start")
     log.info("Bot started")
     activity_writer = asyncio.create_task(_activity_writer_loop(), name="pear-activity-writer")
     schedule_worker = asyncio.create_task(_schedule_worker(), name="pear-chat-scheduler")
