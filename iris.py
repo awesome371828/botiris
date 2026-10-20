@@ -6103,7 +6103,14 @@ async def main() -> None:
     activity_writer = asyncio.create_task(_activity_writer_loop(), name="pear-activity-writer")
     schedule_worker = asyncio.create_task(_schedule_worker(), name="pear-chat-scheduler")
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        # Bound concurrent update handlers. An unlimited backlog can fan out hundreds
+        # of handlers at once, burst Telegram replies, exhaust DB connections and make
+        # the bot appear frozen. Keep enough concurrency for fast normal chats.
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+            tasks_concurrency_limit=24,
+        )
     except TelegramConflictError:
         log.critical(
             "TelegramConflictError: another process is polling getUpdates for this token. "
