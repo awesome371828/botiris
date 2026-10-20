@@ -1324,7 +1324,7 @@ async def admins(message: Message) -> None:
         if message.from_user and message.from_user.id == OWNER_ID:
             owner_username = owner_username or message.from_user.username
         owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (4, "Владелец Pear CM", None))[1]))
-        ranks[OWNER_ID] = (4, owner_name, owner_username or ranks.get(OWNER_ID, (4, "", None))[2])
+        ranks[OWNER_ID] = (4, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
         # Clear five-step Pear CM hierarchy: rank 1 is the entry moderator, rank 5 is creator.
         rank_titles = {
