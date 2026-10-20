@@ -2059,14 +2059,31 @@ async def kick_cmd(message: Message) -> None:
 @router.message(Command("warn"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ам|ами|ах)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
-    # A bare «варн» has no target; answer immediately without DB/rank lookups.
-    raw_args = args_after_command(message)
-    if not message.reply_to_message and not raw_args:
+    # Parse the target explicitly from the original text. The shared argument
+    # parser supports many aliases and must not accidentally pass the command word
+    # ("варн") as the target; otherwise resolve_target can match the actor.
+    original = (message.text or message.caption or "").strip()
+    target_tokens = args_after_command(message)
+    # For the plain Russian command, strip only the leading command token.
+    if original:
+        cleaned = re.sub(
+            r"(?iu)^\\s*[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ам|ами|ах)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))(?:@\\w+)?\\s*",
+            "",
+            original,
+            count=1,
+        ).strip()
+        if cleaned:
+            target_tokens = cleaned.split()
+        else:
+            target_tokens = []
+    if not message.reply_to_message and not target_tokens:
         await message.answer("Ответьте на сообщение участника или укажите известному чату @username/ID.")
         return
     if not await check_mod(message, require_restrict=False):
         return
-    target = await resolve_target(message, [] if message.reply_to_message else raw_args[:1])
+    # A username/ID explicitly written by the moderator takes priority; a reply
+    # is used only when there is no explicit target.
+    target = await resolve_target(message, target_tokens[:1] if target_tokens else [])
     if not target:
         await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
