@@ -527,11 +527,14 @@ def set_warns(chat_id: int, user_id: int, amount: int) -> int:
 
 _WARN_RECENT: dict[tuple[int, int, int], float] = {}
 
-def active_warn_count(chat_id: int, user_id: int) -> int:
-    """Count warnings from the last seven days; a clear/unwarn event adjusts the active ledger."""
+def active_warn_entries(chat_id: int, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Return warnings still active now; each warning expires exactly seven days after creation."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    rows = db_rows("bot_audit", limit=1000, order="created_at", chat_id=chat_id, target_id=user_id)
-    relevant = []
+    filters: dict[str, Any] = {"chat_id": chat_id}
+    if user_id is not None:
+        filters["target_id"] = user_id
+    rows = db_rows("bot_audit", limit=1000, order="created_at", **filters)
+    timeline: list[tuple[datetime, dict[str, Any]]] = []
     for row in rows:
         action = str(row.get("action") or "").lower()
         if action not in {"warn", "unwarn", "clearwarns"}:
@@ -540,22 +543,45 @@ def active_warn_count(chat_id: int, user_id: int) -> int:
             stamp = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
             if stamp.tzinfo is None:
                 stamp = stamp.replace(tzinfo=timezone.utc)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if stamp >= cutoff:
-            relevant.append((stamp, action))
-    if not relevant:
-        # Warnings older than seven days are expired, including legacy counter-only warnings.
-        return 0
-    count = 0
-    for _, action in sorted(relevant):
+            timeline.append((stamp, row))
+    timeline.sort(key=lambda item: item[0])
+    active: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for stamp, row in timeline:
+        target_id = row.get("target_id")
+        if target_id is None:
+            continue
+        try:
+            uid = int(target_id)
+        except (TypeError, ValueError):
+            continue
+        action = str(row.get("action") or "").lower()
         if action == "warn":
-            count += 1
+            details = str(row.get("details") or "")
+            reason_match = re.search(r"(?:^|[; ] )reason=(.*?)(?:; expires_in_days=|$)", details)
+            active[uid].append({
+                "user_id": uid, "actor_id": int(row.get("actor_id") or 0),
+                "created_at": stamp, "expires_at": stamp + timedelta(days=7),
+                "reason": (reason_match.group(1).strip() if reason_match else details.strip()) or "не указана",
+            })
         elif action == "unwarn":
-            count = max(0, count - 1)
+            if active[uid]:
+                active[uid].pop()
         elif action == "clearwarns":
-            count = 0
-    return count
+            active[uid].clear()
+    now = datetime.now(timezone.utc)
+    result = [entry for entries in active.values() for entry in entries if entry["expires_at"] > now]
+    if user_id is not None:
+        result = [entry for entry in result if entry["user_id"] == user_id]
+    result.sort(key=lambda entry: (entry["created_at"], entry["user_id"]), reverse=True)
+    return result
+
+
+def active_warn_count(chat_id: int, user_id: int) -> int:
+    """Count active warnings from the audit ledger."""
+    return len(active_warn_entries(chat_id, user_id))
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
 def is_group(message: Message) -> bool:
@@ -725,6 +751,8 @@ async def require_real_admin(message: Message) -> bool:
     if not message.from_user or not is_group(message):
         await message.answer("Эта команда работает в группе.")
         return False
+    if message.from_user.id == OWNER_ID:
+        return True
     if await is_admin(bot, message.chat.id, message.from_user.id):
         return True
     await message.answer("⛔ Назначать ранги и менять настройки могут только администраторы Telegram.")
@@ -1269,20 +1297,75 @@ async def moscow_time_cmd(message: Message) -> None:
     )
 
 
-@router.message(F.text.in_({"⚠️ Мои варны", "Варны"}))
+@router.message(F.text.in_({"⚠️ Мои варны"}))
 @router.message(Command("warns"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:варны|мои варны)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?мои варны(?:\s|$)"))
 async def my_warns(message: Message) -> None:
     if not message.from_user:
         return
-    user = await asyncio.to_thread(ensure_user, message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
+    await asyncio.to_thread(ensure_user, message.from_user.id, message.chat.id, message.from_user.username, message.from_user.full_name)
     if message.from_user.username:
-        username = message.from_user.username.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        username = escape(message.from_user.username)
         display = f'<a href="https://t.me/{username}">@{username}</a>'
     else:
         display = mention(message.from_user.id, message.from_user.full_name)
-    active = await asyncio.to_thread(active_warn_count, message.chat.id, message.from_user.id)
-    await message.answer(f"⚠️ {display}, у вас <b>{active}</b> действующих предупреждений. Срок каждого — 7 дней.")
+    entries = await asyncio.to_thread(active_warn_entries, message.chat.id, message.from_user.id)
+    if not entries:
+        body = f"👤 {display}\n\n<blockquote>Активных предупреждений нет.</blockquote>"
+    else:
+        cards = []
+        for index, entry in enumerate(entries, 1):
+            actor = mention(entry["actor_id"], f"ID {entry['actor_id']}") if entry["actor_id"] else "система"
+            created = format_moscow_time(entry["created_at"])
+            expires = format_moscow_time(entry["expires_at"])
+            cards.append(
+                f"<b>{index}. Предупреждение</b> · <i>до {expires}</i>\n"
+                f"Причина: {escape(entry['reason'][:220])}\n"
+                f"Выдал: {actor}\n"
+                f"<i>{created}</i>"
+            )
+        body = f"👤 {display}\n\n" + "\n\n".join(cards)
+    await message.answer(
+        "╭ <b>МОИ ПРЕДУПРЕЖДЕНИЯ</b>\n"
+        "╰━━━━━━━━━━━━━━━━━━\n"
+        f"{body}\n\n"
+        f"<i>Активно: {len(entries)} · срок каждого варна — 7 дней</i>"
+    )
+
+
+@router.message(F.text.regexp(r"(?i)^[.!/]?варны(?:\s|$)"))
+async def chat_warns(message: Message) -> None:
+    if not message.from_user or not is_group(message):
+        await message.answer("ℹ️ Команда «варны» показывает действующие предупреждения в группе.")
+        return
+    entries = await asyncio.to_thread(active_warn_entries, message.chat.id)
+    if not entries:
+        await message.answer(
+            "╭ <b>ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА</b>\n"
+            "╰━━━━━━━━━━━━━━━━━━\n"
+            "<blockquote>Сейчас в этом чате нет действующих предупреждений.</blockquote>"
+        )
+        return
+    users = await asyncio.to_thread(db_rows, "bot_users", 1000, None, chat_id=message.chat.id)
+    names = {int(row.get("user_id") or 0): str(row.get("first_name") or row.get("username") or "Участник") for row in users}
+    lines = []
+    for index, entry in enumerate(entries[:50], 1):
+        uid = entry["user_id"]
+        target = mention(uid, names.get(uid, f"ID {uid}"))
+        actor_id = entry["actor_id"]
+        actor = mention(actor_id, f"ID {actor_id}") if actor_id else "система"
+        lines.append(
+            f"<b>{index:02d}.</b> {target}\n"
+            f"   Причина: {escape(entry['reason'][:160])}\n"
+            f"   Выдал: {actor} · до {format_moscow_time(entry['expires_at'])}"
+        )
+    tail = f"\n\n<i>Показаны первые 50 из {len(entries)}.</i>" if len(entries) > 50 else ""
+    await message.answer(
+        "╭ <b>ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА</b>\n"
+        "╰━━━━━━━━━━━━━━━━━━\n"
+        + "\n\n".join(lines) + tail
+        + f"\n\n<i>На текущий момент: {len(entries)} активных предупреждений · срок — 7 дней</i>"
+    )
 
 @router.message(F.text == "💍 Брак")
 async def marriage_menu(message: Message) -> None:
