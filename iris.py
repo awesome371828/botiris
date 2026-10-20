@@ -911,8 +911,9 @@ async def resolve_target(message: Message, args: list[str]) -> tuple[int, str] |
     # Numeric rank/duration arguments are ignored rather than mistaken for user IDs.
     for raw_value in args:
         raw = raw_value.strip().strip(",;:")
-        raw = re.sub(r"^(?:id\s*[:=]?\s*)", "", raw, flags=re.I)
-        if raw.isdigit() and len(raw) >= 7:
+        explicit_id = bool(re.match(r"^(?:id\s*[:=]?\s*|tg://user\?id=)", raw, flags=re.I))
+        raw = re.sub(r"^(?:id\s*[:=]?\s*|tg://user\?id=)", "", raw, flags=re.I)
+        if raw.isdigit() and (len(raw) >= 7 or explicit_id):
             uid = int(raw)
             row = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id)
             if row:
@@ -2114,8 +2115,10 @@ async def delete_message_cmd(message: Message) -> None:
         return
     raw = (message.text or "").strip()
     match = re.fullmatch(r"(?i)\s*-смс(?:\s+(\d+))?\s*", raw)
-    if match and match.group(1):
-        requested = int(match.group(1))
+    if match:
+        # "-смс" defaults to 100 recent messages. The command message is
+        # deleted separately and never counts toward the requested amount.
+        requested = int(match.group(1)) if match.group(1) else 100
         if requested < 1:
             await message.answer("Укажи число от 1 до 100: <code>-смс 10</code>.")
             return
@@ -2127,26 +2130,23 @@ async def delete_message_cmd(message: Message) -> None:
             await message.answer("⚠️ За один раз можно удалить максимум <b>100 сообщений</b>. Используй: <code>-смс 100</code>.")
             return
 
-        count = max(1, requested)
-        # The requested limit includes the command message itself. Delete count-1
-        # preceding messages, then delete this command, for a true maximum of count.
-        previous_count = max(0, count - 1)
-        first_id = max(1, message.message_id - previous_count)
+        count = requested
+        first_id = max(1, message.message_id - count)
         observed = [
             mid for mid in _RECENT_MESSAGE_IDS.get(message.chat.id, ())
             if first_id <= mid < message.message_id
         ]
-        candidates = list(dict.fromkeys(reversed(observed)))[:previous_count]
+        candidates = list(dict.fromkeys(reversed(observed)))[:count]
         candidate_set = set(candidates)
-        if len(candidates) < previous_count:
+        if len(candidates) < count:
             for mid in range(message.message_id - 1, first_id - 1, -1):
                 if mid not in candidate_set:
                     candidates.append(mid)
                     candidate_set.add(mid)
-                    if len(candidates) >= previous_count:
+                    if len(candidates) >= count:
                         break
+
         forbidden = False
-        individually_deleted = 0
         semaphore = asyncio.Semaphore(5)
 
         async def delete_one(mid: int) -> bool:
@@ -2173,35 +2173,32 @@ async def delete_message_cmd(message: Message) -> None:
                     forbidden = True
                     return False
                 except TelegramBadRequest as inner_exc:
-                    # Missing/old/service messages are expected and must not abort the purge.
+                    # Missing/old/service messages are expected; continue with the rest.
                     log.debug("Skipped chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
                     return False
                 except Exception as inner_exc:
                     log.debug("Could not delete chat=%s message=%s: %s", message.chat.id, mid, inner_exc)
                     return False
 
-        # Delete individually so the reply can report an actual count. Telegram's
-        # bulk delete endpoint returns only True/False and can silently skip IDs.
+        # Delete exactly the requested number of preceding message IDs where possible.
+        # The command itself is deleted afterwards and is not included in this count.
         results = await asyncio.gather(*(delete_one(mid) for mid in candidates))
-        individually_deleted = sum(1 for result in results if result)
-        # Count the command itself only if Telegram confirmed its deletion.
-        command_deleted = False
+        deleted_messages = sum(1 for result in results if result)
         try:
             await message.delete()
-            command_deleted = True
         except Exception as exc:
             log.debug("Could not delete purge command chat=%s message=%s: %s", message.chat.id, message.message_id, exc)
-        deleted_total = individually_deleted + int(command_deleted)
 
         audit(
             message.chat.id, message.from_user.id, "purge_recent",
-            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={deleted_total}",
+            details=f"requested={count};first_id={first_id};last_id={message.message_id - 1};deleted={deleted_messages}",
         )
         if forbidden:
             await message.answer("⛔ У бота нет права «Удаление сообщений». Выдайте это право в настройках группы.")
         else:
             await message.answer(
-                f"🧹 Удалено сообщений: <b>{deleted_total}</b> из последних {count}."
+                f"🧹 Удалено сообщений: <b>{deleted_messages}</b> из последних {count}."
+                "\nКоманда <code>-смс</code> удаляется отдельно и в лимит не входит."
                 "\nУже удалённые, старые и служебные сообщения могут не учитываться."
             )
         return
@@ -2724,36 +2721,64 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not message.from_user:
         return
     raw = (message.text or "").strip()
-    match = re.match(r"(?is)^(?:\.дк\s+)?(?:\+ник|/nick)(?:@\w+)?(?:\s+(.+))?$", raw)
-    nickname = (match.group(1) or "").strip() if match else ""
+    match = re.match(r"(?is)^\s*(?:\.дк\s+)?(?:\+ник|/nick(?:@\w+)?)(?:\s+(.*))?$", raw)
+    rest = (match.group(1) or "").strip() if match else ""
     if not await nickname_rank_allowed(message):
         return
-    target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
-    if not target_user or target_user.is_bot:
-        await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
-        return
+
+    target: tuple[int, str]
+    nickname = rest
+    if message.reply_to_message and message.reply_to_message.from_user:
+        reply_user = message.reply_to_message.from_user
+        if reply_user.is_bot:
+            await message.answer("Нельзя установить ник боту.")
+            return
+        target = (reply_user.id, f"@{reply_user.username}" if reply_user.username else reply_user.full_name)
+    else:
+        parts = rest.split(maxsplit=1)
+        first = parts[0] if parts else ""
+        is_target_token = bool(
+            first.startswith("@")
+            or re.match(r"(?i)^(?:https?://)?t\.me/", first)
+            or re.match(r"(?i)^(?:id\s*[:=]?\s*|tg://user\?id=)\d+$", first)
+            or (first.isdigit() and len(first) >= 7)
+        )
+        if is_target_token:
+            resolved = await resolve_target(message, [first])
+            if not resolved:
+                await message.answer(
+                    "⛔ Не удалось найти участника. Укажи Telegram ID или @username, который бот уже видел в этом чате."
+                )
+                return
+            target = resolved
+            nickname = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            target = (message.from_user.id, f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name)
+
     if not nickname:
-        await message.answer("Укажи ник: <code>+ник АВЕСОМ</code>. Чтобы убрать его — <code>-ник</code>.")
+        await message.answer("Укажи ник: <code>+ник АВЕСОМ</code> или <code>+ник @username АВЕСОМ</code>. Чтобы убрать — <code>-ник</code>.")
         return
     if len(nickname) > 64:
         await message.answer("Ник слишком длинный: максимум 64 символа.")
         return
-    if nickname.startswith("@"):
-        await message.answer("Укажи отображаемый ник, а не @username. Например: <code>+ник АВЕСОМ</code>.")
-        return
+
+    target_id = int(target[0])
     current = await asyncio.to_thread(
-        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_user.id
+        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_id
     ) or {}
     saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", {
-        **current, "chat_id": message.chat.id, "user_id": target_user.id,
+        **current, "chat_id": message.chat.id, "user_id": target_id,
         "display_name": nickname, "updated_at": datetime.now(timezone.utc).isoformat(),
     }, "chat_id,user_id")
     if not saved:
         await message.answer("Не удалось сохранить ник. Проверь Supabase и выполни актуальный schema.sql.")
         return
-    await message.answer(f"✅ Ник участника изменён на <b>{escape(nickname)}</b>. Он будет показываться в статистике и профиле чата.")
+    await message.answer(
+        f"✅ Ник участника {mention(target_id, target[1])} изменён на <b>{escape(nickname)}</b>. "
+        "Он будет показываться в статистике и профиле чата."
+    )
 
-@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?(?:-ник|/unnick)(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?(?:-ник|/unnick(?:@\w+)?)(?:\s|$)"))
 async def clear_chat_nickname_cmd(message: Message) -> None:
     if not is_group(message):
         await message.answer("Никнеймы можно убирать внутри группы.")
@@ -2762,22 +2787,39 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
         return
     if not await nickname_rank_allowed(message):
         return
-    target_user = message.reply_to_message.from_user if message.reply_to_message else message.from_user
-    if not target_user or target_user.is_bot:
-        await message.answer("Не получилось определить участника. Ответь на сообщение человека.")
-        return
-        return
+
+    raw = (message.text or "").strip()
+    match = re.match(r"(?is)^\s*(?:\.дк\s+)?(?:-ник|/unnick(?:@\w+)?)(?:\s+(.*))?$", raw)
+    rest = (match.group(1) or "").strip() if match else ""
+    if message.reply_to_message and message.reply_to_message.from_user:
+        reply_user = message.reply_to_message.from_user
+        if reply_user.is_bot:
+            await message.answer("Нельзя сбросить ник бота.")
+            return
+        target = (reply_user.id, f"@{reply_user.username}" if reply_user.username else reply_user.full_name)
+    elif rest:
+        target = await resolve_target(message, rest.split()[:1])
+        if not target:
+            await message.answer("Не удалось найти участника. Укажи Telegram ID или @username, который бот уже видел в этом чате.")
+            return
+    else:
+        target = (message.from_user.id, f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name)
+
+    target_id = int(target[0])
     current = await asyncio.to_thread(
-        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_user.id
+        db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_id
     ) or {}
     if not str(current.get("display_name") or "").strip():
         await message.answer("У участника нет установленного ника.")
         return
     saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", {
-        **current, "chat_id": message.chat.id, "user_id": target_user.id,
+        **current, "chat_id": message.chat.id, "user_id": target_id,
         "display_name": "", "updated_at": datetime.now(timezone.utc).isoformat(),
     }, "chat_id,user_id")
-    await message.answer("♻️ Ник сброшен. Теперь в статистике будет отображаться имя из Telegram." if saved else "Не удалось убрать ник. Проверь Supabase.")
+    await message.answer(
+        f"♻️ Ник сброшен у {mention(target_id, target[1])}. Теперь будет отображаться имя из Telegram."
+        if saved else "Не удалось убрать ник. Проверь Supabase."
+    )
 
 @router.message(Command("nicks"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?[.!/]?(?:ники|никнеймы|все ники|список ников)(?:\s|$)"))
