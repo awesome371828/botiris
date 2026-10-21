@@ -70,6 +70,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("nick_rule = (", middleware)
         self.assertIn('in {"ник", "ники", "никнейм", "никнеймы"}', middleware)
         self.assertIn("await command_rank_rule_cmd(event)", middleware)
+        self.assertIn("router.message.outer_middleware(normalize_dot_dk_prefix)", self.source)
         rank_start = self.source.index("async def command_rank_rule_cmd")
         rank_end = self.source.index("@router.message(F.text.regexp", rank_start)
         rank_body = self.source[rank_start:rank_end]
