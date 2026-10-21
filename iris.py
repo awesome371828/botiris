@@ -3046,7 +3046,7 @@ async def _resolve_nickname_lookup_target(message: Message, raw_target: str) -> 
             # Usernames are chat-scoped: never resolve a nickname from another group.
             rows = (db.table("bot_users").select("user_id,username,first_name")
                     .eq("chat_id", message.chat.id)
-                    .ilike("username", username).limit(1).execute().data or [])
+                    .eq("username_lower", username.casefold()).limit(1).execute().data or [])
             return rows[0] if rows else None
         try:
             row = await asyncio.to_thread(find_username)
