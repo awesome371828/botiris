@@ -260,7 +260,7 @@ async def normalize_dot_dk_prefix(handler, event, data):
             nick_rule = (
                 len(parts) >= 2
                 and parts[-1] in {"1", "2", "3", "4", "5"}
-                and re.sub(r"^[+\\-]+", "", parts[0]).casefold()
+                and re.sub(r"^[+\-]+", "", parts[0]).casefold()
                     in {"ник", "ники", "никнейм", "никнеймы"}
             )
             is_rule = nick_rule or (
@@ -729,14 +729,14 @@ _WARN_RECENT: dict[tuple[int, int, int], float] = {}
 def _clean_warning_reason(details: Any) -> str:
     """Remove legacy storage metadata and a duplicated target token from warning reasons."""
     value = str(details or "").strip()
-    named = re.search(r"(?:^|[;\\s])reason\\s*=\\s*(.*)", value, flags=re.IGNORECASE)
+    named = re.search(r"(?:^|[;\s])reason\s*=\s*(.*)", value, flags=re.IGNORECASE)
     if named:
         value = named.group(1).strip()
-    value = re.sub(r";?\\s*expires_in_days\\s*=\\s*\\d+\\b", "", value, flags=re.IGNORECASE)
-    value = re.sub(r";?\\s*expires_at\\s*=\\S+", "", value, flags=re.IGNORECASE)
-    value = value.strip(" ;\\t\\r\\n")
-    value = re.sub(r"^@[A-Za-z0-9_]{5,32}\\s+", "", value)
-    value = re.sub(r"^(?:id\\s*[:=]?\\s*)?\\d{7,}\\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r";?\s*expires_in_days\s*=\s*\d+\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r";?\s*expires_at\s*=\S+", "", value, flags=re.IGNORECASE)
+    value = value.strip(" ;\t\r\n")
+    value = re.sub(r"^@[A-Za-z0-9_]{5,32}\s+", "", value)
+    value = re.sub(r"^(?:id\s*[:=]?\s*)?\d{7,}\s+", "", value, flags=re.IGNORECASE)
     return value.strip(" ;") or "не указана"
 
 
