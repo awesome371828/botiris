@@ -5996,12 +5996,16 @@ async def owner_ping(message: Message) -> None:
         telegram = f"ошибка ({type(exc).__name__})"
     db_result = "не настроена"
     if db is not None:
-        start = time.perf_counter()
-        try:
-            db.table("bot_users").select("user_id").limit(1).execute()
-            db_result = f"OK · {(time.perf_counter()-start)*1000:.0f} мс"
-        except Exception as exc:
-            db_result = f"ошибка ({type(exc).__name__})"
+        # Supabase's Python client is synchronous. Never run network I/O on the
+        # asyncio event loop: a slow DB response would stall every chat update.
+        def _ping_supabase() -> str:
+            db_started = time.perf_counter()
+            try:
+                db.table("bot_users").select("user_id").limit(1).execute()
+                return f"OK · {(time.perf_counter() - db_started) * 1000:.0f} мс"
+            except Exception as exc:
+                return f"ошибка ({type(exc).__name__})"
+        db_result = await asyncio.to_thread(_ping_supabase)
     await message.answer(format_panel(
         "ПРОВЕРКА СОЕДИНЕНИЯ",
         f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>",
@@ -6024,12 +6028,34 @@ async def owner_diagnostics(message: Message) -> None:
     ]
     lines = [f"• {name}: <code>{val}</code>" for name, val in checks]
     if db is not None:
-        for table in ("bot_users", "bot_audit", "bot_chat_settings", "bot_global_settings", "bot_operators", "bot_global_bans", "bot_trusted_users"):
+        # These probes are independent. Run them concurrently in worker threads:
+        # the previous synchronous loop blocked the event loop and added each
+        # Supabase round-trip to /diag latency, delaying other incoming updates.
+        tables = (
+            "bot_users", "bot_audit", "bot_chat_settings",
+            "bot_global_settings", "bot_operators",
+            "bot_global_bans", "bot_trusted_users",
+        )
+
+        def _probe_table(table: str) -> tuple[str, bool]:
             try:
-                db.table(table).select("*").limit(1).execute()
-                lines.append(f"• {table}: <b>OK</b>")
-            except Exception:
-                lines.append(f"• {table}: <b>нет доступа/таблица не создана</b>")
+                db.table(table).select("id").limit(1).execute()
+                return table, True
+            except Exception as exc:
+                log.warning("Diagnostic table probe failed: table=%s error=%s", table, type(exc).__name__)
+                return table, False
+
+        probe_results = await asyncio.gather(
+            *(asyncio.to_thread(_probe_table, table) for table in tables),
+            return_exceptions=True,
+        )
+        for result in probe_results:
+            if isinstance(result, Exception):
+                lines.append("• Проверка таблиц: <b>ошибка проверки</b>")
+                continue
+            table, ok = result
+            status = "OK" if ok else "нет доступа/таблица не создана"
+            lines.append(f"• {table}: <b>{status}</b>")
     recent_latencies = [elapsed for elapsed, _kind in list(_COMMAND_LATENCIES)[-100:]]
     if recent_latencies:
         ordered = sorted(recent_latencies)
