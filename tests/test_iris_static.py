@@ -87,7 +87,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("rows = await filter_current_chat_members(message.chat.id, rows)", nick_body)
         self.assertIn('href="tg://user?id=', nick_body)
         top_start = self.source.index("async def top_cmd")
-        top_end = self.source.index("# ── Activity tracking and welcome", top_start)
+        top_end = self.source.index("async def show_chat_nickname_cmd", top_start)
         top_body = self.source[top_start:top_end]
         self.assertIn("rows = await filter_current_chat_members(message.chat.id, rows)", top_body)
         self.assertIn("display = profile_link(uid, display_name)", top_body)
