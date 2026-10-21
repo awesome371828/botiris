@@ -67,7 +67,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("async def show_chat_nickname_cmd", self.source)
         self.assertIn("async def show_chat_nickname_dispatch", self.source)
         self.assertIn("async def _resolve_nickname_lookup_target", self.source)
-        self.assertIn('.ilike("username", username)', self.source)
+        self.assertIn('.eq("username_lower", username.casefold())', self.source)
         self.assertIn("_CHAT_NICKNAME_CACHE_TTL = 15.0", self.source)
         self.assertIn("_invalidate_chat_nickname_cache(message.chat.id, target_id)", self.source)
 
