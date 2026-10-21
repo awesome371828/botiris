@@ -302,7 +302,7 @@ async def normalize_dot_dk_prefix(handler, event, data):
             and is_group(event)
             and event.from_user.id != OWNER_ID
         ):
-            token_match = re.match(r"(?is)^\\s*([.!/]?[a-zа-яё0-9_+-]+)", raw)
+            token_match = re.match(r"(?is)^\s*([.!/]?[a-zа-яё0-9_+-]+)", raw)
             if token_match:
                 command_token = re.sub(r"^[.!/]+", "", token_match.group(1).casefold())
                 generic_key = "modrank_cmd_" + re.sub(
