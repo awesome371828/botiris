@@ -2382,7 +2382,7 @@ async def kick_cmd(message: Message) -> None:
         await safe_error(message, exc)
 
 @router.message(Command("warn"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ам|ами|ах)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))(?:\s|$)"))
+@router.message(F.text.regexp(r"(?i)^[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))(?:\s|$)"))
 async def warn_cmd(message: Message) -> None:
     # Parse the target explicitly from the original text. The shared argument
     # parser supports many aliases and must not accidentally pass the command word
@@ -2392,7 +2392,7 @@ async def warn_cmd(message: Message) -> None:
     # For the plain Russian command, strip only the leading command token.
     if original:
         cleaned = re.sub(
-            r"(?iu)^\s*[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е|ы|ов|ам|ами|ах)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))\s*",
+            r"(?iu)^\s*[.!/]?(?:(?:дать|дай|дайте|выдать|выдай|выдайте|поставить|поставь|поставьте)\s+)?(?:варн(?:ить|а|у|ом|е)?|предупред(?:ить|и|ите)|предупреждай|предупреждайте|предупреждени(?:е|я|ю|ем|и|й|ями|ях|ям))\s*",
             "",
             original,
             count=1,
