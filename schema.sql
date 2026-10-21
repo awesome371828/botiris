@@ -637,26 +637,57 @@ security definer
 set search_path = public
 as $$
 declare
-    v_before integer;
-    v_count integer;
+    v_before integer := 0;
+    v_count integer := 0;
     v_now timestamptz := now();
+    v_cutoff timestamptz := now() - interval '7 days';
+    v_row record;
+    v_active timestamptz[] := array[]::timestamptz[];
 begin
     if p_chat_id is null or p_actor_id is null or p_target_id is null or p_target_id = 0 then
         return jsonb_build_object('ok', false, 'reason', 'invalid_request');
     end if;
+
+    -- Serialize warning changes for this chat/member, including simultaneous moderators.
     perform pg_advisory_xact_lock(hashtext(p_chat_id::text), hashtext(p_target_id::text));
-    select count(*)::integer into v_before
-    from public.bot_audit
-    where chat_id = p_chat_id and target_id = p_target_id
-      and action = 'warn' and created_at >= v_now - interval '7 days';
+
+    -- Rebuild the active warning ledger: warnings expire after seven days;
+    -- unwarn removes one warning and clearwarns removes all prior active warnings.
+    for v_row in
+        select action, created_at
+        from public.bot_audit
+        where chat_id = p_chat_id
+          and target_id = p_target_id
+          and action in ('warn', 'unwarn', 'clearwarns')
+          and created_at >= v_cutoff
+        order by created_at asc
+    loop
+        if v_row.action = 'warn' then
+            v_active := array_append(v_active, v_row.created_at);
+        elsif v_row.action = 'unwarn' then
+            if coalesce(cardinality(v_active), 0) > 0 then
+                if cardinality(v_active) = 1 then
+                    v_active := array[]::timestamptz[];
+                else
+                    v_active := v_active[1:cardinality(v_active)-1];
+                end if;
+            end if;
+        elsif v_row.action = 'clearwarns' then
+            v_active := array[]::timestamptz[];
+        end if;
+    end loop;
+
+    v_before := coalesce(cardinality(v_active), 0);
     insert into public.bot_audit(chat_id, actor_id, action, target_id, details, created_at)
     values (p_chat_id, p_actor_id, 'warn', p_target_id,
             left(coalesce(p_reason, ''), 500) || '; expires_in_days=7', v_now);
+
     v_count := v_before + 1;
     insert into public.bot_users(user_id, chat_id, warns, rank, messages, first_name)
     values (p_target_id, p_chat_id, v_count, 0, 0, 'Пользователь')
     on conflict (user_id, chat_id) do update
-      set warns = excluded.warns;
+       set warns = excluded.warns;
+
     return jsonb_build_object('ok', true, 'before_count', v_before, 'active_count', v_count);
 end;
 $$;
