@@ -246,7 +246,9 @@ async def normalize_dot_dk_prefix(handler, event, data):
     Commands beginning with + or - are never mistaken for access-rule configuration.
     """
     if isinstance(event, Message) and event.text:
-        event.text = _normalize_natural_moderation_phrase(event.text)
+        # aiogram Message is frozen (Pydantic); never assign to event.text.
+        # Work on a shallow model copy so ordinary chat messages cannot crash middleware.
+        event = event.model_copy(update={"text": _normalize_natural_moderation_phrase(event.text)})
         raw = event.text.strip()
 
         # Commands are enabled uniformly across every topic in every group.
@@ -291,7 +293,7 @@ async def normalize_dot_dk_prefix(handler, event, data):
                             f"Твой ранг: <b>{actual} — {role_name(actual)}</b>."
                         )
                         return
-                event.text = body
+                event = event.model_copy(update={"text": body})
 
         # Enforce generic .дк rules on ordinary commands too. This is only
         # activated for explicitly configured command keys, so unrelated chat
