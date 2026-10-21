@@ -805,6 +805,47 @@ async def get_chat_member_cached(bot: Bot, chat_id: int, user_id: int) -> Any | 
                 _CHAT_MEMBER_CACHE.pop(old_key, None)
     return member
 
+async def is_current_chat_member(chat_id: int, user_id: int) -> bool:
+    """Return True only when Telegram confirms the account is currently in this chat."""
+    if int(user_id or 0) <= 0:
+        return False
+    member = await get_chat_member_cached(bot, int(chat_id), int(user_id))
+    if member is None:
+        # Unknown/unverifiable users are excluded from current-member-only lists.
+        return False
+    return member.status not in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
+
+async def filter_current_chat_members(chat_id: int, rows: list[dict], user_id_key: str = "user_id") -> list[dict]:
+    """Keep rows for current members; check IDs concurrently with bounded Telegram API load."""
+    unique_ids: set[int] = set()
+    for row in rows:
+        try:
+            uid = int(row.get(user_id_key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if uid > 0:
+            unique_ids.add(uid)
+    semaphore = asyncio.Semaphore(8)
+
+    async def check(uid: int) -> tuple[int, bool]:
+        async with semaphore:
+            try:
+                return uid, await is_current_chat_member(chat_id, uid)
+            except Exception:
+                log.debug("Could not confirm chat membership chat=%s user=%s", chat_id, uid, exc_info=True)
+                return uid, False
+
+    checked = dict(await asyncio.gather(*(check(uid) for uid in unique_ids)))
+    result = []
+    for row in rows:
+        try:
+            uid = int(row.get(user_id_key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if uid > 0 and checked.get(uid, False):
+            result.append(row)
+    return result
+
 async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
@@ -1486,6 +1527,11 @@ async def chat_warns(message: Message) -> None:
         await message.answer("ℹ️ Команда «варны» показывает действующие предупреждения в группе.")
         return
     entries = await asyncio.to_thread(active_warn_entries, message.chat.id)
+    current_ids = await filter_current_chat_members(
+        message.chat.id, [{"user_id": uid} for uid in {int(e.get("user_id") or 0) for e in entries}]
+    )
+    current_user_ids = {int(row["user_id"]) for row in current_ids}
+    entries = [entry for entry in entries if int(entry.get("user_id") or 0) in current_user_ids]
     if not entries:
         await message.answer(format_panel(
             "ДЕЙСТВУЮЩИЕ ВАРНЫ ЧАТА",
@@ -1495,12 +1541,25 @@ async def chat_warns(message: Message) -> None:
         return
     users = await asyncio.to_thread(db_rows, "bot_users", 1000, None, chat_id=message.chat.id)
     names = {int(row.get("user_id") or 0): str(row.get("first_name") or row.get("username") or "Участник") for row in users}
+    try:
+        profile_rows = await asyncio.to_thread(
+            lambda: db.table("bot_member_profiles").select("user_id,display_name")
+            .eq("chat_id", message.chat.id).range(0, 999).execute().data or []
+        ) if db is not None else []
+        custom_names = {
+            int(row.get("user_id") or 0): str(row.get("display_name") or "").strip()
+            for row in profile_rows if str(row.get("display_name") or "").strip()
+        }
+    except Exception:
+        log.exception("Could not load custom nicknames for warning list chat=%s", message.chat.id)
+        custom_names = {}
     lines = []
     for index, entry in enumerate(entries[:50], 1):
         uid = entry["user_id"]
-        target = mention(uid, names.get(uid, f"ID {uid}"))
+        display_name = custom_names.get(uid) or names.get(uid, f"ID {uid}")
+        target = profile_link(uid, display_name)
         actor_id = entry["actor_id"]
-        actor = mention(actor_id, f"ID {actor_id}") if actor_id else "система"
+        actor = profile_link(actor_id, f"ID {actor_id}") if actor_id else "система"
         lines.append(
             f"<b>{index:02d}.</b> {target}\n"
             f"   Причина: {escape(entry['reason'][:160])}\n"
@@ -2674,11 +2733,21 @@ async def top_cmd(message: Message) -> None:
         if category_key == "marriages":
             rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, None, chat_id=message.chat.id, status="married")
             pairs = [r for r in rows if r.get("status") == "married"]
+            participant_ids = {
+                int(r.get(key) or 0) for r in pairs for key in ("user1_id", "user2_id")
+                if int(r.get(key) or 0) > 0
+            }
+            active_rows = await filter_current_chat_members(
+                message.chat.id, [{"user_id": uid} for uid in participant_ids]
+            )
+            active_ids = {int(r["user_id"]) for r in active_rows}
+            pairs = [r for r in pairs if int(r.get("user1_id") or 0) in active_ids and int(r.get("user2_id") or 0) in active_ids]
             await message.answer("<b>🏆 Топ браков</b>\n" + ("\n".join(f"{i}. {escape(str(p.get('user1_name','Участник')))} ❤️ {escape(str(p.get('user2_name','Участник')))}" for i,p in enumerate(pairs[:10],1)) if pairs else "Пока нет зарегистрированных браков."))
             return
         if category_key == "clans":
             rows = await asyncio.to_thread(db_rows, "bot_clans", 1000, None, chat_id=message.chat.id)
             member_rows = await asyncio.to_thread(db_rows, "bot_clan_members", 5000, None, chat_id=message.chat.id)
+            member_rows = await filter_current_chat_members(message.chat.id, member_rows)
             counts = {}
             for member in member_rows: counts[member.get("clan_name")] = counts.get(member.get("clan_name"), 0) + 1
             rows.sort(key=lambda r: counts.get(r.get("name"), 0), reverse=True)
@@ -2687,12 +2756,14 @@ async def top_cmd(message: Message) -> None:
             return
         if category_key == "members":
             rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "created_at", chat_id=message.chat.id)
+            rows = await filter_current_chat_members(message.chat.id, rows)
             rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
             lines = [f"{i}. {profile_link(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))}" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
             await message.answer("<b>🆕 Топ новичков</b>\n" + ("\n".join(lines) if lines else "Пока нет участников."))
             return
         if category_key == "messages":
             rows = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
+            rows = await filter_current_chat_members(message.chat.id, rows)
             lines = [f"{i}. {profile_link(int(r.get('user_id') or 0), '@'+str(r.get('username')).lstrip('@') if r.get('username') else str(r.get('first_name') or 'Участник'))} — <b>{int(r.get('messages') or 0)}</b> 💬" for i,r in enumerate(rows[:10],1) if int(r.get('user_id') or 0) > 0]
             await message.answer("<b>🏆 Топ сообщений</b>\n" + ("\n".join(lines) if lines else "Пока нет статистики."))
             return
@@ -2726,7 +2797,8 @@ async def top_cmd(message: Message) -> None:
             u = user_map.get(uid, {})
             if u.get("username"): current["username"] = u["username"]
             if u.get("first_name"): current["first_name"] = u["first_name"]
-        ranked = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:10]
+        grouped_rows = await filter_current_chat_members(message.chat.id, list(grouped.values()))
+        ranked = sorted(grouped_rows, key=lambda x:x["score"], reverse=True)[:10]
         title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
         await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {profile_link(int(r['user_id']), '@'+str(r['username']).lstrip('@') if r.get('username') else str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1) if int(r.get('user_id') or 0) > 0) if ranked else "Пока нет данных для рейтинга."))
         return
@@ -2859,9 +2931,9 @@ async def top_cmd(message: Message) -> None:
                             }
                     grouped_rows = list(seeded.values())
                     total_messages = _IRIS_BASELINE_TOTAL + max(0, total_messages - _PEAR_TOTAL_AT_BASELINE)
-                    return sorted(grouped_rows, key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
+                    return sorted(grouped_rows, key=lambda r: int(r.get("messages") or 0), reverse=True)[:max(count * 5, 100) if chat_only else count], total_messages
 
-            return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
+            return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:max(count * 5, 100) if chat_only else count], total_messages
 
         now_local = moscow_now()
         if period == "day":
@@ -2945,7 +3017,7 @@ async def top_cmd(message: Message) -> None:
                 if offset >= 100000:
                     log.warning("Raw activity fallback capped at 100000 events")
                     break
-        return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:count], total_messages
+        return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:max(count * 5, 100) if chat_only else count], total_messages
 
     try:
         rows, total_messages = await asyncio.to_thread(query_top)
@@ -2953,8 +3025,11 @@ async def top_cmd(message: Message) -> None:
         log.exception("Leaderboard query failed")
         await message.answer("⚠️ Не удалось получить статистику. Проверь подключение Supabase и таблицы активности.")
         return
+    if chat_only:
+        rows = await filter_current_chat_members(message.chat.id, rows)
+        rows = rows[:count]
     if not rows:
-        await message.answer(f"📊 Пока нет данных для статистики {labels[period]}. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
+        await message.answer(f"📊 Пока нет данных для статистики {labels[period]} среди текущих участников чата. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
         return
 
     # Display names (not usernames) are clickable profile links, like Iris.
@@ -2983,15 +3058,9 @@ async def top_cmd(message: Message) -> None:
             or str(row.get("baseline_name") or "").strip()
             or str(row.get("first_name") or "Участник")
         )
-        safe_name = escape(display_name)
-        # In statistics, use a normal t.me username URL, never Telegram's
-        # tg://user?id text-mention entity, which can notify the user.
-        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-            display = f'<a href="https://t.me/{escape(username, quote=True)}">{safe_name}</a>'
-        else:
-            # No username means there is no reliable non-notifying profile URL.
-            # Prefer plain text over accidentally pinging someone.
-            display = safe_name
+        # A text link to tg://user?id opens the profile but does not create a
+        # Telegram mention entity and therefore does not ping the user.
+        display = profile_link(uid, display_name) if uid > 0 else escape(display_name)
         if period == "month":
             badge = "🔥🔥🔥 " if index <= 5 else ("💥💥 " if index <= 11 else ("⭐️ " if index <= 22 else "⚡️ "))
         elif period == "week":
@@ -3085,6 +3154,9 @@ async def show_chat_nickname_cmd(message: Message) -> None:
         await message.answer("Укажи участника ответом на его сообщение, через @username или Telegram ID.")
         return
     target_id, target_label = int(target[0]), str(target[1])
+    if not await is_current_chat_member(message.chat.id, target_id):
+        await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие. Проверь @username/ID.")
+        return
     key = (int(message.chat.id), target_id)
     now = time.monotonic()
     cached = _CHAT_NICKNAME_CACHE.get(key)
@@ -3152,6 +3224,10 @@ async def set_chat_nickname_cmd(message: Message) -> None:
             nickname = parts[1].strip() if len(parts) > 1 else ""
         else:
             target = (message.from_user.id, f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name)
+
+    if not await is_current_chat_member(message.chat.id, target[0]):
+        await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие.")
+        return
 
     if not nickname:
         await message.answer("Укажи ник: <code>+ник АВЕСОМ</code> или <code>+ник @username АВЕСОМ</code>. Чтобы убрать — <code>-ник</code>.")
@@ -3292,8 +3368,9 @@ async def list_chat_nicknames_cmd(message: Message) -> None:
     if db is None:
         await message.answer("⚠️ Список ников хранится в Supabase, но база сейчас не настроена.")
         return
+    rows = await filter_current_chat_members(message.chat.id, rows)
     if not rows:
-        await message.answer("📒 В этом чате пока нет установленных ников. Задать: <code>+ник ИМЯ</code>.")
+        await message.answer("📒 У действующих участников этого чата пока нет установленных ников. Задать: <code>+ник ИМЯ</code>.")
         return
 
     # Use ordinary HTTPS t.me links for usernames. These are clickable profile
