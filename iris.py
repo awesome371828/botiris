@@ -1063,6 +1063,18 @@ def split_duration_reason(tokens: list[str]) -> tuple[timedelta | None, str | No
     reason = " ".join(tokens[consumed:]).strip(" ,.;:-") or None
     return duration, label, reason
 
+def is_target_token(token: str) -> bool:
+    """Recognize explicit Telegram targets without confusing numeric reasons for IDs."""
+    return token.startswith("@") or re.fullmatch(r"\d{7,}", token) is not None
+
+
+def remove_explicit_target(tokens: list[str]) -> tuple[list[str], str | None]:
+    """Remove exactly one explicit @username/Telegram ID from moderation arguments."""
+    for index, token in enumerate(tokens):
+        if is_target_token(token):
+            return tokens[:index] + tokens[index + 1:], token
+    return list(tokens), None
+
 _RECENT_CHAT_USERS: dict[tuple[int, int], tuple[str | None, str, float]] = {}
 _RECENT_CHAT_USERS_TTL = 6 * 60 * 60
 
@@ -1826,7 +1838,7 @@ async def moderation_target(message: Message, command: str) -> tuple[int, str] |
     args = args_after_command(message)
     # A reply is the target by default. Only an explicit @username or long Telegram
     # ID overrides it; reason text such as "111" must not break reply moderation.
-    explicit = next((x for x in args if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+    explicit = next((x for x in args if is_target_token(x)), None)
     target = await resolve_target(message, [explicit] if explicit else ([] if message.reply_to_message else args))
     if not target:
         await message.answer(f"Ответьте на сообщение участника командой <code>/{command}</code>.")
@@ -1970,15 +1982,14 @@ async def mute_cmd(message: Message) -> None:
     if original_text.startswith("@"):
         raw_args = re.sub(r"(?i)^@\w+\s+(?:мут|замут(?:ить|и|ь|ьте|ите|а|у|ом|е)?|замуч(?:ить|и|ь|ьте|ите)?|заглуш(?:ить|и|ь|ьте|ите)?)\s*", "", original_text).split()
     target = None
-    if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+    explicit_target = next((x for x in raw_args if is_target_token(x)), None)
+    if explicit_target:
+        target = await resolve_target(message, [explicit_target])
+    elif message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         u = message.reply_to_message.from_user
         target = (u.id, u.full_name)
-    elif not message.reply_to_message:
-        # Prefer @username over numbers so «мут 1 час @user» never treats 1 as a user ID.
-        username_match = re.search(r"@\w+", original_text)
-        username_arg = username_match.group(0) if username_match else next((x for x in raw_args if x.startswith("@")), None)
-        id_arg = next((x for x in raw_args if x.isdigit() and len(x) >= 7), None)
-        target = await resolve_target(message, [username_arg] if username_arg else ([id_arg] if id_arg else []))
+    else:
+        target = None
     if not target:
         await message.answer("⛔ Не вижу цель. Ответьте на сообщение участника или укажите известный чату @username/ID.")
         return
@@ -1991,9 +2002,9 @@ async def mute_cmd(message: Message) -> None:
     if not await ensure_moderation_target_safe(message, target, "mute"):
         return
 
-    duration_tokens = list(raw_args)
-    if not message.reply_to_message:
-        duration_tokens = [x for x in duration_tokens if x != (username_arg or id_arg)]
+    duration_tokens, _removed_target = remove_explicit_target(raw_args)
+    if not explicit_target and not message.reply_to_message:
+        duration_tokens = raw_args[1:]
     duration, duration_label, reason = split_duration_reason(duration_tokens)
     permanent_words = {"навсегда", "бессрочно", "навечно", "перманентно", "постоянно"}
     issued_at = moscow_now()
@@ -2150,9 +2161,9 @@ async def ban_cmd(message: Message) -> None:
 
     raw_args = args_after_command(message)
     if message.reply_to_message:
-        explicit_target = next((x for x in raw_args if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+        explicit_target = next((x for x in raw_args if is_target_token(x)), None)
         target = await resolve_target(message, [explicit_target] if explicit_target else [])
-        remainder = raw_args
+        remainder, _removed_target = remove_explicit_target(raw_args)
     else:
         if not raw_args:
             await message.answer(
@@ -2271,7 +2282,10 @@ async def kick_cmd(message: Message) -> None:
     if not await ensure_moderation_target_safe(message, target, "kick"):
         return
     raw_args = args_after_command(message)
-    reason = await _reason_from_preset(message.chat.id, "kick", " ".join(raw_args if message.reply_to_message else raw_args[1:]).strip() or "не указана")
+    reason_tokens, explicit_target = remove_explicit_target(raw_args)
+    if not explicit_target and not message.reply_to_message:
+        reason_tokens = raw_args[1:]
+    reason = await _reason_from_preset(message.chat.id, "kick", " ".join(reason_tokens).strip() or "не указана")
     try:
         await bot.ban_chat_member(message.chat.id, target[0])
         await bot.unban_chat_member(message.chat.id, target[0], only_if_banned=True)
@@ -2311,7 +2325,7 @@ async def warn_cmd(message: Message) -> None:
         return
     # A username/ID explicitly written by the moderator takes priority; a reply
     # is used only when there is no explicit target.
-    explicit_target = next((x for x in target_tokens if x.startswith("@") or re.fullmatch(r"\\d{7,}", x)), None)
+    explicit_target = next((x for x in target_tokens if is_target_token(x)), None)
     target = await resolve_target(message, [explicit_target] if explicit_target else ([] if message.reply_to_message else target_tokens[:1]))
     if not target:
         await message.answer("Ответьте на сообщение участника или укажите известный чату @username/ID.")
@@ -2346,7 +2360,10 @@ async def warn_cmd(message: Message) -> None:
         for key, stamp in list(_WARN_RECENT.items()):
             if now_mono - stamp > 60:
                 _WARN_RECENT.pop(key, None)
-    reason = await _reason_from_preset(message.chat.id, "warn", " ".join(target_tokens if message.reply_to_message else target_tokens[1:]).strip() or "не указана")
+    reason_tokens, _removed_target = remove_explicit_target(target_tokens)
+    if not explicit_target and not message.reply_to_message:
+        reason_tokens = target_tokens[1:]
+    reason = await _reason_from_preset(message.chat.id, "warn", " ".join(reason_tokens).strip() or "не указана")
     # Each warning expires after seven days.
     # The RPC locks the target row and writes the audit event + profile counter
     # in one Postgres transaction, so concurrent moderators cannot lose a warning.
