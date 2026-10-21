@@ -292,6 +292,42 @@ async def normalize_dot_dk_prefix(handler, event, data):
                         )
                         return
                 event.text = body
+
+        # Enforce generic .дк rules on ordinary commands too. This is only
+        # activated for explicitly configured command keys, so unrelated chat
+        # messages and commands keep their existing access behavior.
+        if (
+            not raw.casefold().startswith(".дк")
+            and event.from_user
+            and is_group(event)
+            and event.from_user.id != OWNER_ID
+        ):
+            token_match = re.match(r"(?is)^\\s*([.!/]?[a-zа-яё0-9_+-]+)", raw)
+            if token_match:
+                command_token = re.sub(r"^[.!/]+", "", token_match.group(1).casefold())
+                generic_key = "modrank_cmd_" + re.sub(
+                    r"[^a-zа-яё0-9]+", "_", command_token
+                ).strip("_")
+                try:
+                    settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
+                    configured = settings.get(generic_key)
+                    if configured is not None:
+                        required = max(1, min(5, int(configured)))
+                        actual = await asyncio.to_thread(
+                            user_rank, event.chat.id, event.from_user.id
+                        )
+                        if actual < required:
+                            await event.answer(
+                                f"⛔ Для команды <b>{escape(command_token)}</b> нужен ранг "
+                                f"<b>{required} — {role_name(required)}</b>. "
+                                f"Твой ранг: <b>{actual} — {role_name(actual)}</b>."
+                            )
+                            return
+                except (TypeError, ValueError):
+                    # Invalid settings must not crash dispatch; normal command
+                    # authorization still runs in its own handler.
+                    pass
+
     return await handler(event, data)
 
 
