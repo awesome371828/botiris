@@ -3007,6 +3007,94 @@ async def top_cmd(message: Message) -> None:
 
 
 
+# Short-lived nickname cache keeps repeated lookups off Supabase during busy chat bursts.
+_CHAT_NICKNAME_CACHE: dict[tuple[int, int], tuple[str, float]] = {}
+_CHAT_NICKNAME_CACHE_TTL = 15.0
+
+def _invalidate_chat_nickname_cache(chat_id: int, user_id: int) -> None:
+    _CHAT_NICKNAME_CACHE.pop((int(chat_id), int(user_id)), None)
+
+async def _resolve_nickname_lookup_target(message: Message, raw_target: str) -> tuple[int, str] | None:
+    if message.reply_to_message and message.reply_to_message.from_user and not raw_target:
+        user = message.reply_to_message.from_user
+        if not user.is_bot:
+            return user.id, (f"@{user.username}" if user.username else user.full_name)
+        return None
+    if not raw_target:
+        user = message.from_user
+        return (user.id, f"@{user.username}" if user.username else user.full_name) if user else None
+
+    token = raw_target.strip().split()[0].strip(",;:")
+    numeric = re.fullmatch(r"(?i)(?:id\s*[:=]?\s*|tg://user\?id=)?(\d{5,})", token)
+    if numeric:
+        uid = int(numeric.group(1))
+        row = await asyncio.to_thread(db_one, "bot_users", user_id=uid, chat_id=message.chat.id)
+        if row:
+            username = str(row.get("username") or "").lstrip("@")
+            name = f"@{username}" if username else str(row.get("first_name") or f"ID {uid}")
+            return uid, name
+        # A numeric Telegram ID is still a valid lookup key even if the user
+        # has not yet appeared in bot_users; the profile query decides if a nick exists.
+        return uid, f"ID {uid}"
+
+    username = token.lstrip("@")
+    username = re.sub(r"(?i)^(?:https?://)?t\.me/", "", username).strip("/")
+    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        def find_username() -> dict | None:
+            if db is None:
+                return None
+            # Usernames are chat-scoped: never resolve a nickname from another group.
+            rows = (db.table("bot_users").select("user_id,username,first_name")
+                    .eq("chat_id", message.chat.id)
+                    .ilike("username", username).limit(1).execute().data or [])
+            return rows[0] if rows else None
+        row = await asyncio.to_thread(find_username)
+        if row:
+            uid = int(row.get("user_id") or 0)
+            if uid:
+                return uid, f"@{str(row.get('username') or username).lstrip('@')}"
+    return await resolve_target(message, [token])
+
+async def show_chat_nickname_cmd(message: Message) -> None:
+    if not is_group(message):
+        await message.answer("Ник участника можно посмотреть внутри группы.")
+        return
+    if db is None:
+        await message.answer("⚠️ База данных сейчас недоступна, не могу проверить ник.")
+        return
+    raw = (message.text or "").strip()
+    match = re.match(r"(?is)^\s*(?:\.дк\s+)?ник(?:\s+(.*))?$", raw)
+    target_text = (match.group(1) or "").strip() if match else ""
+    target = await _resolve_nickname_lookup_target(message, target_text)
+    if not target:
+        await message.answer("Укажи участника ответом на его сообщение, через @username или Telegram ID.")
+        return
+    target_id, target_label = int(target[0]), str(target[1])
+    key = (int(message.chat.id), target_id)
+    now = time.monotonic()
+    cached = _CHAT_NICKNAME_CACHE.get(key)
+    nickname = cached[0] if cached and now - cached[1] < _CHAT_NICKNAME_CACHE_TTL else None
+    if nickname is None:
+        row = await asyncio.to_thread(db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_id)
+        if row is None:
+            await message.answer("⚠️ Не удалось прочитать ник из Supabase. Проверь логи подключения и таблицу bot_member_profiles.")
+            return
+        nickname = str(row.get("display_name") or "").strip()
+        _CHAT_NICKNAME_CACHE[key] = (nickname, time.monotonic())
+        if len(_CHAT_NICKNAME_CACHE) > 10000:
+            cutoff = time.monotonic() - _CHAT_NICKNAME_CACHE_TTL
+            for old_key, (_, stamp) in list(_CHAT_NICKNAME_CACHE.items()):
+                if stamp < cutoff:
+                    _CHAT_NICKNAME_CACHE.pop(old_key, None)
+    if nickname:
+        await message.answer(f"🏷 Ник {mention(target_id, target_label)} в этом чате: <b>{escape(nickname)}</b>.")
+    else:
+        await message.answer(f"🏷 У {mention(target_id, target_label)} нет установленного ника в этом чате.")
+
+@router.message(F.text.regexp(r"(?i)^\\s*(?:\\.дк\\s+)?ник(?:\\s|$)"))
+async def show_chat_nickname_dispatch(message: Message) -> None:
+    await show_chat_nickname_cmd(message)
+
 @router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?\+ник(?:\s|$)"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?/nick(?:\s|$)"))
 async def set_chat_nickname_cmd(message: Message) -> None:
@@ -3068,6 +3156,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not saved:
         await message.answer("Не удалось сохранить ник. Проверь Supabase и выполни актуальный schema.sql.")
         return
+    _invalidate_chat_nickname_cache(message.chat.id, target_id)
     await message.answer(
         f"✅ Ник участника {mention(target_id, target[1])} изменён на <b>{escape(nickname)}</b>. "
         "Он будет показываться в статистике и профиле чата."
@@ -3111,6 +3200,8 @@ async def clear_chat_nickname_cmd(message: Message) -> None:
         **current, "chat_id": message.chat.id, "user_id": target_id,
         "display_name": "", "updated_at": datetime.now(timezone.utc).isoformat(),
     }, "chat_id,user_id")
+    if saved:
+        _invalidate_chat_nickname_cache(message.chat.id, target_id)
     await message.answer(
         f"♻️ Ник сброшен у {mention(target_id, target[1])}. Теперь будет отображаться имя из Telegram."
         if saved else "Не удалось убрать ник. Проверь Supabase."
