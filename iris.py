@@ -4736,12 +4736,18 @@ async def close_case(message: Message, table: str, action: str) -> None:
     if db is None:
         await message.answer("База данных недоступна.")
         return
-    try:
+    def _close_case_sync() -> bool:
+        # Supabase Python client is synchronous. Keep the HTTP request off the
+        # event loop so a slow DB response cannot freeze all chat updates.
         result = db.table(table).update({
             "status": "closed", "closed_by": message.from_user.id,
             "closed_reason": reason, "closed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", case_id).eq("chat_id", message.chat.id).eq("status", "open").execute()
-        if not result.data:
+        return bool(result.data)
+
+    try:
+        closed = await asyncio.to_thread(_close_case_sync)
+        if not closed:
             await message.answer("Открытая запись с таким ID в этом чате не найдена.")
             return
         audit(message.chat.id, message.from_user.id, action, None, f"id={case_id}; reason={reason}")
