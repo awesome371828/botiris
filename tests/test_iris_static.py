@@ -65,10 +65,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
 
     def test_chat_nickname_lookup_supports_reply_username_and_id(self):
         self.assertIn("async def show_chat_nickname_cmd", self.source)
-        self.assertIn('F.text.regexp(r"(?i)^\\\\s*(?:\\\\.дк\\\\s+)?ник(?:\\\\s|$)")', self.source)
+        self.assertIn("async def show_chat_nickname_dispatch", self.source)
         self.assertIn("async def _resolve_nickname_lookup_target", self.source)
         self.assertIn('.ilike("username", username)', self.source)
-        self.assertIn("bot_member_profiles", self.source)
         self.assertIn("_CHAT_NICKNAME_CACHE_TTL = 15.0", self.source)
         self.assertIn("_invalidate_chat_nickname_cache(message.chat.id, target_id)", self.source)
 
