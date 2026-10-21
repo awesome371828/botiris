@@ -204,6 +204,11 @@ def _normalize_natural_moderation_phrase(raw: str) -> str:
     match = re.match(r"^([.!]?)(.*)$", value, flags=re.S)
     if match:
         prefix, value = match.group(1), match.group(2).lstrip()
+    # «варны» is a read-only chat-wide list command, not the singular
+    # moderation action «варн». Keep the exact standalone command unchanged so
+    # it reaches chat_warns instead of being rewritten into warn_cmd.
+    if value.casefold().strip() == "варны":
+        return (prefix + " " if prefix else "") + value
     # Multi-word requests must be handled before single-word stems.
     multiword = (
         (r"^(?:снять|сними|снимите|убрать|убери|уберите)\s+(?:мут(?:а|у|ом|е|ы|ов|ам|ами|ах)?|заглушку)\b", "анмут"),
