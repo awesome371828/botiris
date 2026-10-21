@@ -294,6 +294,12 @@ async def normalize_dot_dk_prefix(handler, event, data):
                 event.text = body
     return await handler(event, data)
 
+
+# CRITICAL: register the .дк router as an OUTER middleware. Without this, the
+# regular `ник` handler captures `.дк ник 3` first and treats `3` as a nickname.
+# This middleware routes rank-rule syntax before any command-specific handler.
+router.message.outer_middleware(normalize_dot_dk_prefix)
+
 # Register participant-call aliases before all feature handlers. aiogram stops at
 # the first matching handler, so this must precede broad text/command handlers.
 @router.message(Command("sbor"))
