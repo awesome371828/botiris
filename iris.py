@@ -256,7 +256,14 @@ async def normalize_dot_dk_prefix(handler, event, data):
         if match:
             body = match.group(1).strip()
             parts = body.split()
-            is_rule = (
+            # Explicitly route nickname rank rules before regular nickname handlers.
+            nick_rule = (
+                len(parts) >= 2
+                and parts[-1] in {"1", "2", "3", "4", "5"}
+                and re.sub(r"^[+\\-]+", "", parts[0]).casefold()
+                    in {"ник", "ники", "никнейм", "никнеймы"}
+            )
+            is_rule = nick_rule or (
                 len(parts) >= 2
                 and parts[-1].isdigit()
                 and parts[-1] in {"1", "2", "3", "4", "5"}
@@ -719,6 +726,20 @@ def set_warns(chat_id: int, user_id: int, amount: int) -> int:
 
 _WARN_RECENT: dict[tuple[int, int, int], float] = {}
 
+def _clean_warning_reason(details: Any) -> str:
+    """Remove legacy storage metadata and a duplicated target token from warning reasons."""
+    value = str(details or "").strip()
+    named = re.search(r"(?:^|[;\\s])reason\\s*=\\s*(.*)", value, flags=re.IGNORECASE)
+    if named:
+        value = named.group(1).strip()
+    value = re.sub(r";?\\s*expires_in_days\\s*=\\s*\\d+\\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r";?\\s*expires_at\\s*=\\S+", "", value, flags=re.IGNORECASE)
+    value = value.strip(" ;\\t\\r\\n")
+    value = re.sub(r"^@[A-Za-z0-9_]{5,32}\\s+", "", value)
+    value = re.sub(r"^(?:id\\s*[:=]?\\s*)?\\d{7,}\\s+", "", value, flags=re.IGNORECASE)
+    return value.strip(" ;") or "не указана"
+
+
 def active_warn_entries(chat_id: int, user_id: int | None = None) -> list[dict[str, Any]]:
     """Return warnings still active now; each warning expires exactly seven days after creation."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
@@ -752,11 +773,10 @@ def active_warn_entries(chat_id: int, user_id: int | None = None) -> list[dict[s
         action = str(row.get("action") or "").lower()
         if action == "warn":
             details = str(row.get("details") or "")
-            reason_match = re.search(r"(?:^|[; ] )reason=(.*?)(?:; expires_in_days=|$)", details)
             active[uid].append({
                 "user_id": uid, "actor_id": int(row.get("actor_id") or 0),
                 "created_at": stamp, "expires_at": stamp + timedelta(days=7),
-                "reason": (reason_match.group(1).strip() if reason_match else details.strip()) or "не указана",
+                "reason": _clean_warning_reason(details),
             })
         elif action == "unwarn":
             if active[uid]:
@@ -1576,7 +1596,8 @@ async def chat_warns(message: Message) -> None:
         display_name = custom_names.get(uid) or names.get(uid, f"ID {uid}")
         target = profile_link(uid, display_name)
         actor_id = entry["actor_id"]
-        actor = profile_link(actor_id, f"ID {actor_id}") if actor_id else "система"
+        actor_name = custom_names.get(actor_id) or names.get(actor_id) or f"ID {actor_id}"
+        actor = profile_link(actor_id, actor_name) if actor_id else "система"
         lines.append(
             f"<b>{index:02d}.</b> {target}\n"
             f"   Причина: {escape(entry['reason'][:160])}\n"
@@ -4179,7 +4200,7 @@ async def command_rank_rule_cmd(message: Message) -> None:
         "пин":"pin", "пинить":"pin", "пинь":"pin", "пиньте":"pin", "пином":"pin", "пина":"pin", "пину":"pin", "пины":"pin", "пинами":"pin", "закрепить":"pin", "закрепи":"pin", "закрепите":"pin", "закрепление":"pin", "закрепом":"pin", "закреп":"pin",
         "анпин":"unpin", "анпинить":"unpin", "открепить":"unpin", "открепи":"unpin", "открепите":"unpin", "снять закреп":"unpin", "снять закрепление":"unpin", "открепление":"unpin",
         "калл":"call", "каллить":"call", "каллом":"call", "каллу":"call", "калла":"call", "каллы":"call", "каллами":"call", "колл":"call", "коллом":"call", "коллы":"call", "коллами":"call", "call":"call", "calling":"call", "сбор":"call", "сбора":"call", "сбору":"call", "сбором":"call", "сборе":"call", "сборы":"call", "сборами":"call", "созыв":"call", "созыва":"call", "созвать":"call", "вызов":"call", "вызова":"call", "вызовом":"call", "вызовы":"call", "общий сбор":"call", "вызов участников":"call",
-        "ник":"nick", "ники":"nick", "никнейм":"nick", "никнеймы":"nick", "установка ника":"nick",
+        "ник":"nick", "ники":"nick", "никнейм":"nick", "никнеймы":"nick", "установка ника":"nick", "поставить ник":"nick", "смена ника":"nick",
         "общий":"__default__", "общий доступ":"__default__", "все команды":"__default__",
     }
     key = exact_aliases.get(command_phrase)
