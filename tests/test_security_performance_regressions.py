@@ -83,6 +83,23 @@ class SecurityAndPerformanceRegressions(unittest.TestCase):
         self.assertIn("async def audit_wait(", SOURCE)
         self.assertIn('loop.create_task(asyncio.to_thread(db_insert, "bot_audit"', SOURCE)
 
+    def test_ordinary_messages_skip_generic_rank_database_lookup(self):
+        start = SOURCE.index("async def normalize_dot_dk_prefix(")
+        end = SOURCE.index("router.message.outer_middleware(normalize_dot_dk_prefix)", start)
+        middleware = SOURCE[start:end]
+        self.assertIn("rank_checked_text_commands", middleware)
+        self.assertIn("explicit_command or command_token in rank_checked_text_commands", middleware)
+        self.assertIn("await asyncio.to_thread(get_chat_settings, event.chat.id)", middleware)
+        self.assertIn("Keep ordinary chat traffic off the thread pool and database path", middleware)
+
+    def test_main_loop_restarts_after_transient_crashes(self):
+        self.assertIn("async def run_forever() -> None:", SOURCE)
+        self.assertIn("await main()", SOURCE)
+        self.assertIn('log.exception("Bot main loop crashed; restarting in %.0fs", delay)', SOURCE)
+        self.assertIn("bot = Bot(BOT_TOKEN, default=DefaultBotProperties(", SOURCE)
+        self.assertNotIn("async def main() -> None:\n    acquire_single_instance_lock()", SOURCE)
+        self.assertIn("acquire_single_instance_lock()\n    failures = 0", SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
