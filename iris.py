@@ -307,28 +307,44 @@ async def normalize_dot_dk_prefix(handler, event, data):
             token_match = re.match(r"(?is)^\s*([.!/]?[a-zа-яё0-9_+-]+)", raw)
             if token_match:
                 command_token = re.sub(r"^[.!/]+", "", token_match.group(1).casefold())
-                generic_key = "modrank_cmd_" + re.sub(
-                    r"[^a-zа-яё0-9]+", "_", command_token
-                ).strip("_")
-                try:
-                    settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
-                    configured = settings.get(generic_key)
-                    if configured is not None:
-                        required = max(1, min(5, int(configured)))
-                        actual = await asyncio.to_thread(
-                            user_rank, event.chat.id, event.from_user.id
-                        )
-                        if actual < required:
-                            await event.answer(
-                                f"⛔ Для команды <b>{escape(command_token)}</b> нужен ранг "
-                                f"<b>{required} — {role_name(required)}</b>. "
-                                f"Твой ранг: <b>{actual} — {role_name(actual)}</b>."
+                # Keep ordinary chat traffic off the thread pool and database path.
+                # Explicit prefixes always count as commands; common text aliases
+                # preserve .дк rank enforcement without processing every chat sentence.
+                rank_checked_text_commands = {
+                    "варн", "анварн", "мут", "анмут", "размут", "бан", "разбан",
+                    "кик", "ник", "ники", "никнейм", "никнеймы", "топ", "топы",
+                    "стата", "статистика", "команды", "помощь", "админы", "админ",
+                    "кто", "браки", "брак", "развод", "развестись", "профиль",
+                    "варны", "история", "заметка", "заметки", "жалоба", "репорт",
+                    "апелляция", "сбор", "калл", "колл", "call", "антифлуд",
+                    "антиспам", "антиссылка", "приветствие", "калькулятор", "рандом",
+                    "кубик", "время", "дата", "экономика", "клан", "награды",
+                    "онлайн", "активность", "ктоя", "ктоятакой",
+                }
+                explicit_command = bool(re.match(r"^[/!.+-]", raw))
+                if explicit_command or command_token in rank_checked_text_commands:
+                    generic_key = "modrank_cmd_" + re.sub(
+                        r"[^a-zа-яё0-9]+", "_", command_token
+                    ).strip("_")
+                    try:
+                        settings = await asyncio.to_thread(get_chat_settings, event.chat.id)
+                        configured = settings.get(generic_key)
+                        if configured is not None:
+                            required = max(1, min(5, int(configured)))
+                            actual = await asyncio.to_thread(
+                                user_rank, event.chat.id, event.from_user.id
                             )
-                            return
-                except (TypeError, ValueError):
-                    # Invalid settings must not crash dispatch; normal command
-                    # authorization still runs in its own handler.
-                    pass
+                            if actual < required:
+                                await event.answer(
+                                    f"⛔ Для команды <b>{escape(command_token)}</b> нужен ранг "
+                                    f"<b>{required} — {role_name(required)}</b>. "
+                                    f"Твой ранг: <b>{actual} — {role_name(actual)}</b>."
+                                )
+                                return
+                    except (TypeError, ValueError):
+                        # Invalid settings must not crash dispatch; normal command
+                        # authorization still runs in its own handler.
+                        pass
 
     return await handler(event, data)
 
@@ -6582,7 +6598,6 @@ async def _worker_watchdog(
 
 
 async def main() -> None:
-    acquire_single_instance_lock()
     if db is not None:
         try:
             schema_problems = await asyncio.to_thread(check_schema, db)
@@ -7664,5 +7679,47 @@ async def gather_cmd(message: Message) -> None:
             log.exception("Could not send participant-call failure notice")
 
 
+async def run_forever() -> None:
+    """Keep the bot process alive through transient startup/polling failures."""
+    global bot
+    # Acquire once for the lifetime of this process; do not reacquire flock on restarts.
+    acquire_single_instance_lock()
+    failures = 0
+    while True:
+        delay = 5.0
+        try:
+            await main()
+            failures = 0
+            log.error("Telegram polling stopped unexpectedly; restarting in %.0fs", delay)
+        except asyncio.CancelledError:
+            raise
+        except SystemExit as exc:
+            failures += 1
+            if exc.code == 23:
+                # Telegram 409 means another instance is polling this token.
+                delay = 30.0
+                log.critical("Polling conflict (Telegram 409); retrying in %.0fs. Ensure only one deployment is active.", delay)
+            else:
+                delay = min(60.0, 2.0 ** min(failures, 5))
+                log.error("Bot exited with SystemExit=%r; restarting in %.0fs", exc.code, delay)
+        except Exception:
+            failures += 1
+            delay = min(60.0, 2.0 ** min(failures, 5))
+            log.exception("Bot main loop crashed; restarting in %.0fs", delay)
+        finally:
+            try:
+                await bot.session.close()
+            except Exception:
+                pass
+            # main() closes its session at shutdown; rebuild before the next iteration.
+            bot = Bot(BOT_TOKEN, default=DefaultBotProperties(
+                parse_mode=ParseMode.HTML, link_preview_is_disabled=True
+            ))
+        await asyncio.sleep(delay)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(run_forever())
+    except KeyboardInterrupt:
+        log.info("Pear CM stopped by operator")
