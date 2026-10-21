@@ -63,6 +63,32 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertNotIn("ban_chat_member", calls)
         self.assertNotIn("restrict_chat_member", calls)
 
+    def test_dot_dk_nickname_rank_rules_are_routed_as_permissions(self):
+        start = self.source.index("async def normalize_dot_dk_prefix")
+        end = self.source.index("# Register participant-call aliases", start)
+        middleware = self.source[start:end]
+        self.assertIn("nick_rule = (", middleware)
+        self.assertIn('in {"ник", "ники", "никнейм", "никнеймы"}', middleware)
+        self.assertIn("await command_rank_rule_cmd(event)", middleware)
+        rank_start = self.source.index("async def command_rank_rule_cmd")
+        rank_end = self.source.index("@router.message(F.text.regexp", rank_start)
+        rank_body = self.source[rank_start:rank_end]
+        self.assertIn('"ник":"nick"', rank_body)
+        self.assertIn('settings[f"modrank_{key}"] = required', rank_body)
+
+    def test_warning_reasons_hide_legacy_metadata_and_target_username(self):
+        start = self.source.index("def _clean_warning_reason")
+        end = self.source.index("def active_warn_entries", start)
+        helper = self.source[start:end]
+        self.assertIn("expires_in_days", helper)
+        self.assertIn(r"^@[A-Za-z0-9_]{5,32}\\s+", helper)
+        self.assertIn('"reason": _clean_warning_reason(details)', self.source)
+        warns_start = self.source.index("async def chat_warns")
+        warns_end = self.source.index('@router.message(F.text == "💍 Брак")', warns_start)
+        warns_body = self.source[warns_start:warns_end]
+        self.assertIn("actor_name = custom_names.get(actor_id) or names.get(actor_id)", warns_body)
+        self.assertIn("profile_link(actor_id, actor_name)", warns_body)
+
     def test_chat_nickname_lookup_supports_reply_username_and_id(self):
         self.assertIn("async def show_chat_nickname_cmd", self.source)
         self.assertIn("async def show_chat_nickname_dispatch", self.source)
