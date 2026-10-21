@@ -6039,7 +6039,7 @@ async def owner_diagnostics(message: Message) -> None:
 
         def _probe_table(table: str) -> tuple[str, bool]:
             try:
-                db.table(table).select("id").limit(1).execute()
+                db.table(table).select("*").limit(1).execute()
                 return table, True
             except Exception as exc:
                 log.warning("Diagnostic table probe failed: table=%s error=%s", table, type(exc).__name__)
