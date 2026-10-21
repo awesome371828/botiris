@@ -3048,7 +3048,11 @@ async def _resolve_nickname_lookup_target(message: Message, raw_target: str) -> 
                     .eq("chat_id", message.chat.id)
                     .ilike("username", username).limit(1).execute().data or [])
             return rows[0] if rows else None
-        row = await asyncio.to_thread(find_username)
+        try:
+            row = await asyncio.to_thread(find_username)
+        except Exception:
+            log.exception("Nickname target lookup failed chat=%s username=%s", message.chat.id, username)
+            row = None
         if row:
             uid = int(row.get("user_id") or 0)
             if uid:
@@ -3091,7 +3095,7 @@ async def show_chat_nickname_cmd(message: Message) -> None:
     else:
         await message.answer(f"🏷 У {mention(target_id, target_label)} нет установленного ника в этом чате.")
 
-@router.message(F.text.regexp(r"(?i)^\\s*(?:\\.дк\\s+)?ник(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:\.дк\s+)?ник(?:\s|$)"))
 async def show_chat_nickname_dispatch(message: Message) -> None:
     await show_chat_nickname_cmd(message)
 
