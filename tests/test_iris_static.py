@@ -81,7 +81,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         end = self.source.index("def active_warn_entries", start)
         helper = self.source[start:end]
         self.assertIn("expires_in_days", helper)
-        self.assertIn(r"^@[A-Za-z0-9_]{5,32}\\s+", helper)
+        self.assertIn(r"^@[A-Za-z0-9_]{5,32}\s+", helper)
         self.assertIn('"reason": _clean_warning_reason(details)', self.source)
         warns_start = self.source.index("async def chat_warns")
         warns_end = self.source.index('@router.message(F.text == "💍 Брак")', warns_start)
