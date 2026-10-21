@@ -260,7 +260,7 @@ async def normalize_dot_dk_prefix(handler, event, data):
                 len(parts) >= 2
                 and parts[-1].isdigit()
                 and parts[-1] in {"1", "2", "3", "4", "5"}
-                and not parts[0].startswith(("+", "-", "/"))
+                and not parts[0].startswith("/")
             )
             if is_rule:
                 # Keep .дк configuration away from normal command handlers.
