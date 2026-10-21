@@ -87,8 +87,9 @@ class SecurityAndPerformanceRegressions(unittest.TestCase):
         start = SOURCE.index("async def normalize_dot_dk_prefix(")
         end = SOURCE.index("router.message.outer_middleware(normalize_dot_dk_prefix)", start)
         middleware = SOURCE[start:end]
-        self.assertIn("rank_checked_text_commands", middleware)
-        self.assertIn("explicit_command or command_token in rank_checked_text_commands", middleware)
+        self.assertIn("_RANK_CHECKED_TEXT_COMMANDS", middleware)
+        self.assertIn("_RANK_CHECKED_TEXT_COMMANDS = {", SOURCE)
+        self.assertIn("explicit_command or command_token in _RANK_CHECKED_TEXT_COMMANDS", middleware)
         self.assertIn("await asyncio.to_thread(get_chat_settings, event.chat.id)", middleware)
         self.assertIn("Keep ordinary chat traffic off the thread pool and database path", middleware)
 
