@@ -71,6 +71,27 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("_CHAT_NICKNAME_CACHE_TTL = 15.0", self.source)
         self.assertIn("_invalidate_chat_nickname_cache(message.chat.id, target_id)", self.source)
 
+    def test_current_member_validation_filters_lists_and_keeps_profile_links_non_pinging(self):
+        self.assertIn("async def is_current_chat_member", self.source)
+        self.assertIn("async def filter_current_chat_members", self.source)
+        self.assertIn("ChatMemberStatus.LEFT, ChatMemberStatus.KICKED", self.source)
+        warns_start = self.source.index("async def chat_warns")
+        warns_end = self.source.index('@router.message(F.text == "💍 Брак")', warns_start)
+        warns_body = self.source[warns_start:warns_end]
+        self.assertIn("filter_current_chat_members", warns_body)
+        self.assertIn("profile_link(uid, display_name)", warns_body)
+        self.assertNotIn("call_mention(", warns_body)
+        nick_start = self.source.index("async def list_chat_nicknames_cmd")
+        nick_end = self.source.index('@router.message(Command("logs"))', nick_start)
+        nick_body = self.source[nick_start:nick_end]
+        self.assertIn("rows = await filter_current_chat_members(message.chat.id, rows)", nick_body)
+        self.assertIn('href="tg://user?id=', nick_body)
+        top_start = self.source.index("async def top_cmd")
+        top_end = self.source.index("# ── Activity tracking and welcome", top_start)
+        top_body = self.source[top_start:top_end]
+        self.assertIn("rows = await filter_current_chat_members(message.chat.id, rows)", top_body)
+        self.assertIn("display = profile_link(uid, display_name)", top_body)
+
     def test_additive_schema_for_new_features_exists(self):
         schema = SCHEMA.read_text(encoding="utf-8")
         for fragment in (
