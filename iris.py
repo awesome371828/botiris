@@ -551,8 +551,15 @@ def profile_link(user_id: int, name: str) -> str:
     return safe
 
 def mention(user_id: int, name: str) -> str:
-    """Clickable profile link intended for commands that explicitly ping users."""
-    return profile_link(user_id, name)
+    """Render a user's display name as plain text; ordinary bot replies must not ping people."""
+    return escape(str(name or "пользователь"))
+
+def call_mention(user_id: int, name: str) -> str:
+    """Clickable Telegram mention reserved exclusively for the explicit mass-call command."""
+    safe = escape(str(name or "Участник"))
+    if int(user_id or 0) > 0:
+        return f'<a href="tg://user?id={int(user_id)}">{safe}</a>'
+    return safe
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 def _is_transient_db_error(exc: Exception) -> bool:
@@ -7348,7 +7355,7 @@ async def gather_cmd(message: Message) -> None:
         if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
             mentions.append(f"@{escape(username)}")
         else:
-            mentions.append(mention(uid, name[:64]))
+            mentions.append(call_mention(uid, name[:64]))
 
     if not mentions:
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
