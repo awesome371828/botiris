@@ -2366,24 +2366,55 @@ async def warn_cmd(message: Message) -> None:
             result = result[0] if result else None
         if not isinstance(result, dict) or not result.get("ok"):
             raise RuntimeError(f"warning RPC returned unexpected result: {result!r}")
-        before = int(result.get("before_count") or 0)
-        count = int(result.get("active_count") or (before + 1))
+        rpc_before = int(result.get("before_count") or 0)
+        rpc_count = int(result.get("active_count") or (rpc_before + 1))
+        # Recount from the same audit ledger used by «варны». Older Supabase
+        # deployments may still have a stale RPC body that returns inflated counts.
+        ledger_entries = await asyncio.to_thread(active_warn_entries, message.chat.id, target[0])
+        if ledger_entries:
+            count = len(ledger_entries)
+            before = max(0, count - 1)
+            if count != rpc_count:
+                log.warning(
+                    "Warning count mismatch; using audit ledger chat=%s target=%s rpc=%s ledger=%s",
+                    message.chat.id, target[0], rpc_count, count,
+                )
+            count_verified = True
+        else:
+            # Never display an unverified inflated number or trigger an automatic ban
+            # when the audit ledger cannot confirm the post-write count.
+            log.error(
+                "Warning was recorded but active count could not be verified chat=%s target=%s rpc=%s",
+                message.chat.id, target[0], rpc_count,
+            )
+            count = None
+            before = None
+            count_verified = False
     except Exception:
         log.exception("Atomic warning issuance failed chat=%s target=%s", message.chat.id, target[0])
         await message.answer("⚠️ Варн не выдан: база не подтвердила атомарную запись. Проверь schema.sql в Supabase и попробуй позже.")
         return
     actor = mention(message.from_user.id, message.from_user.full_name) if message.from_user else "модератор"
     profile_note = ""
+    if count_verified:
+        result_text = (
+            f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
+            f"Причина: <b>{escape(reason[:300])}</b>.\n👮 Модератор: {actor}. Варн действует 7 дней."
+        )
+    else:
+        result_text = (
+            f"⚠️ Варн пользователю {mention(target[0], target[1])} записан. "
+            f"Но база вернула противоречивые данные о предыдущих предупреждениях, поэтому точный счётчик "
+            f"не показан и автоматический бан не выполняется. Проверь SQL-функцию pear_issue_warning в Supabase. "
+            f"Причина: <b>{escape(reason[:300])}</b>.\n👮 Модератор: {actor}."
+        )
     await message.answer(format_panel(
         "ПРЕДУПРЕЖДЕНИЕ ВЫДАНО",
-        f"⚠️ {mention(target[0], target[1])} получил предупреждение <b>{count}/3</b>. "
-        f"Причина: <b>{escape(reason[:300])}</b>.\n👮 Модератор: {actor}. "
-        f"Варн действует 7 дней.{profile_note}",
+        result_text,
         "Модерация · действие выполнено",
     ))
-    # Three active warnings trigger a ban. This is intentionally a single threshold
-    # to avoid multiple penalties firing for the same warning.
-    if before < 3 <= count:
+    # Three active warnings trigger a ban only when the ledger count was verified.
+    if count_verified and before is not None and count is not None and before < 3 <= count:
         try:
             target_member = await bot.get_chat_member(message.chat.id, target[0])
             if target_member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR):
