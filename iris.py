@@ -817,14 +817,19 @@ async def is_current_chat_member(chat_id: int, user_id: int) -> bool:
 
 async def filter_current_chat_members(chat_id: int, rows: list[dict], user_id_key: str = "user_id") -> list[dict]:
     """Keep rows for current members; check IDs concurrently with bounded Telegram API load."""
-    unique_ids: set[int] = set()
+    unique_ids: list[int] = []
+    seen_ids: set[int] = set()
     for row in rows:
         try:
             uid = int(row.get(user_id_key) or 0)
         except (TypeError, ValueError):
             continue
-        if uid > 0:
-            unique_ids.add(uid)
+        if uid > 0 and uid not in seen_ids:
+            seen_ids.add(uid)
+            unique_ids.append(uid)
+    # Bot API has no endpoint to enumerate every group member. Bound checks to
+    # the highest-priority 100 unique IDs to keep leaderboard/list commands responsive.
+    unique_ids = unique_ids[:100]
     semaphore = asyncio.Semaphore(8)
 
     async def check(uid: int) -> tuple[int, bool]:
@@ -2747,7 +2752,6 @@ async def top_cmd(message: Message) -> None:
         if category_key == "clans":
             rows = await asyncio.to_thread(db_rows, "bot_clans", 1000, None, chat_id=message.chat.id)
             member_rows = await asyncio.to_thread(db_rows, "bot_clan_members", 5000, None, chat_id=message.chat.id)
-            member_rows = await filter_current_chat_members(message.chat.id, member_rows)
             counts = {}
             for member in member_rows: counts[member.get("clan_name")] = counts.get(member.get("clan_name"), 0) + 1
             rows.sort(key=lambda r: counts.get(r.get("name"), 0), reverse=True)
@@ -2797,7 +2801,8 @@ async def top_cmd(message: Message) -> None:
             u = user_map.get(uid, {})
             if u.get("username"): current["username"] = u["username"]
             if u.get("first_name"): current["first_name"] = u["first_name"]
-        grouped_rows = await filter_current_chat_members(message.chat.id, list(grouped.values()))
+        candidates = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:100]
+        grouped_rows = await filter_current_chat_members(message.chat.id, candidates)
         ranked = sorted(grouped_rows, key=lambda x:x["score"], reverse=True)[:10]
         title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
         await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {profile_link(int(r['user_id']), '@'+str(r['username']).lstrip('@') if r.get('username') else str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1) if int(r.get('user_id') or 0) > 0) if ranked else "Пока нет данных для рейтинга."))
@@ -3237,6 +3242,9 @@ async def set_chat_nickname_cmd(message: Message) -> None:
         return
 
     target_id = int(target[0])
+    if not await is_current_chat_member(message.chat.id, target_id):
+        await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие.")
+        return
     current = await asyncio.to_thread(
         db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_id
     ) or {}
