@@ -723,8 +723,18 @@ def db_upsert(table: str, payload: dict, on_conflict: str) -> dict | None:
     if db is None:
         return None
     def query():
-        result = db.table(table).upsert(payload, on_conflict=on_conflict).execute()
-        return (result.data or [None])[0]
+        # Request the persisted row explicitly. Without select(), Supabase/PostgREST
+        # may return an empty data array for a successful upsert (return=minimal),
+        # which callers incorrectly interpret as a failed write.
+        result = db.table(table).upsert(payload, on_conflict=on_conflict).select("*").execute()
+        rows = result.data or []
+        if rows:
+            return rows[0]
+        # Some compatible gateways may still return no representation. The
+        # successful execute itself means the write was accepted; return the
+        # submitted payload as a success sentinel so callers don't report a false
+        # failure after a committed update.
+        return dict(payload)
     return _db_read_with_retry(table, "upsert", query)
 
 # Audit writes must exist for every moderation command. Keep non-critical audit calls
