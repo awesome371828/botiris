@@ -263,6 +263,15 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("Не удалось записать снятие предупреждения", self.source)
         self.assertIn("Не удалось записать сброс предупреждений", self.source)
 
+    def test_warning_issue_recounts_from_active_audit_ledger(self):
+        start = self.source.index("async def warn_cmd")
+        end = self.source.index("# Three active warnings trigger a ban", start)
+        body = self.source[start:end]
+        self.assertIn("active_warn_entries, message.chat.id, target[0]", body)
+        self.assertIn("Warning count mismatch; using audit ledger", body)
+        self.assertIn("точный счётчик", body)
+        self.assertIn("if count_verified and before is not None and count is not None", self.source)
+
     def test_chat_lock_persists_restore_state_before_telegram_change(self):
         close_start = self.source.index("async def close_chat_cmd")
         close_end = self.source.index("@router.message(Command(\"schedule\"", close_start)
