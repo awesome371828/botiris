@@ -239,6 +239,19 @@ def _normalize_natural_moderation_phrase(raw: str) -> str:
     return (prefix + " " if prefix else "") + value.lstrip()
 
 
+_RANK_CHECKED_TEXT_COMMANDS = {
+    "варн", "анварн", "мут", "анмут", "размут", "бан", "разбан",
+    "кик", "ник", "ники", "никнейм", "никнеймы", "топ", "топы",
+    "стата", "статистика", "команды", "помощь", "админы", "админ",
+    "кто", "браки", "брак", "развод", "развестись", "профиль",
+    "варны", "история", "заметка", "заметки", "жалоба", "репорт",
+    "апелляция", "сбор", "калл", "колл", "call", "антифлуд",
+    "антиспам", "антиссылка", "приветствие", "калькулятор", "рандом",
+    "кубик", "время", "дата", "экономика", "клан", "награды",
+    "онлайн", "активность", "ктоя", "ктоятакой",
+}
+
+
 async def normalize_dot_dk_prefix(handler, event, data):
     """Let .дк prefix reuse existing command handlers without duplicating command logic.
 
@@ -310,19 +323,8 @@ async def normalize_dot_dk_prefix(handler, event, data):
                 # Keep ordinary chat traffic off the thread pool and database path.
                 # Explicit prefixes always count as commands; common text aliases
                 # preserve .дк rank enforcement without processing every chat sentence.
-                rank_checked_text_commands = {
-                    "варн", "анварн", "мут", "анмут", "размут", "бан", "разбан",
-                    "кик", "ник", "ники", "никнейм", "никнеймы", "топ", "топы",
-                    "стата", "статистика", "команды", "помощь", "админы", "админ",
-                    "кто", "браки", "брак", "развод", "развестись", "профиль",
-                    "варны", "история", "заметка", "заметки", "жалоба", "репорт",
-                    "апелляция", "сбор", "калл", "колл", "call", "антифлуд",
-                    "антиспам", "антиссылка", "приветствие", "калькулятор", "рандом",
-                    "кубик", "время", "дата", "экономика", "клан", "награды",
-                    "онлайн", "активность", "ктоя", "ктоятакой",
-                }
                 explicit_command = bool(re.match(r"^[/!.+-]", raw))
-                if explicit_command or command_token in rank_checked_text_commands:
+                if explicit_command or command_token in _RANK_CHECKED_TEXT_COMMANDS:
                     generic_key = "modrank_cmd_" + re.sub(
                         r"[^a-zа-яё0-9]+", "_", command_token
                     ).strip("_")
