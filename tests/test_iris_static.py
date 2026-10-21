@@ -272,6 +272,14 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("точный счётчик", body)
         self.assertIn("if count_verified and before is not None and count is not None", self.source)
 
+    def test_explicit_moderation_target_is_removed_from_reason(self):
+        self.assertIn("def is_target_token(token: str)", self.source)
+        self.assertIn('re.fullmatch(r"\\d{7,}", token)', self.source)
+        self.assertIn("reason_tokens, _removed_target = remove_explicit_target(target_tokens)", self.source)
+        self.assertIn("remainder, _removed_target = remove_explicit_target(raw_args)", self.source)
+        self.assertIn('duration_tokens, _removed_target = remove_explicit_target(raw_args)', self.source)
+        self.assertIn('reason_tokens, explicit_target = remove_explicit_target(raw_args)', self.source)
+
     def test_chat_lock_persists_restore_state_before_telegram_change(self):
         close_start = self.source.index("async def close_chat_cmd")
         close_end = self.source.index("@router.message(Command(\"schedule\"", close_start)
