@@ -1870,7 +1870,13 @@ async def ensure_moderation_target_safe(
                       message.chat.id, target_id, action)
         await message.answer("⚠️ Не удалось проверить статус участника. Ничего не применено; попробуй ещё раз.")
         return False
-    if member and member.status == ChatMemberStatus.CREATOR:
+    if member is None:
+        await message.answer("⚠️ Не удалось подтвердить, что участник состоит в чате. Ничего не применено; проверь ID и попробуй ещё раз.")
+        return False
+    if member.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
+        await message.answer("⛔ Такого участника сейчас нет в этом чате.")
+        return False
+    if member.status == ChatMemberStatus.CREATOR:
         await message.answer("⛔ Нельзя применять это действие к создателю чата.")
         return False
     target_rank = await asyncio.to_thread(user_rank, message.chat.id, target_id)
