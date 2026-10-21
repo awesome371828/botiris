@@ -168,6 +168,12 @@ alter table public.bot_appeals add column if not exists closed_reason text;
 alter table public.bot_appeals add column if not exists created_at timestamptz not null default now();
 alter table public.bot_appeals add column if not exists closed_at timestamptz;
 
+-- Hot-path indexes for chat-scoped user and custom-nickname lookups.
+create index if not exists bot_users_chat_username_idx
+    on public.bot_users (chat_id, username);
+create index if not exists bot_member_profiles_chat_display_name_idx
+    on public.bot_member_profiles (chat_id, display_name);
+
 create index if not exists bot_users_chat_last_seen_idx
     on public.bot_users (chat_id, last_seen desc);
 create index if not exists bot_marriages_chat_status_created_idx
