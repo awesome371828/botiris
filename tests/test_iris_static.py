@@ -366,7 +366,7 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("live_username != requested_username", body)
         self.assertIn("nickname = parts[1].strip() if len(parts) > 1 else", body)
         self.assertIn("target = await resolve_target(message, rest.split()[:1])", body)
-        self.assertIn("requested_username = first[1:].casefold()", body)
+        self.assertIn("first[1:] if first.startswith(\"@\")", body)
         self.assertIn("Refusing nickname assignment after username mismatch", body)
         self.assertIn("Ответь на сообщение нужного человека или укажи его Telegram ID", body)
         self.assertIn("live_member = await bot.get_chat_member(message.chat.id, target_id)", body)
