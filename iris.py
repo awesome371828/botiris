@@ -7945,7 +7945,7 @@ async def run_forever() -> None:
             # caused /ping and other API-dependent commands to hang for a minute.
             bot = LowLatencyBot(
                 BOT_TOKEN,
-                session=AiohttpSession(timeout=35, limit=200, ttl_dns_cache=600, keepalive_timeout=60, enable_cleanup_closed=True),
+                session=AiohttpSession(timeout=35, limit=200),
                 default=DefaultBotProperties(
                     parse_mode=ParseMode.HTML, link_preview_is_disabled=True
                 ),
