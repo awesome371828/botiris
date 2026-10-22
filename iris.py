@@ -6088,42 +6088,62 @@ async def owner_status(message: Message) -> None:
         f"Московское время: <code>{format_moscow_time(moscow_now())}</code>"
     )
 
+# Cache diagnostics briefly so repeated owner checks do not add remote
+# Telegram/Supabase round-trips to command handling. Cached values retain their
+# measured latency; they are never replaced with a fabricated low number.
+_PING_CACHE: tuple[float, str, str] | None = None
+_PING_CACHE_LOCK = asyncio.Lock()
+_PING_CACHE_TTL = 15.0
+
 @router.message(Command("ping", "пинг"))
 async def owner_ping(message: Message) -> None:
+    global _PING_CACHE
     if not await _owner_or_operator(message):
         return
 
-    async def _telegram_probe() -> str:
-        started = time.perf_counter()
-        try:
-            await asyncio.wait_for(bot.get_me(), timeout=0.75)
-            return f"{(time.perf_counter()-started)*1000:.0f} мс"
-        except asyncio.TimeoutError:
-            return "тайм-аут (>750 мс)"
-        except Exception as exc:
-            return f"ошибка ({type(exc).__name__})"
+    now = time.monotonic()
+    cached = _PING_CACHE
+    if cached is not None and now - cached[0] < _PING_CACHE_TTL:
+        telegram, db_result = cached[1], cached[2]
+    else:
+        async with _PING_CACHE_LOCK:
+            now = time.monotonic()
+            cached = _PING_CACHE
+            if cached is not None and now - cached[0] < _PING_CACHE_TTL:
+                telegram, db_result = cached[1], cached[2]
+            else:
+                async def _telegram_probe() -> str:
+                    started = time.perf_counter()
+                    try:
+                        await asyncio.wait_for(bot.get_me(), timeout=0.75)
+                        return f"{(time.perf_counter()-started)*1000:.0f} мс"
+                    except asyncio.TimeoutError:
+                        return "тайм-аут (>750 мс)"
+                    except Exception as exc:
+                        return f"ошибка ({type(exc).__name__})"
 
-    async def _supabase_probe() -> str:
-        if db is None:
-            return "не настроена"
-        def probe() -> str:
-            started = time.perf_counter()
-            try:
-                db.table("bot_users").select("user_id").limit(1).execute()
-                return f"OK · {(time.perf_counter()-started)*1000:.0f} мс"
-            except Exception as exc:
-                return f"ошибка ({type(exc).__name__})"
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(probe), timeout=0.75)
-        except asyncio.TimeoutError:
-            return "тайм-аут (>750 мс)"
+                async def _supabase_probe() -> str:
+                    if db is None:
+                        return "не настроена"
+                    def probe() -> str:
+                        started = time.perf_counter()
+                        try:
+                            db.table("bot_users").select("user_id").limit(1).execute()
+                            return f"OK · {(time.perf_counter()-started)*1000:.0f} мс"
+                        except Exception as exc:
+                            return f"ошибка ({type(exc).__name__})"
+                    try:
+                        return await asyncio.wait_for(asyncio.to_thread(probe), timeout=0.75)
+                    except asyncio.TimeoutError:
+                        return "тайм-аут (>750 мс)"
 
-    # Probe Telegram and Supabase concurrently: total command latency is the
-    # slower of the two checks rather than the sum of both round-trips.
-    telegram, db_result = await asyncio.gather(_telegram_probe(), _supabase_probe())
+                # Parallel probes avoid summing Telegram and database round-trips.
+                telegram, db_result = await asyncio.gather(_telegram_probe(), _supabase_probe())
+                _PING_CACHE = (time.monotonic(), telegram, db_result)
+
     await message.answer(format_panel(
         "ПРОВЕРКА СОЕДИНЕНИЯ",
-        f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>",
+        f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>\n<i>Показания обновляются раз в 15 секунд.</i>",
         "Pear CM · технический статус",
     ))
 
