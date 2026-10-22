@@ -3357,10 +3357,24 @@ async def _resolve_nickname_lookup_target(message: Message, raw_target: str) -> 
             if db is None:
                 return None
             # Usernames are chat-scoped: never resolve a nickname from another group.
-            rows = (db.table("bot_users").select("user_id,username,first_name")
+            # Do not trust username_lower alone: stale/incorrect normalized values
+            # can point at another member. Fetch candidates and verify the actual
+            # username before accepting any target.
+            rows = (db.table("bot_users").select("user_id,username,first_name,username_lower")
                     .eq("chat_id", message.chat.id)
-                    .eq("username_lower", username.casefold()).limit(1).execute().data or [])
-            return rows[0] if rows else None
+                    .eq("username_lower", username.casefold()).limit(10).execute().data or [])
+            for candidate in rows:
+                actual = str(candidate.get("username") or "").lstrip("@").casefold()
+                if actual == username.casefold():
+                    return candidate
+            # Compatibility with older rows where username_lower was not populated.
+            rows = (db.table("bot_users").select("user_id,username,first_name")
+                    .eq("chat_id", message.chat.id).limit(1000).execute().data or [])
+            for candidate in rows:
+                actual = str(candidate.get("username") or "").lstrip("@").casefold()
+                if actual == username.casefold():
+                    return candidate
+            return None
         try:
             row = await asyncio.to_thread(find_username)
         except Exception:
