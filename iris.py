@@ -888,7 +888,7 @@ async def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
 
 _CHAT_MEMBER_CACHE: dict[tuple[int, int], tuple[Any | None, float]] = {}
-_CHAT_MEMBER_CACHE_TTL = 8.0
+_CHAT_MEMBER_CACHE_TTL = 60.0
 
 async def get_chat_member_cached(bot: Bot, chat_id: int, user_id: int) -> Any | None:
     """Avoid duplicate Telegram getChatMember round-trips for the same command."""
@@ -935,7 +935,7 @@ async def filter_current_chat_members(chat_id: int, rows: list[dict], user_id_ke
     # Bot API has no endpoint to enumerate every group member. Bound checks to
     # the highest-priority 100 unique IDs to keep leaderboard/list commands responsive.
     unique_ids = unique_ids[:100]
-    semaphore = asyncio.Semaphore(8)
+    semaphore = asyncio.Semaphore(20)
 
     async def check(uid: int) -> tuple[int, bool]:
         async with semaphore:
@@ -6017,31 +6017,35 @@ async def owner_status(message: Message) -> None:
 async def owner_ping(message: Message) -> None:
     if not await _owner_or_operator(message):
         return
-    start = time.perf_counter()
-    try:
-        # Bound the probe itself. A broken Telegram route must not leave /ping
-        # hanging for the session's full network timeout.
-        await asyncio.wait_for(bot.get_me(), timeout=1.0)
-        telegram = f"{(time.perf_counter()-start)*1000:.0f} мс"
-    except asyncio.TimeoutError:
-        telegram = "тайм-аут (>1000 мс)"
-    except Exception as exc:
-        telegram = f"ошибка ({type(exc).__name__})"
-    db_result = "не настроена"
-    if db is not None:
-        # Supabase's client is synchronous; probe off-loop and bound the wait so
-        # /ping remains responsive even when the database route is degraded.
-        def _ping_supabase() -> str:
-            db_started = time.perf_counter()
+
+    async def _telegram_probe() -> str:
+        started = time.perf_counter()
+        try:
+            await asyncio.wait_for(bot.get_me(), timeout=0.75)
+            return f"{(time.perf_counter()-started)*1000:.0f} мс"
+        except asyncio.TimeoutError:
+            return "тайм-аут (>750 мс)"
+        except Exception as exc:
+            return f"ошибка ({type(exc).__name__})"
+
+    async def _supabase_probe() -> str:
+        if db is None:
+            return "не настроена"
+        def probe() -> str:
+            started = time.perf_counter()
             try:
                 db.table("bot_users").select("user_id").limit(1).execute()
-                return f"OK · {(time.perf_counter() - db_started) * 1000:.0f} мс"
+                return f"OK · {(time.perf_counter()-started)*1000:.0f} мс"
             except Exception as exc:
                 return f"ошибка ({type(exc).__name__})"
         try:
-            db_result = await asyncio.wait_for(asyncio.to_thread(_ping_supabase), timeout=1.0)
+            return await asyncio.wait_for(asyncio.to_thread(probe), timeout=0.75)
         except asyncio.TimeoutError:
-            db_result = "тайм-аут (>1000 мс)"
+            return "тайм-аут (>750 мс)"
+
+    # Probe Telegram and Supabase concurrently: total command latency is the
+    # slower of the two checks rather than the sum of both round-trips.
+    telegram, db_result = await asyncio.gather(_telegram_probe(), _supabase_probe())
     await message.answer(format_panel(
         "ПРОВЕРКА СОЕДИНЕНИЯ",
         f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>",
