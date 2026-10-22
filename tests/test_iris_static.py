@@ -364,6 +364,13 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("requested_username = first[1:].casefold()", body)
         self.assertIn("Refusing nickname assignment after username mismatch", body)
         self.assertIn("Ник не изменён — ответь на сообщение нужного участника", body)
+        self.assertIn('resolved_username != requested_username', body)
+        self.assertIn("Membership is checked once below", body)
+        member_start = self.source.index("async def get_chat_member_cached")
+        member_end = self.source.index("async def is_current_chat_member", member_start)
+        member_body = self.source[member_start:member_end]
+        self.assertIn("Telegram getChatMember failed; refusing unverified member check", member_body)
+        self.assertIn("_CHAT_MEMBER_CACHE[key] = (None, now)", member_body)
 
     def test_marriage_flow_authorizes_buttons_and_confirms_database_transitions(self):
         callback_start = self.source.index("async def marriage_proposal_callback")
