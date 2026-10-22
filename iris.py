@@ -145,7 +145,7 @@ else:
 # Keep API calls bounded; polling_timeout below is shorter than this session timeout.
 bot = Bot(
     BOT_TOKEN,
-    session=AiohttpSession(timeout=10),
+    session=AiohttpSession(timeout=3),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
 )
 dp = Dispatcher()
@@ -6812,8 +6812,9 @@ async def main() -> None:
             bot,
             allowed_updates=dp.resolve_used_update_types(),
             tasks_concurrency_limit=24,
-            # Keep long polling shorter than the 10-second HTTP session timeout.
-            polling_timeout=5,
+            # Keep long polling shorter than the 3-second HTTP request timeout.
+            # This prevents a stalled Telegram connection from holding an update for a minute.
+            polling_timeout=2,
         )
     except TelegramConflictError:
         log.critical(
