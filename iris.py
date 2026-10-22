@@ -160,7 +160,7 @@ class LowLatencyBot(Bot):
 # GetUpdates requests, Telegram flood control, and long periods with no replies.
 bot = LowLatencyBot(
     BOT_TOKEN,
-    session=AiohttpSession(timeout=35, limit=200, ttl_dns_cache=600, keepalive_timeout=60, enable_cleanup_closed=True),
+    session=AiohttpSession(timeout=35, limit=200),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
 )
 dp = Dispatcher()
