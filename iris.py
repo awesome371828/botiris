@@ -3465,8 +3465,8 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     first = parts[0] if parts else ""
     explicit_target_in_args = bool(
         first.startswith("@")
-        or re.match(r"(?i)^(?:https?://)?t\\.me/", first)
-        or re.match(r"(?i)^(?:id\\s*[:=]?\\s*|tg://user\\?id=)\\d+$", first)
+        or re.match(r"(?i)^(?:https?://)?t\.me/", first)
+        or re.match(r"(?i)^(?:id\s*[:=]?\s*|tg://user\?id=)\d+$", first)
         or (first.isdigit() and len(first) >= 7)
     )
     if message.reply_to_message and message.reply_to_message.from_user and not explicit_target_in_args:
