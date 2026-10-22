@@ -3463,12 +3463,18 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     # Otherwise "+ник @someone NAME" silently renames the replied-to user.
     parts = rest.split(maxsplit=1)
     first = parts[0] if parts else ""
-    explicit_target_in_args = bool(
+    # Accept numeric IDs as 123456789, (123456789), id:123456789,
+    # or tg://user?id=123456789. Parentheses are just notation, not part of ID.
+    normalized_first = first.strip().strip("()")
+    explicit_username = (
         first.startswith("@")
-        or re.match(r"(?i)^(?:https?://)?t\.me/", first)
-        or re.match(r"(?i)^(?:id\s*[:=]?\s*|tg://user\?id=)\d+$", first)
-        or (first.isdigit() and len(first) >= 7)
+        or bool(re.match(r"(?i)^(?:https?://)?t\.me/", first))
     )
+    explicit_id = bool(
+        re.fullmatch(r"\d{5,}", normalized_first)
+        or re.fullmatch(r"(?i)(?:id\s*[:=]?\s*|tg://user\?id=)\d{5,}", normalized_first)
+    )
+    explicit_target_in_args = explicit_username or explicit_id
     if message.reply_to_message and message.reply_to_message.from_user and not explicit_target_in_args:
         reply_user = message.reply_to_message.from_user
         if reply_user.is_bot:
@@ -3476,20 +3482,17 @@ async def set_chat_nickname_cmd(message: Message) -> None:
             return
         target = (reply_user.id, f"@{reply_user.username}" if reply_user.username else reply_user.full_name)
     else:
-        is_target_token = bool(
-            first.startswith("@")
-            or re.match(r"(?i)^(?:https?://)?t\.me/", first)
-            or re.match(r"(?i)^(?:id\s*[:=]?\s*|tg://user\?id=)\d+$", first)
-            or (first.isdigit() and len(first) >= 7)
-        )
+        is_target_token = explicit_target_in_args
         if is_target_token:
             # Nickname assignment must resolve an explicit username exactly.
             # The generic moderation resolver can fall back to another cached/recent
             # user; that is unsafe here because it can rename the wrong participant.
-            if first.startswith("@") or re.match(r"(?i)^(?:https?://)?t\.me/", first):
+            if explicit_username:
                 resolved = await _resolve_nickname_lookup_target(message, first)
             else:
-                resolved = await resolve_target(message, [first])
+                # IDs are authoritative: never send them through fuzzy username/name
+                # resolution, and accept the documented parenthesized form.
+                resolved = await _resolve_nickname_lookup_target(message, normalized_first)
             if not resolved:
                 await message.answer(
                     "⛔ Не удалось точно найти участника по этому @username/ID. "
@@ -3500,12 +3503,14 @@ async def set_chat_nickname_cmd(message: Message) -> None:
             # Safety invariant: an explicit @username must resolve to that exact
             # username, not merely to a cached/recent participant. Never write a
             # nickname if the lookup result cannot prove the requested identity.
-            if first.startswith("@"):
-                requested_username = first[1:].casefold()
+            if explicit_username:
+                requested_username = (
+                    first[1:] if first.startswith("@")
+                    else re.sub(r"(?i)^(?:https?://)?t\.me/", "", first).strip("/")
+                ).casefold()
                 resolved_username = str(resolved[1] or "").strip().lstrip("@").casefold()
                 if (
                     not re.fullmatch(r"[a-z0-9_]{5,32}", requested_username)
-                    or not resolved_username
                     or resolved_username != requested_username
                 ):
                     log.error(
@@ -3513,8 +3518,8 @@ async def set_chat_nickname_cmd(message: Message) -> None:
                         message.chat.id, message.from_user.id, first, resolved[0], resolved[1],
                     )
                     await message.answer(
-                        "⛔ Не удалось подтвердить точное совпадение username. "
-                        "Ник не изменён — ответь на сообщение нужного участника или укажи его Telegram ID."
+                        "⛔ Не удалось точно найти этого участника по username. Ник не изменён. "
+                        "Ответь на сообщение нужного человека или укажи его Telegram ID."
                     )
                     return
             target = resolved
@@ -3536,6 +3541,20 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not await is_current_chat_member(message.chat.id, target_id):
         await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие.")
         return
+    if explicit_username_in_target := (not (message.reply_to_message and not explicit_target_in_args) and explicit_username):
+        # Re-check against Telegram's live member object. A stale/corrupt Supabase
+        # username row must never cause another person to receive this nickname.
+        try:
+            live_member = await bot.get_chat_member(message.chat.id, target_id)
+            live_username = str(getattr(live_member.user, "username", "") or "").casefold()
+        except Exception as exc:
+            log.warning("Cannot verify nickname target against Telegram chat=%s id=%s: %s", message.chat.id, target_id, type(exc).__name__)
+            await message.answer("⛔ Telegram не подтвердил username. Ник не изменён; попробуй ответом на сообщение или укажи Telegram ID.")
+            return
+        if live_username != requested_username:
+            log.error("Refusing nickname assignment: Telegram username mismatch chat=%s requested=%s id=%s actual=%s", message.chat.id, requested_username, target_id, live_username)
+            await message.answer("⛔ Этот username не принадлежит найденному участнику. Ник не изменён. Ответь на сообщение нужного человека или укажи его Telegram ID.")
+            return
     current = await asyncio.to_thread(
         db_one, "bot_member_profiles", chat_id=message.chat.id, user_id=target_id
     ) or {}
