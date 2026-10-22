@@ -3478,6 +3478,28 @@ async def set_chat_nickname_cmd(message: Message) -> None:
                     "Ник не изменён. Укажи актуальный username или Telegram ID."
                 )
                 return
+
+            # Safety invariant: an explicit @username must resolve to that exact
+            # username, not merely to a cached/recent participant. Never write a
+            # nickname if the lookup result cannot prove the requested identity.
+            if first.startswith("@"):
+                requested_username = first[1:].casefold()
+                resolved_username = str(resolved[1] or "").strip().lstrip("@").casefold()
+                if (
+                    not re.fullmatch(r"[a-z0-9_]{5,32}", requested_username)
+                    or not resolved_username
+                    or not resolved_username.startswith("@") and resolved_username != requested_username
+                    or resolved_username.lstrip("@") != requested_username
+                ):
+                    log.error(
+                        "Refusing nickname assignment after username mismatch chat=%s actor=%s requested=%s resolved_id=%s resolved_label=%s",
+                        message.chat.id, message.from_user.id, first, resolved[0], resolved[1],
+                    )
+                    await message.answer(
+                        "⛔ Не удалось подтвердить точное совпадение username. "
+                        "Ник не изменён — ответь на сообщение нужного участника или укажи его Telegram ID."
+                    )
+                    return
             target = resolved
             nickname = parts[1].strip() if len(parts) > 1 else ""
         else:
