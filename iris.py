@@ -19,6 +19,7 @@ import os
 import re
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -7910,6 +7911,16 @@ async def gather_cmd(message: Message) -> None:
 async def run_forever() -> None:
     """Keep the bot process alive through transient startup/polling failures."""
     global bot
+    # Supabase's Python SDK is synchronous, so handlers use asyncio.to_thread().
+    # On a 4-vCPU host Python's default executor may have only 8 workers; a burst
+    # of DB-backed commands can queue behind slow network I/O and inflate latency.
+    # Use a bounded, network-I/O-oriented pool; this preserves every feature while
+    # allowing concurrent commands to wait on Supabase independently.
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(
+        ThreadPoolExecutor(max_workers=32, thread_name_prefix="pear-io")
+    )
+    log.info("Async I/O thread pool configured: max_workers=32")
     # Acquire once for the lifetime of this process; do not reacquire flock on restarts.
     acquire_single_instance_lock()
     failures = 0
