@@ -476,15 +476,16 @@ async def _remember_message_id(handler, event: Message, data):
         _RECENT_MESSAGE_IDS[event.chat.id].append(event.message_id)
         _RECENT_TOPIC_MESSAGE_IDS[_message_topic_key(event)].append(event.message_id)
     raw = (event.text or event.caption or "").strip() if isinstance(event, Message) else ""
-    # Owner audit trail: record every slash command and the important text aliases.
-    # Keep logging asynchronous so ordinary chat commands remain responsive.
-    routine_public_command = bool(re.match(r"(?i)^/(?:start|help|commands)(?:@\w+)?(?:\s|$)", raw))
-    if isinstance(event, Message) and event.from_user and raw and not routine_public_command and (
-        raw.startswith(("/", "!", ".")) or re.match(
-            r"(?i)^(калл|колл|call|сбор|общий сбор|вызов участников|мут|бан|кик|варн|размут|анмут|разбан|очистить|профиль|команды|помощь)(?:\\s|$)",
-            raw,
-        )
-    ):
+    # Avoid one Supabase INSERT for every slash command: under active chat traffic
+    # these fire-and-forget writes can saturate asyncio's shared thread pool and make
+    # unrelated handlers wait behind database I/O. Keep durable command_received
+    # audit entries for security/moderation actions only; all slow handlers are still
+    # measured below and exceptions are persisted separately.
+    critical_command = bool(re.match(
+        r"(?i)^(?:[/.!]?(?:мут|бан|кик|варн|анварн|снять\\s+варн|размут|анмут|разбан|очистить|пин|анпин)|-смс|\\+чат|-чат)(?:\\s|$)",
+        raw,
+    ))
+    if isinstance(event, Message) and event.from_user and critical_command:
         try:
             asyncio.get_running_loop().create_task(asyncio.to_thread(
                 db_insert, "bot_audit", _audit_payload(
