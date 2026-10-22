@@ -1134,3 +1134,20 @@ grant all on public.bot_nickname_history, public.bot_achievement_definitions,
     public.bot_gifts, public.bot_seasons, public.bot_season_progress, public.bot_idempotency_keys
 to service_role;
 grant usage, select on all sequences in schema public to service_role;
+
+-- Pear CM schema additions: persistent opt-outs from group call notifications.
+-- This table is used by the gather/call command in iris.py. Without it,
+-- opt-outs only survive until the bot process restarts.
+create table if not exists public.bot_call_optouts (
+    chat_id bigint not null,
+    user_id bigint not null,
+    created_at timestamptz not null default now(),
+    primary key (chat_id, user_id)
+);
+
+create index if not exists bot_call_optouts_chat_idx
+    on public.bot_call_optouts (chat_id);
+
+alter table public.bot_call_optouts enable row level security;
+revoke all on public.bot_call_optouts from anon, authenticated;
+grant all on public.bot_call_optouts to service_role;
