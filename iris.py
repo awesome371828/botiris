@@ -3541,7 +3541,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
     if not await is_current_chat_member(message.chat.id, target_id):
         await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие.")
         return
-    if explicit_username_in_target := (not (message.reply_to_message and not explicit_target_in_args) and explicit_username):
+    if explicit_username and explicit_target_in_args:
         # Re-check against Telegram's live member object. A stale/corrupt Supabase
         # username row must never cause another person to receive this nickname.
         try:
