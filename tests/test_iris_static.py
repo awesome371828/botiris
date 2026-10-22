@@ -361,6 +361,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         self.assertIn("resolved = await resolve_target(message, [first])", body)
         self.assertIn("nickname = parts[1].strip() if len(parts) > 1 else", body)
         self.assertIn("target = await resolve_target(message, rest.split()[:1])", body)
+        self.assertIn("requested_username = first[1:].casefold()", body)
+        self.assertIn("Refusing nickname assignment after username mismatch", body)
+        self.assertIn("Ник не изменён — ответь на сообщение нужного участника", body)
 
     def test_marriage_flow_authorizes_buttons_and_confirms_database_transitions(self):
         callback_start = self.source.index("async def marriage_proposal_callback")
