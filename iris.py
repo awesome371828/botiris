@@ -106,6 +106,9 @@ if not BOT_TOKEN:
     raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN в Secrets / переменных окружения.")
 
 db: Client | None = None
+# Result of the startup schema check; diagnostics must not issue ~20 extra DB
+# requests on every /diag and compete with real commands.
+_SCHEMA_PROBLEMS: list[str] | None = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         # Keep the DB request timeout short: the SDK's default can wait for
@@ -141,11 +144,12 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     raise RuntimeError("Запуск без постоянной БД запрещён: не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
 
-# Telegram's default HTTP timeout is 60s. A stalled API request made commands appear frozen.
-# Keep API calls bounded; polling_timeout below is shorter than this session timeout.
+# Long polling needs an HTTP timeout longer than Telegram's server-side wait.
+# A 3-second HTTP timeout combined with 2-second polling caused repeated
+# GetUpdates requests, Telegram flood control, and long periods with no replies.
 bot = Bot(
     BOT_TOKEN,
-    session=AiohttpSession(timeout=3),
+    session=AiohttpSession(timeout=35),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
 )
 dp = Dispatcher()
@@ -6103,8 +6107,17 @@ async def owner_diagnostics(message: Message) -> None:
         lines.append(f"• Обработчики: p50={ordered[len(ordered)//2]*1000:.0f} мс; p95={p95*1000:.0f} мс (последние {len(ordered)} обновлений)")
     lines.append(f"• Очередь статистики: {_ACTIVITY_QUEUE.qsize()} в памяти")
     lines.append(f"• Локальный журнал статистики: {activity_spool_size()} событий")
-    schema_problems = await asyncio.to_thread(check_schema, db) if db is not None else ["Supabase не настроен"]
-    lines.append(f"• Схема Supabase: {'OK' if not schema_problems else 'есть проблемы (' + str(len(schema_problems)) + ')'}")
+    # Use the last startup schema check instead of firing another 20 sequential
+    # PostgREST/RPC requests every time /diag is called.
+    schema_problems = list(_SCHEMA_PROBLEMS) if _SCHEMA_PROBLEMS is not None else (
+        [] if db is not None else ["Supabase не настроен"]
+    )
+    schema_label = (
+        "OK" if not schema_problems else "есть проблемы (" + str(len(schema_problems)) + ")"
+    )
+    if _SCHEMA_PROBLEMS is None and db is not None:
+        schema_label = "проверка при запуске ещё не завершена"
+    lines.append(f"• Схема Supabase: {schema_label}")
     details = "\n".join(lines)
     if schema_problems:
         details += "\n\n<b>Проблемы схемы:</b>\n" + "\n".join(escape(x) for x in schema_problems)
@@ -6666,9 +6679,11 @@ async def _worker_watchdog(
 
 
 async def main() -> None:
+    global _SCHEMA_PROBLEMS
     if db is not None:
         try:
             schema_problems = await asyncio.to_thread(check_schema, db)
+            _SCHEMA_PROBLEMS = list(schema_problems)
             if schema_problems:
                 log.error("Supabase schema compatibility check found %s issue(s): %s",
                           len(schema_problems), " | ".join(schema_problems))
@@ -6823,9 +6838,10 @@ async def main() -> None:
             bot,
             allowed_updates=dp.resolve_used_update_types(),
             tasks_concurrency_limit=24,
-            # Keep long polling shorter than the 3-second HTTP request timeout.
-            # This prevents a stalled Telegram connection from holding an update for a minute.
-            polling_timeout=2,
+            # Use Telegram long polling: updates arrive immediately while the
+            # connection stays open, without hammering getUpdates every 2 seconds.
+            # HTTP session timeout (35s) safely exceeds this server-side wait.
+            polling_timeout=25,
         )
     except TelegramConflictError:
         log.critical(
