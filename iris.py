@@ -3465,10 +3465,17 @@ async def set_chat_nickname_cmd(message: Message) -> None:
             or (first.isdigit() and len(first) >= 7)
         )
         if is_target_token:
-            resolved = await resolve_target(message, [first])
+            # Nickname assignment must resolve an explicit username exactly.
+            # The generic moderation resolver can fall back to another cached/recent
+            # user; that is unsafe here because it can rename the wrong participant.
+            if first.startswith("@") or re.match(r"(?i)^(?:https?://)?t\.me/", first):
+                resolved = await _resolve_nickname_lookup_target(message, first)
+            else:
+                resolved = await resolve_target(message, [first])
             if not resolved:
                 await message.answer(
-                    "⛔ Не удалось найти участника. Укажи Telegram ID или @username, который бот уже видел в этом чате."
+                    "⛔ Не удалось точно найти участника по этому @username/ID. "
+                    "Ник не изменён. Укажи актуальный username или Telegram ID."
                 )
                 return
             target = resolved
