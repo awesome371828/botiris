@@ -33,6 +33,7 @@ from pear_core import (
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.methods import GetUpdates
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramConflictError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
@@ -144,10 +145,20 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     raise RuntimeError("Запуск без постоянной БД запрещён: не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
 
+# Ordinary Telegram API requests should fail fast on a broken network path.
+# The dispatcher passes an explicit timeout to getUpdates; preserve that timeout.
+_TELEGRAM_API_TIMEOUT = 8
+
+class LowLatencyBot(Bot):
+    async def __call__(self, method, request_timeout=None):
+        if request_timeout is None and not isinstance(method, GetUpdates):
+            request_timeout = _TELEGRAM_API_TIMEOUT
+        return await super().__call__(method, request_timeout=request_timeout)
+
 # Long polling needs an HTTP timeout longer than Telegram's server-side wait.
 # A 3-second HTTP timeout combined with 2-second polling caused repeated
 # GetUpdates requests, Telegram flood control, and long periods with no replies.
-bot = Bot(
+bot = LowLatencyBot(
     BOT_TOKEN,
     session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
@@ -7932,7 +7943,7 @@ async def run_forever() -> None:
             # Rebuild with the same bounded HTTP timeout as the initial bot.
             # Previously a restart silently restored aiogram's 60s default, which
             # caused /ping and other API-dependent commands to hang for a minute.
-            bot = Bot(
+            bot = LowLatencyBot(
                 BOT_TOKEN,
                 session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
                 default=DefaultBotProperties(
