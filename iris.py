@@ -6877,6 +6877,7 @@ async def _worker_watchdog(
 
 async def main() -> None:
     global _SCHEMA_PROBLEMS
+    log.info("Pear CM build tag: nickname-safe-20261022-r2")
     if db is not None:
         try:
             schema_problems = await asyncio.to_thread(check_schema, db)
