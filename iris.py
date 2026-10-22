@@ -118,12 +118,12 @@ if SUPABASE_URL and SUPABASE_KEY:
             SUPABASE_URL,
             SUPABASE_KEY,
             options=ClientOptions(
-                postgrest_client_timeout=4,
-                storage_client_timeout=4,
-                function_client_timeout=4,
+                postgrest_client_timeout=2,
+                storage_client_timeout=2,
+                function_client_timeout=2,
             ),
         )
-        log.info("Supabase client configured (request timeout=4s)")
+        log.info("Supabase client configured (request timeout=2s)")
     except Exception as options_exc:
         # Some supabase-py releases have a ClientOptions initialization regression.
         # A working default client is much better than silently running with db=None.
@@ -134,7 +134,7 @@ if SUPABASE_URL and SUPABASE_KEY:
             postgrest = getattr(db, "postgrest", None)
             session = getattr(postgrest, "session", None)
             if session is not None and hasattr(session, "timeout"):
-                session.timeout = 4
+                session.timeout = 2
             log.warning(
                 "Supabase compatibility fallback active; SDK timeout options were rejected (%s)",
                 type(options_exc).__name__,
@@ -147,7 +147,7 @@ else:
 
 # Ordinary Telegram API requests should fail fast on a broken network path.
 # The dispatcher passes an explicit timeout to getUpdates; preserve that timeout.
-_TELEGRAM_API_TIMEOUT = 8
+_TELEGRAM_API_TIMEOUT = 4
 
 class LowLatencyBot(Bot):
     async def __call__(self, method, request_timeout=None):
@@ -160,7 +160,7 @@ class LowLatencyBot(Bot):
 # GetUpdates requests, Telegram flood control, and long periods with no replies.
 bot = LowLatencyBot(
     BOT_TOKEN,
-    session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
+    session=AiohttpSession(timeout=35, limit=200, ttl_dns_cache=600, keepalive_timeout=60, enable_cleanup_closed=True),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
 )
 dp = Dispatcher()
@@ -7945,7 +7945,7 @@ async def run_forever() -> None:
             # caused /ping and other API-dependent commands to hang for a minute.
             bot = LowLatencyBot(
                 BOT_TOKEN,
-                session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
+                session=AiohttpSession(timeout=35, limit=200, ttl_dns_cache=600, keepalive_timeout=60, enable_cleanup_closed=True),
                 default=DefaultBotProperties(
                     parse_mode=ParseMode.HTML, link_preview_is_disabled=True
                 ),
