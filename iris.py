@@ -3384,6 +3384,10 @@ async def _resolve_nickname_lookup_target(message: Message, raw_target: str) -> 
             uid = int(row.get("user_id") or 0)
             if uid:
                 return uid, f"@{str(row.get('username') or username).lstrip('@')}"
+        # An explicit @username must never fall through to fuzzy/recent-name
+        # matching: that can silently target a different person.
+        if token.startswith("@") or re.match(r"(?i)^(?:https?://)?t\.me/", token):
+            return None
     return await resolve_target(message, [token])
 
 async def show_chat_nickname_cmd(message: Message) -> None:
