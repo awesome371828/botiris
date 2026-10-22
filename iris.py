@@ -482,7 +482,7 @@ async def _remember_message_id(handler, event: Message, data):
     # audit entries for security/moderation actions only; all slow handlers are still
     # measured below and exceptions are persisted separately.
     critical_command = bool(re.match(
-        r"(?i)^(?:[/.!]?(?:мут|бан|кик|варн|анварн|снять\\s+варн|размут|анмут|разбан|очистить|пин|анпин)|-смс|\\+чат|-чат)(?:\\s|$)",
+        r"(?i)^(?:[/.!]?(?:мут|бан|кик|варн|анварн|снять\s+варн|размут|анмут|разбан|очистить|пин|анпин)|-смс|\+чат|-чат)(?:\s|$)",
         raw,
     ))
     if isinstance(event, Message) and event.from_user and critical_command:
