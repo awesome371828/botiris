@@ -149,7 +149,7 @@ else:
 # GetUpdates requests, Telegram flood control, and long periods with no replies.
 bot = Bot(
     BOT_TOKEN,
-    session=AiohttpSession(timeout=35),
+    session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
     default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
 )
 dp = Dispatcher()
@@ -7934,7 +7934,7 @@ async def run_forever() -> None:
             # caused /ping and other API-dependent commands to hang for a minute.
             bot = Bot(
                 BOT_TOKEN,
-                session=AiohttpSession(timeout=35),
+                session=AiohttpSession(timeout=35, limit=100, ttl_dns_cache=300, keepalive_timeout=30, enable_cleanup_closed=True),
                 default=DefaultBotProperties(
                     parse_mode=ParseMode.HTML, link_preview_is_disabled=True
                 ),
