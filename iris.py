@@ -6019,14 +6019,18 @@ async def owner_ping(message: Message) -> None:
         return
     start = time.perf_counter()
     try:
-        await bot.get_me()
+        # Bound the probe itself. A broken Telegram route must not leave /ping
+        # hanging for the session's full network timeout.
+        await asyncio.wait_for(bot.get_me(), timeout=1.0)
         telegram = f"{(time.perf_counter()-start)*1000:.0f} мс"
+    except asyncio.TimeoutError:
+        telegram = "тайм-аут (>1000 мс)"
     except Exception as exc:
         telegram = f"ошибка ({type(exc).__name__})"
     db_result = "не настроена"
     if db is not None:
-        # Supabase's Python client is synchronous. Never run network I/O on the
-        # asyncio event loop: a slow DB response would stall every chat update.
+        # Supabase's client is synchronous; probe off-loop and bound the wait so
+        # /ping remains responsive even when the database route is degraded.
         def _ping_supabase() -> str:
             db_started = time.perf_counter()
             try:
@@ -6034,7 +6038,10 @@ async def owner_ping(message: Message) -> None:
                 return f"OK · {(time.perf_counter() - db_started) * 1000:.0f} мс"
             except Exception as exc:
                 return f"ошибка ({type(exc).__name__})"
-        db_result = await asyncio.to_thread(_ping_supabase)
+        try:
+            db_result = await asyncio.wait_for(asyncio.to_thread(_ping_supabase), timeout=1.0)
+        except asyncio.TimeoutError:
+            db_result = "тайм-аут (>1000 мс)"
     await message.answer(format_panel(
         "ПРОВЕРКА СОЕДИНЕНИЯ",
         f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>",
@@ -7772,9 +7779,16 @@ async def run_forever() -> None:
             except Exception:
                 pass
             # main() closes its session at shutdown; rebuild before the next iteration.
-            bot = Bot(BOT_TOKEN, default=DefaultBotProperties(
-                parse_mode=ParseMode.HTML, link_preview_is_disabled=True
-            ))
+            # Rebuild with the same bounded HTTP timeout as the initial bot.
+            # Previously a restart silently restored aiogram's 60s default, which
+            # caused /ping and other API-dependent commands to hang for a minute.
+            bot = Bot(
+                BOT_TOKEN,
+                session=AiohttpSession(timeout=3),
+                default=DefaultBotProperties(
+                    parse_mode=ParseMode.HTML, link_preview_is_disabled=True
+                ),
+            )
         await asyncio.sleep(delay)
 
 
