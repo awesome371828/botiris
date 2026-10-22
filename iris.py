@@ -3966,10 +3966,33 @@ async def divorce_cmd(message: Message) -> None:
 
 # ── Integrated moderation stages from moderation.py ──────────────────────────
 # Stage A: durable per-chat filter settings and human-readable time/reason parsing.
+# Per-chat background refreshes prevent a cache miss from performing a
+# synchronous Supabase request on aiogram's event-loop thread.
+_CHAT_SETTINGS_REFRESH_TASKS: dict[int, asyncio.Task] = {}
+
+async def _refresh_chat_settings_async(chat_id: int) -> None:
+    try:
+        row = await asyncio.to_thread(db_one, "bot_chat_settings", chat_id=chat_id)
+        lock = _chat_settings_lock(chat_id)
+        with lock:
+            if row and isinstance(row.get("settings"), dict):
+                settings = dict(FILTER_DEFAULTS)
+                settings.update(row["settings"])
+                _CHAT_SETTINGS_CACHE[chat_id] = settings
+            elif chat_id not in _CHAT_SETTINGS_CACHE:
+                _CHAT_SETTINGS_CACHE[chat_id] = dict(FILTER_DEFAULTS)
+            # On transient DB errors preserve the last known-good settings.
+            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("Background chat-settings refresh failed for chat=%s", chat_id)
+    finally:
+        _CHAT_SETTINGS_REFRESH_TASKS.pop(chat_id, None)
+
 def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, Any]:
-    # Collapse concurrent cache misses: a busy chat should cause one DB read,
-    # not one Supabase request per update. Caller must keep blocking DB reads
-    # in asyncio.to_thread().
+    # This function is called by synchronous permission/routing helpers. Never
+    # perform network I/O here when running inside the asyncio event loop.
     lock = _chat_settings_lock(chat_id)
     with lock:
         now = time.monotonic()
@@ -3978,21 +4001,37 @@ def get_chat_settings(chat_id: int, force_refresh: bool = False) -> dict[str, An
         if not force_refresh and cached is not None and now - cached_at < _CHAT_SETTINGS_CACHE_TTL:
             return dict(cached)
 
-        # Never replace known-good settings with defaults after a temporary DB
-        # failure. Keep serving the last successful snapshot.
+        try:
+            loop = asyncio.get_running_loop()
+            on_event_loop = loop.is_running()
+        except RuntimeError:
+            on_event_loop = False
+
+        if on_event_loop:
+            # Stale-but-known settings are safer than blocking every command for
+            # 100–400ms (or several seconds during a Supabase/network incident).
+            if chat_id not in _CHAT_SETTINGS_REFRESH_TASKS:
+                task = loop.create_task(_refresh_chat_settings_async(chat_id))
+                _CHAT_SETTINGS_REFRESH_TASKS[chat_id] = task
+            if cached is not None:
+                return dict(cached)
+            defaults = dict(FILTER_DEFAULTS)
+            _CHAT_SETTINGS_CACHE[chat_id] = defaults
+            _CHAT_SETTINGS_CACHE_TIME[chat_id] = now
+            return dict(defaults)
+
+        # Outside the event loop (e.g. tests or startup), a synchronous read is safe.
         row = db_one("bot_chat_settings", chat_id=chat_id)
         if row and isinstance(row.get("settings"), dict):
             settings = dict(FILTER_DEFAULTS)
             settings.update(row["settings"])
             _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
         elif cached is not None:
             settings = dict(cached)
-            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
         else:
             settings = dict(FILTER_DEFAULTS)
             _CHAT_SETTINGS_CACHE[chat_id] = dict(settings)
-            _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
+        _CHAT_SETTINGS_CACHE_TIME[chat_id] = time.monotonic()
 
         if len(_CHAT_SETTINGS_CACHE) > 2000:
             cutoff = time.monotonic() - _CHAT_SETTINGS_CACHE_TTL * 4
