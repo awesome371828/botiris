@@ -3459,15 +3459,23 @@ async def set_chat_nickname_cmd(message: Message) -> None:
 
     target: tuple[int, str]
     nickname = rest
-    if message.reply_to_message and message.reply_to_message.from_user:
+    # An explicit target in the command must override a replied-to message.
+    # Otherwise "+ник @someone NAME" silently renames the replied-to user.
+    parts = rest.split(maxsplit=1)
+    first = parts[0] if parts else ""
+    explicit_target_in_args = bool(
+        first.startswith("@")
+        or re.match(r"(?i)^(?:https?://)?t\\.me/", first)
+        or re.match(r"(?i)^(?:id\\s*[:=]?\\s*|tg://user\\?id=)\\d+$", first)
+        or (first.isdigit() and len(first) >= 7)
+    )
+    if message.reply_to_message and message.reply_to_message.from_user and not explicit_target_in_args:
         reply_user = message.reply_to_message.from_user
         if reply_user.is_bot:
             await message.answer("Нельзя установить ник боту.")
             return
         target = (reply_user.id, f"@{reply_user.username}" if reply_user.username else reply_user.full_name)
     else:
-        parts = rest.split(maxsplit=1)
-        first = parts[0] if parts else ""
         is_target_token = bool(
             first.startswith("@")
             or re.match(r"(?i)^(?:https?://)?t\.me/", first)
