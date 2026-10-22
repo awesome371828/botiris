@@ -156,6 +156,33 @@ dp = Dispatcher()
 router = Router()
 dp.include_router(router)
 
+# Reuse the bot identity across handlers instead of making a Telegram API call for
+# every moderation command. The cached identity is refreshed every five minutes.
+_BOT_ME_CACHE: Any | None = None
+_BOT_ME_CACHE_AT = 0.0
+_BOT_ME_CACHE_LOCK = asyncio.Lock()
+
+async def get_bot_me_cached(max_age: float = 300.0) -> Any:
+    global _BOT_ME_CACHE, _BOT_ME_CACHE_AT
+    now = time.monotonic()
+    if _BOT_ME_CACHE is not None and now - _BOT_ME_CACHE_AT < max_age:
+        return _BOT_ME_CACHE
+    async with _BOT_ME_CACHE_LOCK:
+        now = time.monotonic()
+        if _BOT_ME_CACHE is not None and now - _BOT_ME_CACHE_AT < max_age:
+            return _BOT_ME_CACHE
+        try:
+            fetched = await asyncio.wait_for(bot.get_me(), timeout=2.0)
+            _BOT_ME_CACHE = fetched
+            _BOT_ME_CACHE_AT = time.monotonic()
+            return fetched
+        except Exception:
+            # A previous successful identity is safe to reuse during a brief outage.
+            if _BOT_ME_CACHE is not None:
+                return _BOT_ME_CACHE
+            raise
+
+
 # Highest-priority dispatch for the marriage directory. Register this BEFORE all
 # other message handlers so generic text handlers can never swallow these aliases.
 @router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:браки|все\s+браки|список\s+браков)(?:[.!?…]*)\s*$"))
@@ -557,7 +584,7 @@ FILTER_DEFAULTS = {
 _CHAT_SETTINGS_CACHE: dict[int, dict[str, Any]] = {}
 _CHAT_SETTINGS_CACHE_TIME: dict[int, float] = {}
 # Settings change infrequently. A longer cache avoids one PostgREST read per chat burst.
-_CHAT_SETTINGS_CACHE_TTL = 60.0
+_CHAT_SETTINGS_CACHE_TTL = 300.0
 _CHAT_SETTINGS_LOCKS: dict[int, threading.Lock] = {}
 _CHAT_SETTINGS_LOCKS_GUARD = threading.Lock()
 
@@ -969,7 +996,7 @@ async def is_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
 async def await_bot_rights_hint(chat_id: int) -> str:
     """Report actual bot permissions instead of always claiming it is not an admin."""
     try:
-        me = await bot.get_me()
+        me = await get_bot_me_cached()
         member = await bot.get_chat_member(chat_id, me.id)
         if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
             return "⚠️ <b>Pear CM пока не администратор.</b> Назначь его администратором для команд модерации."
@@ -985,7 +1012,7 @@ async def await_bot_rights_hint(chat_id: int) -> str:
         return "⚠️ Не удалось проверить права автоматически. Напиши /checkrights в группе."
 
 _USER_RANK_CACHE: dict[tuple[int, int], tuple[int, float]] = {}
-_USER_RANK_CACHE_TTL = 20.0
+_USER_RANK_CACHE_TTL = 300.0
 
 def user_rank(chat_id: int, user_id: int) -> int:
     if user_id == OWNER_ID:
@@ -1360,8 +1387,8 @@ def required_rank_for(message: Message, default_rank: int) -> int:
 
 async def bot_can_restrict(message: Message) -> bool:
     try:
-        me = await bot.get_me()
-        member = await bot.get_chat_member(message.chat.id, me.id)
+        me = await get_bot_me_cached()
+        member = await get_chat_member_cached(bot, message.chat.id, me.id)
         return member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
     except Exception:
         return False
@@ -1490,7 +1517,7 @@ async def add_to_chat(message: Message) -> None:
         await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат». ⚠️ Чтобы команды модерации работали в этой группе, выдайте Pear CM права администратора с необходимыми разрешениями.")
         return
     try:
-        me = await bot.get_me()
+        me = await get_bot_me_cached()
         add_url = f"https://t.me/{me.username}?startgroup=true"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="➕ Выбрать группу и добавить бота", url=add_url)
@@ -2249,7 +2276,7 @@ async def check_ban_operator_access(message: Message) -> bool:
     if not operator and not await require_admin(message, min_rank=3):
         return False
     try:
-        me = await bot.get_me()
+        me = await get_bot_me_cached()
         bot_member = await get_chat_member_cached(bot, message.chat.id, me.id)
     except Exception:
         await message.answer("⛔ Не удалось проверить права Pear CM в этой группе.")
@@ -4898,7 +4925,7 @@ async def check_rights_cmd(message: Message) -> None:
         return
     lines = ["<b>🔐 Проверка прав</b>"]
     try:
-        me = await bot.get_me()
+        me = await get_bot_me_cached()
         member = await bot.get_chat_member(message.chat.id, me.id)
         status = getattr(member, "status", "unknown")
         lines.append(f"Бот: <b>{status}</b>")
@@ -5065,7 +5092,7 @@ async def close_chat_cmd(message: Message) -> None:
 
 # ── Advanced chat administration: temporary bans, notes, trusted users, settings ──
 _TRUSTED_CACHE: dict[tuple[int, int], tuple[bool, float]] = {}
-_TRUSTED_CACHE_TTL = 60.0
+_TRUSTED_CACHE_TTL = 300.0
 _TRUSTED_LOCKS: dict[tuple[int, int], threading.Lock] = {}
 _TRUSTED_LOCKS_GUARD = threading.Lock()
 
@@ -5581,11 +5608,30 @@ async def _apply_scheduled_chat_lock(chat_id: int, settings: dict[str, Any], sho
         log.exception("Scheduled chat lock change failed chat=%s lock=%s", chat_id, should_lock)
         return False
 
+def _load_scheduled_chat_settings() -> list[dict]:
+    """Fetch only chat settings with scheduling enabled; keep the recurring poll lightweight."""
+    if db is None:
+        return []
+    try:
+        result = (
+            db.table("bot_chat_settings")
+            .select("chat_id,settings")
+            .filter("settings->>schedule_enabled", "eq", "true")
+            .limit(1000)
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        # Do not silently run a broad full-row query on every scheduler tick.
+        log.exception("Could not load scheduled chat settings")
+        return []
+
+
 async def _schedule_worker() -> None:
     """Apply configured daily chat open/close times. A per-day marker prevents duplicate actions."""
     while True:
         try:
-            rows = await asyncio.to_thread(db_rows, "bot_chat_settings", 1000, "updated_at")
+            rows = await asyncio.to_thread(_load_scheduled_chat_settings)
             for row in rows:
                 try:
                     chat_id = int(row.get("chat_id"))
@@ -5665,8 +5711,8 @@ _RUNTIME_FLAGS: dict[str, Any] = {"maintenance": False}
 _GLOBAL_SETTINGS_CACHE: dict[str, tuple[Any, float]] = {}
 _GLOBAL_BAN_CACHE: dict[int, tuple[bool, float]] = {}
 _GLOBAL_BAN_NOTICE_LAST: dict[int, float] = {}
-_GLOBAL_SETTING_TTL = 5.0
-_GLOBAL_BAN_TTL = 10.0
+_GLOBAL_SETTING_TTL = 30.0
+_GLOBAL_BAN_TTL = 30.0
 
 OWNER_HELP = (
     "<b>🛠 Панель овнера Pear CM</b>\n\n"
@@ -6022,7 +6068,7 @@ async def owner_status(message: Message) -> None:
     if not await _owner_or_operator(message):
         return
     try:
-        me = await bot.get_me()
+        me = await get_bot_me_cached()
         telegram_state = f"OK (@{me.username or 'unknown'})"
     except Exception as exc:
         telegram_state = f"ошибка: {type(exc).__name__}"
@@ -6475,7 +6521,7 @@ async def owner_permissions(message: Message) -> None:
     if not is_group(message):
         await message.answer("Запусти команду в группе, чтобы проверить права бота."); return
     try:
-        me=await bot.get_me(); member=await bot.get_chat_member(message.chat.id, me.id)
+        me=await get_bot_me_cached(); member=await bot.get_chat_member(message.chat.id, me.id)
         if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
             await message.answer("⚠️ Бот не администратор группы. Мут/бан/удаление/закрепление могут не работать."); return
         flags=[]
@@ -7829,7 +7875,7 @@ async def run_forever() -> None:
             # caused /ping and other API-dependent commands to hang for a minute.
             bot = Bot(
                 BOT_TOKEN,
-                session=AiohttpSession(timeout=3),
+                session=AiohttpSession(timeout=35),
                 default=DefaultBotProperties(
                     parse_mode=ParseMode.HTML, link_preview_is_disabled=True
                 ),
