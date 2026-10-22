@@ -2878,6 +2878,13 @@ _PEAR_USER_COUNTS_AT_BASELINE = {
     "tgiwq": 3, "qwzqi": 1, "oemqx": 1, "femxl": 1,
 }
 
+# Short leaderboard cache: the counters are durable in Supabase, but rebuilding a
+# full historical ranking on every repeat command wastes several network round-trips.
+# Cache only the computed rows for a few seconds; moderation and writes stay uncached.
+_TOP_RESULT_CACHE: dict[tuple[int, str, int, bool], tuple[float, list[dict], int]] = {}
+_TOP_RESULT_CACHE_TTL = 8.0
+_TOP_RESULT_CACHE_LOCK = threading.Lock()
+
 @router.message(Command("top", "stats", "stat"))
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:топ|стата|статистика)(?:\s|$)"))
 async def top_cmd(message: Message) -> None:
@@ -3188,12 +3195,30 @@ async def top_cmd(message: Message) -> None:
                     break
         return sorted(grouped.values(), key=lambda r: int(r.get("messages") or 0), reverse=True)[:max(count * 5, 100) if chat_only else count], total_messages
 
-    try:
-        rows, total_messages = await asyncio.to_thread(query_top)
-    except Exception:
-        log.exception("Leaderboard query failed")
-        await message.answer("⚠️ Не удалось получить статистику. Проверь подключение Supabase и таблицы активности.")
-        return
+    cache_key = (int(message.chat.id) if chat_only else 0, period, count, bool(chat_only))
+    now_mono = time.monotonic()
+    with _TOP_RESULT_CACHE_LOCK:
+        cached_top = _TOP_RESULT_CACHE.get(cache_key)
+        if cached_top and now_mono - cached_top[0] < _TOP_RESULT_CACHE_TTL:
+            rows, total_messages = [dict(row) for row in cached_top[1]], cached_top[2]
+        else:
+            cached_top = None
+    if cached_top is None:
+        try:
+            rows, total_messages = await asyncio.to_thread(query_top)
+            with _TOP_RESULT_CACHE_LOCK:
+                _TOP_RESULT_CACHE[cache_key] = (time.monotonic(), [dict(row) for row in rows], int(total_messages))
+                if len(_TOP_RESULT_CACHE) > 256:
+                    cutoff = time.monotonic() - _TOP_RESULT_CACHE_TTL
+                    for old_key, old_value in list(_TOP_RESULT_CACHE.items()):
+                        if old_value[0] < cutoff:
+                            _TOP_RESULT_CACHE.pop(old_key, None)
+                    while len(_TOP_RESULT_CACHE) > 256:
+                        _TOP_RESULT_CACHE.pop(next(iter(_TOP_RESULT_CACHE)))
+        except Exception:
+            log.exception("Leaderboard query failed")
+            await message.answer("⚠️ Не удалось получить статистику. Проверь подключение Supabase и таблицы активности.")
+            return
     if chat_only:
         rows = await filter_current_chat_members(message.chat.id, rows)
         rows = rows[:count]
