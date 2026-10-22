@@ -7918,9 +7918,9 @@ async def run_forever() -> None:
     # allowing concurrent commands to wait on Supabase independently.
     loop = asyncio.get_running_loop()
     loop.set_default_executor(
-        ThreadPoolExecutor(max_workers=32, thread_name_prefix="pear-io")
+        ThreadPoolExecutor(max_workers=48, thread_name_prefix="pear-io")
     )
-    log.info("Async I/O thread pool configured: max_workers=32")
+    log.info("Async I/O thread pool configured: max_workers=48")
     # Acquire once for the lifetime of this process; do not reacquire flock on restarts.
     acquire_single_instance_lock()
     failures = 0
