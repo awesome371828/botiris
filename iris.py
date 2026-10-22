@@ -945,6 +945,16 @@ async def get_chat_member_cached(bot: Bot, chat_id: int, user_id: int) -> Any | 
     except (TelegramBadRequest, TelegramForbiddenError):
         _CHAT_MEMBER_CACHE[key] = (None, now)
         return None
+    except Exception as exc:
+        # A transient Telegram timeout must not bubble into the generic
+        # "internal bot error" handler. Fail closed: callers must not perform
+        # a moderation/profile mutation without a confirmed membership check.
+        log.warning(
+            "Telegram getChatMember failed; refusing unverified member check chat=%s user=%s error=%s: %s",
+            chat_id, user_id, type(exc).__name__, str(exc)[:250],
+        )
+        _CHAT_MEMBER_CACHE[key] = (None, now)
+        return None
     _CHAT_MEMBER_CACHE[key] = (member, now)
     if len(_CHAT_MEMBER_CACHE) > 5000:
         cutoff = now - _CHAT_MEMBER_CACHE_TTL * 3
@@ -3488,8 +3498,7 @@ async def set_chat_nickname_cmd(message: Message) -> None:
                 if (
                     not re.fullmatch(r"[a-z0-9_]{5,32}", requested_username)
                     or not resolved_username
-                    or not resolved_username.startswith("@") and resolved_username != requested_username
-                    or resolved_username.lstrip("@") != requested_username
+                    or resolved_username != requested_username
                 ):
                     log.error(
                         "Refusing nickname assignment after username mismatch chat=%s actor=%s requested=%s resolved_id=%s resolved_label=%s",
@@ -3505,9 +3514,8 @@ async def set_chat_nickname_cmd(message: Message) -> None:
         else:
             target = (message.from_user.id, f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name)
 
-    if not await is_current_chat_member(message.chat.id, target[0]):
-        await message.answer("⛔ Такого участника сейчас нет в этом чате или Telegram не смог подтвердить его участие.")
-        return
+    # Membership is checked once below, after the final target ID is known.
+    # Avoid a duplicate Telegram round-trip, which adds latency and can time out.
 
     if not nickname:
         await message.answer("Укажи ник: <code>+ник АВЕСОМ</code> или <code>+ник @username АВЕСОМ</code>. Чтобы убрать — <code>-ник</code>.")
