@@ -32,6 +32,7 @@ from pear_core import (
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramConflictError, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
@@ -140,7 +141,13 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     raise RuntimeError("Запуск без постоянной БД запрещён: не заданы SUPABASE_URL и SUPABASE_SERVICE_KEY. Проверь переменные окружения RelaxDev.")
 
-bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True))
+# Telegram's default HTTP timeout is 60s. A stalled API request made commands appear frozen.
+# Keep API calls bounded; polling_timeout below is shorter than this session timeout.
+bot = Bot(
+    BOT_TOKEN,
+    session=AiohttpSession(timeout=10),
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
+)
 dp = Dispatcher()
 router = Router()
 dp.include_router(router)
@@ -6805,6 +6812,8 @@ async def main() -> None:
             bot,
             allowed_updates=dp.resolve_used_update_types(),
             tasks_concurrency_limit=24,
+            # Keep long polling shorter than the 10-second HTTP session timeout.
+            polling_timeout=5,
         )
     except TelegramConflictError:
         log.critical(
