@@ -358,6 +358,9 @@ class PearCMStaticRegressionTests(unittest.TestCase):
         end = self.source.index('@router.message(Command("nicks"))', start)
         body = self.source[start:end]
         self.assertIn("is_target_token", body)
+        self.assertIn("explicit_target_in_args", body)
+        self.assertIn("and not explicit_target_in_args", body)
+        self.assertIn("An explicit target in the command must override a replied-to message", body)
         self.assertIn("resolved = await resolve_target(message, [first])", body)
         self.assertIn("nickname = parts[1].strip() if len(parts) > 1 else", body)
         self.assertIn("target = await resolve_target(message, rest.split()[:1])", body)
