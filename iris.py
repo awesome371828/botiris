@@ -284,6 +284,8 @@ def _gdewtf_action_from_message(raw: str) -> str:
         body = body[1:].strip()
     else:
         body = re.sub(r"(?i)^[/.]?(?:gde|gdewtf)\\s*", "", body).strip()
+    if re.match(r"(?i)^gde(?:wtf)?\\s+", body):
+        body = re.sub(r"(?i)^gde(?:wtf)?\\s+", "", body, count=1).strip()
     token = body.split(maxsplit=1)[0].casefold() if body else "help"
     return token
 
