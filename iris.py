@@ -283,16 +283,16 @@ def _gdewtf_action_from_message(raw: str) -> str:
     if body.startswith("!"):
         body = body[1:].strip()
     else:
-        body = re.sub(r"(?i)^[/.]?(?:gde|gdewtf)\\s*", "", body).strip()
-    if re.match(r"(?i)^gde(?:wtf)?\\s+", body):
-        body = re.sub(r"(?i)^gde(?:wtf)?\\s+", "", body, count=1).strip()
+        body = re.sub(r"(?i)^[/.]?(?:gde|gdewtf)\s*", "", body).strip()
+    if re.match(r"(?i)^gde(?:wtf)?\s+", body):
+        body = re.sub(r"(?i)^gde(?:wtf)?\s+", "", body, count=1).strip()
     token = body.split(maxsplit=1)[0].casefold() if body else "help"
     return token
 
 def _gdewtf_perms(profile: dict[str, Any]) -> set[str]:
     raw = profile.get("perms", profile.get("permissions", []))
     if isinstance(raw, str):
-        values = re.split(r"[,;\\s]+", raw.strip().casefold())
+        values = re.split(r"[,;\s]+", raw.strip().casefold())
     elif isinstance(raw, (list, tuple, set)):
         values = [str(v).strip().casefold() for v in raw]
     else:
@@ -4674,13 +4674,13 @@ async def set_trigger_cmd(message: Message) -> None:
     await message.answer(f"✅ Триггер {threshold} варнов обновлён: {action}.")
 
 @router.message(Command("filteraction"))
-@router.message(F.text.regexp(r"(?i)^\\s*(?:фильтрдействие|антиспам действие)(?:\\s|$)"))
+@router.message(F.text.regexp(r"(?i)^\s*(?:фильтрдействие|антиспам действие)(?:\s|$)"))
 async def filter_action_cmd(message: Message) -> None:
     if not await require_real_admin(message):
         return
     raw = (message.text or "").strip()
     value = re.sub(
-        r"(?i)^\\s*(?:/filteraction(?:@\\w+)?|[.!/]?(?:фильтрдействие|антиспам действие))\\s*",
+        r"(?i)^\s*(?:/filteraction(?:@\\w+)?|[.!/]?(?:фильтрдействие|антиспам действие))\s*",
         "", raw,
     ).strip().casefold()
     aliases = {
