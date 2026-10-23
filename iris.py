@@ -269,8 +269,6 @@ def _help() -> str:
     )
 
 
-@gdewtf_router.message(F.text.startswith("!"))
-@gdewtf_router.message(F.text.regexp(r"(?i)^\s*[/.]?(?:gde|gdewtf)(?:\s|$)"))
 # Short-lived permission cache: avoids an extra GDE.WTF API lookup on every command.
 _GDEWTF_ACCESS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _GDEWTF_ACCESS_CACHE_TTL = 30.0
@@ -347,6 +345,8 @@ async def _gdewtf_authorize(user_id: int, action: str) -> tuple[bool, str]:
     )
 
 
+@gdewtf_router.message(F.text.startswith("!"))
+@gdewtf_router.message(F.text.regexp(r"(?i)^\s*[/.]?(?:gde|gdewtf)(?:\s|$)"))
 async def gdewtf_command(message: Message) -> None:
     if not message.from_user:
         return
