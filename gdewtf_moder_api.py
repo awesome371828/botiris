@@ -22,7 +22,7 @@ gdewtf_router = Router(name="gdewtf_moder_api")
 API_BASE = os.getenv("GDEWTF_API_BASE", "https://map.gde.wtf/api/ext").rstrip("/")
 API_KEY = os.getenv("GDEWTF_API_KEY", "").strip()
 try:
-    OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
+    OWNER_ID = int(os.getenv("BOT_OWNER_ID", "6652898792"))
 except ValueError:
     OWNER_ID = 0
 
@@ -132,7 +132,8 @@ def _help() -> str:
     )
 
 
-@gdewtf_router.message(F.text.regexp(r"(?i)^\s*(?:[/.!]?(?:gde|gdewtf)(?:\s|$)|!\s*(?:[^\s]|$))"))
+@gdewtf_router.message(F.text.startswith("!"))
+@gdewtf_router.message(F.text.regexp(r"(?i)^\s*[/.]?(?:gde|gdewtf)(?:\s|$)"))
 async def gdewtf_command(message: Message) -> None:
     if not message.from_user or message.from_user.id != OWNER_ID or OWNER_ID <= 0:
         await message.answer("⛔ Эта интеграция доступна только владельцу Pear CM.")
