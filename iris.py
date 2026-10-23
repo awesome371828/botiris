@@ -207,6 +207,11 @@ def _mod_line(mod: dict[str, Any]) -> str:
 
 def _error_text(data: dict[str, Any]) -> str:
     err = str(data.get("error") or "unknown_error")
+    detail = str(data.get("detail") or "")
+    if err == "api_unavailable" and detail == "connection":
+        return "Не удалось подключиться к GDE.WTF (DNS/TCP/TLS). Проверь доступность домена с хоста Relax Dev."
+    if err == "api_unavailable" and detail == "timeout":
+        return "GDE.WTF не ответил за 8 секунд. Это тайм-аут внешнего API, а не ошибка команды Pear CM."
     messages = {
         "api_key_not_configured": "Не задан секрет GDEWTF_API_KEY в окружении хоста.",
         "api_unavailable": "GDE.WTF API недоступен или не ответил за 8 секунд.",
