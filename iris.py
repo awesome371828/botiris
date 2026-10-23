@@ -131,12 +131,35 @@ async def _api(method: str, path: str, *, params: dict[str, Any] | None = None,
                 params=params if method == "GET" else None,
                 json=body if method != "GET" else None,
             ) as response:
+                # Be tolerant of API gateways that return a list, a nested
+                # {data: ...} envelope, plain text, or a successful empty body.
+                # Keep the HTTP status authoritative for transport-level success.
+                raw_text = await response.text()
                 try:
-                    data = await response.json(content_type=None)
-                except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                    parsed = json.loads(raw_text) if raw_text.strip() else None
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    parsed = None
+
+                if isinstance(parsed, dict):
+                    data = parsed
+                    nested = data.get("data")
+                    if isinstance(nested, dict) and not any(
+                        key in data for key in ("ok", "error", "service", "mods", "cities", "mod", "log")
+                    ):
+                        data = {**nested, **{k: v for k, v in data.items() if k != "data"}}
+                    data.setdefault("ok", response.status < 400)
+                elif isinstance(parsed, list):
+                    key = "cities" if path.rstrip("/") == "/cities" else (
+                        "mods" if path.rstrip("/") == "/mods" else (
+                            "log" if path.rstrip("/") == "/log" else "items"
+                        )
+                    )
+                    data = {"ok": response.status < 400, key: parsed}
+                elif response.status < 400:
+                    # Some ping endpoints answer with plain "pong" or no body.
+                    data = {"ok": True, "message": (raw_text.strip()[:180] or "HTTP response without body")}
+                else:
                     data = {"ok": False, "error": "invalid_api_response"}
-                if not isinstance(data, dict):
-                    return {"ok": False, "error": "invalid_api_response"}
                 if response.status >= 400:
                     data.setdefault("ok", False)
                     data.setdefault("http_status", response.status)
