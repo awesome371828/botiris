@@ -59,3 +59,22 @@ The welcome handler already greets new non-bot members by default. The Telegram 
 - `кто админ` groups Pear CM ranks into star-headed sections and links each name to the Telegram profile.
 - The fast period-statistics path uses `bot_activity_daily`; run the updated `schema.sql` in Supabase to enable atomic daily aggregation. If the table is not present, the bot falls back to the raw activity-event log.
 - Message counts begin when Pear CM observes messages in the chat. Telegram Bot API does not provide a method to fetch a group's complete historical message archive, so older messages from before the bot was added cannot be reconstructed automatically.
+
+
+## GDE.WTF moderator API integration
+
+Pear CM can operate your external GDE.WTF moderator API from Telegram. This is an independent integration with `https://map.gde.wtf/api/ext`; it does not access or modify Pear CM's own moderation database.
+
+Set the following environment variables in the persistent host (for example Relax Dev):
+- `GDEWTF_API_KEY` — the external API key, stored as a secret; never commit it to Git.
+- `BOT_OWNER_ID` — the existing Pear CM owner Telegram ID. Only this account can execute the integration commands.
+- Optional `GDEWTF_API_BASE` — API base URL; defaults to `https://map.gde.wtf/api/ext`.
+
+Commands (owner-only; use `q` as pub code, `@username`, or Telegram ID):
+- `gde ping`, `gde профиль @username`, `gde модераторы [city_id]`, `gde города`, `gde журнал [q] [limit]`
+- `gde варн q причина`, `gde снятьварны q [index]`, `gde ник q новый_ник` (use `-` to clear)
+- `gde город q city_id` (use `-` to clear), `gde амб q`, `gde назначить q [city_id] [права]`
+- `gde снять q`, `gde бан q [причина]`, `gde разбан q`
+- `gde help` — command reference.
+
+The API key grants powerful external moderator-management access. Because the key was pasted into a chat while configuring this integration, rotate it in GDE.WTF's `auth_config.json` and restart that service, then set the replacement only as `GDEWTF_API_KEY` on the host. Do not paste the replacement into GitHub, source files, or chat.
