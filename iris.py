@@ -547,13 +547,6 @@ async def get_bot_me_cached(max_age: float = 300.0) -> Any:
             raise
 
 
-# Highest-priority dispatch for the marriage directory. Register this BEFORE all
-# other message handlers so generic text handlers can never swallow these aliases.
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:браки|все\s+браки|список\s+браков)(?:[.!?…]*)\s*$"))
-async def marriages_directory_dispatch_first(message: Message) -> None:
-    await marriages_list_cmd(message)
-
-
 _BOT_COMMAND_TOPIC_TOGGLES = re.compile(r"^\s*([+-])боткоманд\s*$", re.IGNORECASE)
 
 
@@ -650,7 +643,7 @@ _RANK_CHECKED_TEXT_COMMANDS = {
     "варн", "анварн", "мут", "анмут", "размут", "бан", "разбан",
     "кик", "ник", "ники", "никнейм", "никнеймы", "топ", "топы",
     "стата", "статистика", "команды", "помощь", "админы", "админ",
-    "кто", "браки", "брак", "развод", "развестись", "профиль",
+    "кто", "профиль",
     "варны", "история", "заметка", "заметки", "жалоба", "репорт",
     "апелляция", "сбор", "калл", "колл", "call", "антифлуд",
     "антиспам", "антиссылка", "приветствие", "калькулятор", "рандом",
@@ -807,7 +800,7 @@ class CommandRateLimitMiddleware(BaseMiddleware):
             or re.match(
                 r"(?i)^(?:мут|бан|кик|варн|размут|анмут|разбан|анварн|снять варн|очистить|"
                 r"профиль|команды|помощь|топ|стата|статистика|админы|кто админ|варны|"
-                r"браки|брак|развод|развестись|калл|колл|call|сбор|общий сбор|"
+                r"калл|колл|call|сбор|общий сбор|"
                 r"антифлуд|антиспам|антиссылка|приветствие|заметка|заметки|жалоба|репорт|"
                 r"апелляция|калькулятор|рандом|кубик|время|дата)(?:\s|$)",
                 text_value,
@@ -990,16 +983,14 @@ def welcome_inline_keyboard(
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📚 Команды", callback_data="home:help"),
              InlineKeyboardButton(text="🛡 Кто админ", callback_data="menu:admins")],
-            [InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage"),
-             InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+            [InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
         ])
 
     rows = [
         [InlineKeyboardButton(text="➕ Добавить в чат", url="https://t.me/pear_cm_bot?startgroup=true")],
         [InlineKeyboardButton(text="📚 Команды", callback_data="home:help"),
          InlineKeyboardButton(text="💠 Профиль", callback_data="home:profile")],
-        [InlineKeyboardButton(text="💍 Брак", callback_data="menu:marriage"),
-         InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
+        [InlineKeyboardButton(text="⚠️ Мои варны", callback_data="menu:warns")],
         [InlineKeyboardButton(text="🛠 Установка", callback_data="menu:installation"),
          InlineKeyboardButton(text="🌐 Открыть приложение", url=MINI_APP_URL)],
     ]
@@ -1855,8 +1846,8 @@ async def help_command(message: Message) -> None:
         "🛡 <b>Модерация:</b> мут, бан, кик, варн, -смс, +чат / -чат. "
         "Для действия над участником можно ответить на его сообщение.\n"
         "📊 <b>Статистика:</b> топ, топ дня, топ недели, топ вся.\n"
-        "💍 <b>Отношения:</b> брак, браки, мой брак, развод.\n"
-        "🎲 Остальные функции и подробные инструкции — в полном справочнике.\n\n"
+        "👤 <b>Участники:</b> профиль, активность, администраторы, предупреждения.\n"
+        "🧰 Остальные полезные функции и подробные инструкции — в полном справочнике.\n\n"
         "📖 <a href=\"https://telegra.ph/rules-pear-cm-10-20\">Все команды и правила Pear CM</a>"
     )
     await message.answer(
@@ -3294,8 +3285,7 @@ async def top_cmd(message: Message) -> None:
     category = re.sub(r"\s+", " ", arg).strip()
     category_aliases = {
         "деньги":"money", "баланс":"money", "валюта":"money", "по деньгам":"money", "по балансу":"money",
-        "ранги":"rank", "по рангам":"rank", "репутация":"rep", "по репутации":"rep",
-        "отношения":"rep", "по отношениям":"rep", "браки":"marriages", "по бракам":"marriages",
+        "ранги":"rank", "по рангам":"rank",
         "кланы":"clans", "по кланам":"clans", "награды":"awards", "по наградам":"awards",
         "варны":"warns", "предупреждения":"warns", "по варнам":"warns",
         "сообщения":"messages", "сообщений":"messages", "по сообщениям":"messages", "активность":"messages",
@@ -3304,23 +3294,8 @@ async def top_cmd(message: Message) -> None:
     category_key = category_aliases.get(category)
     if category_key:
         table_map = {"money":("bot_economy","balance","🪙"), "rank":("bot_users","rank","⭐"),
-                     "rep":("bot_relationships","points","❤️"), "marriages":("bot_marriages","id","💍"),
                      "clans":("bot_clans","id","🏰"), "awards":("bot_awards","id","🏅"),
                      "warns":("bot_users","warns","⚠️")}
-        if category_key == "marriages":
-            rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, None, chat_id=message.chat.id, status="married")
-            pairs = [r for r in rows if r.get("status") == "married"]
-            participant_ids = {
-                int(r.get(key) or 0) for r in pairs for key in ("user1_id", "user2_id")
-                if int(r.get(key) or 0) > 0
-            }
-            active_rows = await filter_current_chat_members(
-                message.chat.id, [{"user_id": uid} for uid in participant_ids]
-            )
-            active_ids = {int(r["user_id"]) for r in active_rows}
-            pairs = [r for r in pairs if int(r.get("user1_id") or 0) in active_ids and int(r.get("user2_id") or 0) in active_ids]
-            await message.answer("<b>🏆 Топ браков</b>\n" + ("\n".join(f"{i}. {escape(str(p.get('user1_name','Участник')))} ❤️ {escape(str(p.get('user2_name','Участник')))}" for i,p in enumerate(pairs[:10],1)) if pairs else "Пока нет зарегистрированных браков."))
-            return
         if category_key == "clans":
             rows = await asyncio.to_thread(db_rows, "bot_clans", 1000, None, chat_id=message.chat.id)
             member_rows = await asyncio.to_thread(db_rows, "bot_clan_members", 5000, None, chat_id=message.chat.id)
@@ -4112,303 +4087,6 @@ async def logs_cmd(message: Message) -> None:
         stamp = (row.get("created_at") or "")[:16].replace("T", " ")
         lines.append(f"• <code>{stamp}</code> — {row.get('action', '?')} → <code>{row.get('target_id') or '—'}</code> {row.get('details') or ''}")
     await message.answer("\n".join(lines))
-
-# ── Simple marriage feature ───────────────────────────────────────────────────
-@router.message(Command("marry", "proposemarriage", "wed"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак|брачок|брачиться|пожениться|поженимся|жениться|выходи замуж|выйти замуж|предложить брак|кинуть брак|заключить брак|свадьба|женитьба)\s*[!?.,]*$"))
-async def marry_cmd(message: Message) -> None:
-    # Safety guard: listing marriages must never be interpreted as a proposal,
-    # even if another alias/handler accidentally routes «браки» here.
-    marriage_text = _feature_normalize(message.text or "")
-    if marriage_text in {"браки", "все браки", "список браков"}:
-        await marriages_list_cmd(message)
-        return
-    if not message.from_user or not is_group(message):
-        await message.answer("💍 Брак можно предложить в группе, ответив на сообщение участника командой /marry.")
-        return
-    if not message.reply_to_message or not message.reply_to_message.from_user:
-        await message.answer("Ответьте на сообщение человека командой «брак».")
-        return
-    partner = message.reply_to_message.from_user
-    if partner.id == message.from_user.id or partner.is_bot:
-        await message.answer("С этим пользователем нельзя заключить брак.")
-        return
-    rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, None, chat_id=message.chat.id)
-    for row in rows:
-        if row.get("status") not in {"married", "pending"}:
-            continue
-        ids = {int(row.get("user1_id") or 0), int(row.get("user2_id") or 0)}
-        if message.from_user.id in ids or partner.id in ids:
-            if row.get("status") == "married":
-                row_one = int(row.get("user1_id") or 0)
-                row_two = int(row.get("user2_id") or 0)
-                if message.from_user.id in (row_one, row_two):
-                    spouse_id = row_two if message.from_user.id == row_one else row_one
-                    spouse_name = str(row.get("user2_name") or "пользователь") if spouse_id == row_two else str(row.get("user1_name") or "пользователь")
-                    await message.answer(f"📝 Вы уже состоите в браке с {mention(spouse_id, spouse_name)}. Сначала разведитесь командой «развод».")
-                else:
-                    await message.answer(f"📝 К сожалению, {escape(partner.full_name)} уже состоит в браке. Сначала ему нужно развестись.")
-                return
-            if int(row.get("user1_id") or 0) == message.from_user.id and int(row.get("user2_id") or 0) == partner.id:
-                await message.answer("💌 Предложение этому пользователю уже отправлено — дождитесь ответа.")
-                return
-            await message.answer("💍 У одного из вас уже есть ожидающее предложение брака. Сначала примите или отклоните его.")
-            return
-    inserted = await asyncio.to_thread(db_insert, "bot_marriages", {
-        "chat_id": message.chat.id, "user1_id": message.from_user.id,
-        "user1_name": message.from_user.full_name, "user2_id": partner.id,
-        "user2_name": partner.full_name, "status": "pending",
-    })
-    if not inserted or not inserted.get("id"):
-        await message.answer("Не удалось создать предложение. Проверь подключение Supabase и таблицу bot_marriages.")
-        return
-    marriage_id = int(inserted["id"])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💍 Принять брак", callback_data=f"marriage:accept:{marriage_id}"),
-         InlineKeyboardButton(text="💔 Отклонить брак", callback_data=f"marriage:decline:{marriage_id}")]
-    ])
-    await message.answer(
-        f"💍 {mention(partner.id, partner.full_name)}, вам пришло предложение о браке!\n\n"
-        f"💖 {mention(message.from_user.id, message.from_user.full_name)} предлагает вам стать супругами.\n"
-        "Нажмите одну из кнопок ниже, чтобы принять или отклонить предложение.",
-        reply_markup=keyboard,
-    )
-
-@router.message(Command("cancelmarry", "cancelmarriage"))
-async def cancel_marriage_proposal_cmd(message: Message) -> None:
-    """Cancel the caller's own pending proposal in this chat."""
-    if not message.from_user or not is_group(message):
-        await message.answer("💍 Отменить своё предложение можно в группе.")
-        return
-    if db is None:
-        await message.answer("Не удалось проверить предложение: база данных не настроена.")
-        return
-    try:
-        result = await asyncio.to_thread(
-            lambda: db.table("bot_marriages").update({"status": "cancelled"})
-            .eq("chat_id", message.chat.id)
-            .eq("user1_id", message.from_user.id)
-            .eq("status", "pending")
-            .select("*").execute()
-        )
-        cancelled = result.data or []
-    except Exception:
-        log.exception("Could not cancel pending marriage proposal chat=%s user=%s",
-                      message.chat.id, message.from_user.id)
-        await message.answer("Не удалось отменить предложение из-за ошибки базы данных. Попробуйте позже.")
-        return
-    if not cancelled:
-        await message.answer("У вас нет ожидающего предложения брака, которое можно отменить.")
-        return
-    await message.answer("💔 Ваше предложение брака отменено. Старые кнопки больше не сработают.")
-
-
-@router.callback_query(F.data.startswith("marriage:"))
-async def marriage_proposal_callback(callback: CallbackQuery) -> None:
-    if not callback.from_user or not callback.data:
-        await callback.answer("Не удалось определить пользователя.", show_alert=True)
-        return
-    if callback.from_user.id != OWNER_ID and await asyncio.to_thread(_is_globally_banned, callback.from_user.id):
-        await callback.answer("Доступ к функциям Pear CM ограничен.", show_alert=True)
-        return
-    parts = callback.data.split(":")
-    if len(parts) != 3 or parts[1] not in {"accept", "decline"}:
-        await callback.answer("Некорректное действие.", show_alert=True)
-        return
-    try:
-        marriage_id = int(parts[2])
-    except ValueError:
-        await callback.answer("Некорректное предложение.", show_alert=True)
-        return
-    row = await asyncio.to_thread(db_one, "bot_marriages", id=marriage_id)
-    if not row or row.get("status") != "pending":
-        await callback.answer("Это предложение уже неактивно.", show_alert=True)
-        return
-    if int(row.get("chat_id") or 0) != (callback.message.chat.id if callback.message else int(row.get("chat_id") or 0)):
-        await callback.answer("Предложение из другого чата.", show_alert=True)
-        return
-    if int(row.get("user2_id") or 0) != callback.from_user.id:
-        await callback.answer("Эти кнопки предназначены только тому, кому предложили брак.", show_alert=True)
-        return
-    new_status = "married" if parts[1] == "accept" else "divorced"
-    try:
-        result = await asyncio.to_thread(
-            lambda: db.table("bot_marriages").update({
-                "status": new_status,
-                "accepted_at": datetime.now(timezone.utc).isoformat() if new_status == "married" else None,
-            }).eq("id", marriage_id).eq("status", "pending").select("*").execute()
-        )
-        if not result.data:
-            await callback.answer("Предложение уже обработано.", show_alert=True)
-            return
-    except Exception:
-        log.exception("Could not process marriage proposal callback")
-        await callback.answer("Не удалось сохранить ответ. Попробуйте ещё раз.", show_alert=True)
-        return
-    proposer_id = int(row.get("user1_id") or 0)
-    proposer_name = str(row.get("user1_name") or "Участник")
-    partner_name = str(row.get("user2_name") or callback.from_user.full_name)
-    if parts[1] == "accept":
-        text = f"💍 {mention(proposer_id, proposer_name)} и {mention(callback.from_user.id, partner_name)} теперь состоят в браке! Поздравляем!"
-        await callback.answer("Брак принят! 💍")
-    else:
-        text = f"💔 {mention(callback.from_user.id, partner_name)} отклонил(а) предложение о браке от {mention(proposer_id, proposer_name)}."
-        await callback.answer("Предложение отклонено.")
-    if callback.message:
-        try:
-            await callback.message.edit_text(text)
-        except TelegramBadRequest:
-            await callback.message.answer(text)
-
-@router.message(Command("acceptmarry"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак да|принять брак|согласен на брак|согласна на брак|да согласен|да согласна|принимаю предложение)(?:\s|$)"))
-async def accept_marry_cmd(message: Message) -> None:
-    if not message.from_user:
-        return
-    pending = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id, user2_id=message.from_user.id, status="pending")
-    if not pending:
-        await message.answer("Активное предложение вам не найдено.")
-        return
-    row = pending[0]
-    if message.reply_to_message and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
-        if int(row.get("user1_id") or 0) != message.reply_to_message.from_user.id:
-            await message.answer("Ответьте на сообщение того, кто предложил вам брак, или используйте кнопку в предложении.")
-            return
-    await _finish_marriage_by_command(message, row, True)
-
-@router.message(Command("declinemarry"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:брак нет|отклонить брак|не согласен на брак|не согласна на брак)(?:\s|$)"))
-async def decline_marry_cmd(message: Message) -> None:
-    if not message.from_user:
-        return
-    pending = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id, user2_id=message.from_user.id, status="pending")
-    if not pending:
-        await message.answer("Активное предложение вам не найдено.")
-        return
-    await _finish_marriage_by_command(message, pending[0], False)
-
-async def _finish_marriage_by_command(message: Message, row: dict, accept: bool) -> None:
-    try:
-        status = "married" if accept else "divorced"
-        result = await asyncio.to_thread(lambda: db.table("bot_marriages").update({
-            "status": status,
-            "accepted_at": datetime.now(timezone.utc).isoformat() if accept else None,
-        }).eq("id", row["id"]).eq("status", "pending").select("*").execute())
-        if not result.data:
-            await message.answer("Это предложение уже обработано.")
-            return
-    except Exception:
-        log.exception("Could not finish marriage from command")
-        await message.answer("Не удалось сохранить ответ в базе данных.")
-        return
-    proposer_id = int(row.get("user1_id") or 0)
-    proposer_name = str(row.get("user1_name") or "Участник")
-    partner_name = str(row.get("user2_name") or message.from_user.full_name)
-    if accept:
-        await message.answer(f"💍 {mention(proposer_id, proposer_name)} и {mention(message.from_user.id, partner_name)} теперь состоят в браке! Поздравляем!")
-    else:
-        await message.answer(f"💔 {mention(message.from_user.id, partner_name)} отклонил(а) предложение о браке от {mention(proposer_id, proposer_name)}.")
-@router.message(Command("marriage", "mymarriage", "myrelations", "relationships"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:мой брак|моя свадьба|мои отношения|мои отн|мои отнош|мои браки|брак мой|отношения|отн)(?:\s|$)"))
-async def marriage_status_cmd(message: Message) -> None:
-    if not message.from_user:
-        return
-    if _feature_normalize(message.text or "") in {"отн действия", "отношения действия", "действия отношений", "список действий"}:
-        await message.answer("💞 <b>Действия отношений</b>\n• обнять\n• поцеловать\n• поддержать\n• погладить\n• подарить айфон\n• подарить цветы\n• подарить шоколад\n• подарить кольцо\n• подарить машину\n• пожать руку\n• дать пять\n• поздравить\n• утешить\n• успокоить\n• покормить\n• угостить\n• пригласить на свидание\n• помочь\n• спасти\n• простить\n• помириться\n\nОтветь на сообщение участника нужной командой.")
-        return
-    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
-    active_marriage = next((row for row in rows if row.get("status") == "married" and
-        message.from_user.id in (int(row.get("user1_id") or 0), int(row.get("user2_id") or 0))), None)
-    if active_marriage:
-        one_id, two_id = int(active_marriage.get("user1_id") or 0), int(active_marriage.get("user2_id") or 0)
-        one_name, two_name = str(active_marriage.get("user1_name") or "Участник"), str(active_marriage.get("user2_name") or "Участник")
-        start_at = active_marriage.get("accepted_at") or active_marriage.get("created_at")
-        duration = ""
-        try:
-            start_dt = datetime.fromisoformat(str(start_at).replace("Z", "+00:00"))
-            days = max(0, (datetime.now(timezone.utc) - start_dt.astimezone(timezone.utc)).days)
-            duration = f"\n⏱ Длится уже {days // 30} мес. {days % 30} дн."
-        except Exception:
-            pass
-        response = (f"👰💍 Брак между {mention(one_id, one_name)} и {mention(two_id, two_name)}"
-                    f"\n🗓 Зарегистрирован {str(start_at or 'дата неизвестна')[:10]}{duration}")
-        raw_rel = (message.text or "").lower()
-        if "мои отн" in raw_rel or "отнош" in raw_rel or raw_rel.strip().endswith("отн"):
-            try:
-                links = await asyncio.to_thread(db_rows, "bot_relationships", 1000, "points", chat_id=message.chat.id)
-                links = [r for r in links if message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))]
-                links.sort(key=lambda r: int(r.get("points") or 0), reverse=True)
-                if links:
-                    users = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
-                    names = {int(u.get("user_id") or 0): str(u.get("first_name") or "Участник") for u in users}
-                    response += "\n\n💞 <b>Другие отношения</b>"
-                    for rel in links[:10]:
-                        aa, bb = int(rel.get("user1_id") or 0), int(rel.get("user2_id") or 0)
-                        other = bb if aa == message.from_user.id else aa
-                        response += f"\n• {mention(other, names.get(other, 'Участник'))} — {int(rel.get('points') or 0)} 💗"
-            except Exception:
-                log.exception("Could not fetch roleplay relationships")
-        await message.answer(response)
-        return
-    pending = [
-        r for r in rows
-        if r.get("status") == "pending"
-        and message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))
-    ]
-    if pending:
-        lines = ["💌 <b>Ваши предложения брака</b>"]
-        for row in pending[:10]:
-            proposer_name = escape(str(row.get("user1_name") or "Участник"))
-            partner_name = escape(str(row.get("user2_name") or "Участник"))
-            lines.append(f"• {proposer_name} ❤️ {partner_name}")
-        await message.answer("\n".join(lines))
-        return
-    raw_status = (message.text or "").lower()
-    if "отн" in raw_status or "отнош" in raw_status or "роман" in raw_status:
-        try:
-            links = await asyncio.to_thread(db_rows, "bot_relationships", 1000, "points", chat_id=message.chat.id)
-            links = [r for r in links if message.from_user.id in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))]
-            links.sort(key=lambda r: int(r.get("points") or 0), reverse=True)
-            users = await asyncio.to_thread(db_rows, "bot_users", 1000, "messages", chat_id=message.chat.id)
-            names = {int(u.get("user_id") or 0): str(u.get("first_name") or "Участник") for u in users}
-            lines = ["💞 <b>Ваши отношения</b>", "💔 Активного брака пока нет."]
-            if links:
-                lines.append("✨ <b>Связи в чате</b>")
-                for rel in links[:15]:
-                    one, two = int(rel.get("user1_id") or 0), int(rel.get("user2_id") or 0)
-                    other = two if one == message.from_user.id else one
-                    lines.append(f"• {mention(other, names.get(other, 'Участник'))} — {int(rel.get('points') or 0)} 💗")
-            else:
-                lines.append("Пока нет накопленных очков отношений. Используй команды вроде «обнять», «поцеловать» или «поддержать» в ответ на сообщение.")
-            await message.answer("\n".join(lines))
-            return
-        except Exception:
-            log.exception("Could not fetch relationships without marriage")
-    await message.answer("💔 Вы пока не состоите в браке в этой группе. Чтобы предложить брак, ответьте на сообщение участника командой «брак» или «пожениться».")
-
-@router.message(Command("divorce", "breakup"))
-@router.message(F.text.regexp(r"(?i)^\s*[.!/]?(?:развод|развестись|разведись|разрываем брак|расторгнуть брак|расстаться)(?:\s|$)"))
-@router.message(F.text.regexp(r"(?i)^[.!/]?(?:развод|развестись)(?:\s|$)"))
-async def divorce_cmd(message: Message) -> None:
-    if not message.from_user:
-        return
-    rows = await asyncio.to_thread(db_rows, "bot_marriages", limit=1000, chat_id=message.chat.id)
-    for row in rows:
-        if row.get("status") == "married" and message.from_user.id in (row.get("user1_id"), row.get("user2_id")):
-            try:
-                result = await asyncio.to_thread(
-                    lambda: db.table("bot_marriages").update({"status": "divorced"})
-                    .eq("id", row["id"]).eq("status", "married").select("*").execute()
-                )
-                if not result.data:
-                    await message.answer("ℹ️ Брак уже изменён другим действием. Обнови статус командой «мой брак».")
-                    return
-                await message.answer("💔 Брак расторгнут.")
-            except Exception:
-                log.exception("Could not divorce marriage id=%s chat=%s", row.get("id"), message.chat.id)
-                await message.answer("Не удалось изменить запись в базе данных. Брак не подтверждён как расторгнутый.")
-            return
-    await message.answer("У вас нет активного брака.")
 
 # ── Integrated moderation stages from moderation.py ──────────────────────────
 # Stage A: durable per-chat filter settings and human-readable time/reason parsing.
@@ -6426,15 +6104,6 @@ async def inline_menu_callback(callback: CallbackQuery) -> None:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
         ])
-    elif action == "marriage":
-        body = (
-            "💍 <b>Брак в чате</b>\n\n"
-            "Чтобы предложить брак, ответьте на сообщение пользователя командой <code>брак</code>.\n"
-            "Партнёр сможет принять или отклонить предложение."
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="↩️ Выход в главное меню", callback_data="home:start")]
-        ])
     else:
         await callback.answer("Неизвестный раздел.")
         return
@@ -6774,7 +6443,7 @@ async def owner_version(message: Message) -> None:
 @router.message(Command("modules", "модули"))
 async def owner_modules(message: Message) -> None:
     if not await _owner_or_operator(message): return
-    modules = ["профили/активность", "модерация: mute/ban/unban/kick/warn", "аудит действий", "фильтры антиспам", "браки", "московское время", "панель овнера", "диагностика", "статистика"]
+    modules = ["профили/активность", "модерация: mute/ban/unban/kick/warn", "аудит действий", "фильтры антиспам", "московское время", "панель овнера", "диагностика", "статистика"]
     await message.answer("<b>🧩 Модули основного iris.py</b>\n" + "\n".join("• " + m + " — загружен" for m in modules) + "\n\nОтдельный moderation_full.py не импортируется автоматически: у него legacy-зависимости.")
 
 @router.message(Command("load", "нагрузка"))
@@ -7302,7 +6971,6 @@ async def main() -> None:
         BotCommand(command="filteraction", description="Действие антиспама"),
         BotCommand(command="schedule", description="Расписание чата"),
         BotCommand(command="modstats", description="Статистика модераторов"),
-        BotCommand(command="marriages", description="Все браки чата"),
         BotCommand(command="whois", description="Карточка участника"),
         BotCommand(command="economy", description="Виртуальная экономика"),
         BotCommand(command="clan", description="Кланы чата"),
@@ -7608,53 +7276,6 @@ async def personal_command_access_cmd(message: Message) -> None:
     audit(message.chat.id, message.from_user.id, "personal_command_access", int(uid), f"{key}={per_command.get(uid, 'reset')}")
     await message.answer(f"🔐 {result}\nУчастник: {mention(int(uid), str(target.get('first_name') or 'Участник'))}\nКоманда: <b>{escape(command_phrase)}</b>.")
 
-@router.message(Command("marriages"))
-@router.message(F.text.regexp(r"(?i)^\s*(?:браки|список браков|все браки|мой брак|брак участника|чей брак)(?:\s|$)"))
-async def marriages_list_cmd(message: Message) -> None:
-    raw = _feature_normalize(message.text or "")
-    if raw.startswith(("мой брак","чей брак","брак участника")):
-        if raw.startswith("мой брак") and message.from_user:
-            target = {"user_id":message.from_user.id,"first_name":message.from_user.full_name,"username":message.from_user.username}
-        else:
-            target = await _feature_target(message, " ".join((message.text or "").split()[2:]) or None)
-        if not target:
-            await message.answer("Ответь на сообщение участника или укажи его @username: <code>брак участника @username</code>.")
-            return
-        uid = int(target.get("user_id") or 0)
-        rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id)
-        row = next((r for r in rows if r.get("status") == "married" and uid in (int(r.get("user1_id") or 0), int(r.get("user2_id") or 0))), None)
-        if not row:
-            await message.answer("💔 У этого участника сейчас нет зарегистрированного брака в этом чате.")
-            return
-        await message.answer(f"💍 {mention(int(row['user1_id']),str(row.get('user1_name') or 'Участник'))} ❤️ {mention(int(row['user2_id']),str(row.get('user2_name') or 'Участник'))}")
-        return
-    rows = await asyncio.to_thread(db_rows, "bot_marriages", 1000, "created_at", chat_id=message.chat.id)
-    pairs = [r for r in rows if r.get("status") == "married"]
-    if not pairs:
-        await message.answer("💔 В этом чате пока нет зарегистрированных браков.")
-        return
-    lines = ["💍 <b>Все браки участников чата</b>", f"Всего браков: <b>{len(pairs)}</b>", ""]
-    for index, row in enumerate(pairs, 1):
-        lines.append(
-            f"{index}. {mention(int(row.get('user1_id') or 0), str(row.get('user1_name') or 'Участник'))}"
-            f" ❤️ {mention(int(row.get('user2_id') or 0), str(row.get('user2_name') or 'Участник'))}"
-        )
-    # Telegram limits each message to 4096 characters. Split the complete list
-    # into chunks instead of truncating the output to the first 100 marriages.
-    chunks = []
-    current = ""
-    for line in lines:
-        candidate = f"{current}\n{line}" if current else line
-        if len(candidate) > 3800 and current:
-            chunks.append(current)
-            current = line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    for chunk in chunks:
-        await message.answer(chunk)
-
 @router.message(Command("awards"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:награда|выдать награду|награды)(?:\s|$)"))
 async def award_cmd(message: Message) -> None:
@@ -7725,81 +7346,6 @@ async def member_questionnaire_cmd(message: Message) -> None:
         return
     saved = await asyncio.to_thread(db_upsert, "bot_member_profiles", patch, "chat_id,user_id")
     await message.answer("✅ Анкета обновлена." if saved else "Не удалось сохранить анкету. Проверь таблицу bot_member_profiles в schema.sql.")
-
-# Role-play commands; they also build a lightweight relationship score between the two users.
-_RP_ACTIONS = {
-    "обнять":("🤗","обнял(а)"), "обнимашки":("🤗","обнял(а)"), "поцеловать":("😘","поцеловал(а)"),
-    "чмокнуть":("😘","чмокнул(а)"), "обнять крепко":("🫂","крепко обнял(а)"),
-    "дать пять":("🖐️","дал(а) пять"), "пожать руку":("🤝","пожал(а) руку"),
-    "погладить":("🐾","погладил(а)"), "похвалить":("✨","похвалил(а)"), "поздравить":("🎉","поздравил(а)"),
-    "поддержать":("💚","поддержал(а)"), "утешить":("🫶","утешил(а)"), "успокоить":("🫂","успокоил(а)"),
-    "пнуть":("🦶","пнул(а)"), "ударить":("💥","ударил(а)"), "укусить":("🦷","укусил(а)"),
-    "ущипнуть":("🤏","ущипнул(а)"), "пощекотать":("🤣","пощекотал(а)"), "покормить":("🍓","покормил(а)"),
-    "угостить":("🍰","угостил(а)"), "пригласить на свидание":("🌹","пригласил(а) на свидание"),
-    "подарить":("🎁","подарил(а)"), "пожелать удачи":("🍀","пожелал(а) удачи"),
-    "помочь":("🫶","помог(ла)"), "спасти":("🦸","спас(ла)"), "обидеть":("💔","обидел(а)"),
-    "простить":("🤍","простил(а)"), "помириться":("🕊️","помирил(а)ся"), "поблагодарить":("🙏","поблагодарил(а)"),
-    "поклониться":("🙇","поклонил(а)ся"), "пожелать спокойной ночи":("🌙","пожелал(а) спокойной ночи"),
-    "отношения":("❤️","посмотрел(а) отношения")
-}
-_RP_ACTION_PATTERN = "|".join(re.escape(x) for x in sorted(_RP_ACTIONS, key=len, reverse=True))
-@router.message(F.text.regexp(r"(?i)^\s*(?:обнять|обнимашки|поцеловать|чмокнуть|обнять крепко|дать пять|пожать руку|погладить|похвалить|поздравить|поддержать|утешить|успокоить|пнуть|ударить|укусить|ущипнуть|пощекотать|покормить|угостить|пригласить на свидание|подарить|пожелать удачи|помочь|спасти|обидеть|простить|помириться|поблагодарить|поклониться|пожелать спокойной ночи|отношения)(?:\s|$)"))
-async def roleplay_relationship_cmd(message: Message) -> None:
-    if not message.from_user:
-        return
-    raw = _feature_normalize(message.text or "")
-    if raw in {"отн действия", "отношения действия", "действия отношений", "список действий"}:
-        actions = [
-            "обнять", "поцеловать", "чмокнуть", "обнять крепко", "дать пять", "пожать руку", "погладить",
-            "похвалить", "поздравить", "поддержать", "утешить", "успокоить", "пнуть", "ударить", "укусить",
-            "ущипнуть", "пощекотать", "покормить", "угостить", "пригласить на свидание", "подарить айфон",
-            "подарить цветы", "подарить шоколад", "пожелать удачи", "помочь", "спасти", "обидеть", "простить",
-            "помириться", "поблагодарить", "поклониться", "пожелать спокойной ночи", "отношения"
-        ]
-        await message.answer("💞 <b>Действия отношений</b>\n" + "\n".join(f"• <code>{escape(x)}</code>" for x in actions) + "\n\nПрименение: ответь на сообщение участника нужной командой. Подарки: <code>подарить айфон</code>, <code>подарить цветы</code> и т. п.")
-        return
-    action = next((x for x in sorted(_RP_ACTIONS,key=len,reverse=True) if raw == x or raw.startswith(x+" ")), None)
-    gift_name = raw[len("подарить"):].strip() if raw.startswith("подарить ") else ""
-    if raw.startswith("отношения"):
-        target = await _feature_target(message, raw[len("отношения"):].strip() or None)
-        if not target:
-            await message.answer("Ответь на сообщение участника командой «отношения».")
-            return
-        a,b = sorted((message.from_user.id,int(target.get("user_id") or 0)))
-        row = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
-        own_name = message.from_user.full_name or "Участник"
-        target_name = str(target.get("first_name") or "Участник")
-        a_name = own_name if a == message.from_user.id else target_name
-        b_name = target_name if b == int(target.get("user_id") or 0) else own_name
-        await message.answer(f"❤️ <b>Отношения</b>\n{mention(a,a_name)} и {mention(b,b_name)}\nОчки связи: <b>{int(row.get('points') or 0)}</b>")
-        return
-    if action == "подарить" and not gift_name:
-        await message.answer("Напиши, что подарить, например «подарить айфон», ответом на сообщение участника.")
-        return
-    target_arg = gift_name if action == "подарить" else (raw[len(action):].strip() if action else None)
-    target = await _feature_target(message, None if action == "подарить" else target_arg)
-    if not target:
-        await message.answer("Ответь на сообщение участника или укажи его @username.")
-        return
-    uid = int(target.get("user_id") or 0)
-    if uid == message.from_user.id or uid <= 0:
-        await message.answer("Эту команду нужно применить к другому участнику.")
-        return
-    emoji, verb = _RP_ACTIONS[action]
-    actor = message.from_user.full_name or "Участник"
-    partner = target.get("first_name") or "Участник"
-    a,b = sorted((message.from_user.id,uid))
-    existing = await asyncio.to_thread(db_one, "bot_relationships", chat_id=message.chat.id, user1_id=a, user2_id=b) or {}
-    points = int(existing.get("points") or 0) + (4500 if action == "подарить" and gift_name == "айфон" else 1)
-    saved = await asyncio.to_thread(db_upsert, "bot_relationships", {
-        "chat_id":message.chat.id,"user1_id":a,"user2_id":b,"points":points,
-        "updated_at":datetime.now(timezone.utc).isoformat()
-    }, "chat_id,user1_id,user2_id")
-    if action == "подарить":
-        item_emoji = {"айфон":"📱","цветы":"💐","шоколад":"🍫","кольцо":"💍","машину":"🚗","машина":"🚗","плюшевого мишку":"🧸"}.get(gift_name, "🎁")
-        await message.answer(f"💓 {item_emoji} | {mention(message.from_user.id,actor)} подарил(а) <b>{escape(gift_name)}</b> {mention(uid,str(partner))}!\n🔅 Крепость отношений выросла на {4500 if gift_name == 'айфон' else 1} hp.")
-    else:
-        await message.answer(f"{emoji} {mention(message.from_user.id,actor)} {verb} {mention(uid,str(partner))}!\n❤️ Очки отношений: <b>{points}</b>")
 
 # Virtual economy
 async def _economy_rpc(chat_id: int, user_id: int, action: str,
