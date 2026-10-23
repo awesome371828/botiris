@@ -250,10 +250,12 @@ async def gdewtf_command(message: Message) -> None:
                 await message.answer("Формат: <code>gde назначить @username [city_id] [права]</code>")
                 return
             body = {"q": rest[0]}
-            if len(rest) > 1 and rest[1] != "-":
-                body["city"] = rest[1]
-            if len(rest) > 2:
-                body["perms"] = rest[2] if rest[2].lower() in {"all", "full", "*", "лента", "старший"} else [p for p in re.split(r"[,; ]+", rest[2]) if p]
+            options = rest[1].split() if len(rest) > 1 else []
+            if options and options[0] != "-":
+                body["city"] = options[0]
+            if len(options) > 1:
+                permission_text = " ".join(options[1:])
+                body["perms"] = permission_text if permission_text.lower() in {"all", "full", "*", "лента", "старший"} else [p for p in re.split(r"[,; ]+", permission_text) if p]
             data = await _api("POST", "/mod/set", body=body)
         elif action in {"снять", "modremove"}:
             if not rest:
