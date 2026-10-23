@@ -124,6 +124,7 @@ def _help() -> str:
         "<code>gde ник q новый_ник</code> / <code>gde ник q -</code> — назначить/снять ник\n"
         "<code>gde город q city_id</code> — назначить/сменить город; <code>-</code> — убрать\n"
         "<code>gde амб q</code> — назначить амбассадором города\n"
+        "<code>gde rgov q регион [city1,city2]</code> — назначить региональным управляющим\n"
         "<code>gde назначить q [город] [права]</code> — назначить/обновить модератора\n"
         "<code>gde снять q</code> — снять с модерации\n"
         "<code>gde бан q [причина]</code> / <code>gde разбан q</code> — бан/разбан\n\n"
@@ -245,6 +246,14 @@ async def gdewtf_command(message: Message) -> None:
                 await message.answer("Формат: <code>gde амб @username</code>")
                 return
             data = await _api("POST", "/mod/set", body={"q": rest[0], "amb": True})
+        elif action in {"rgov", "регион", "региональный"}:
+            if len(rest) < 2:
+                await message.answer("Формат: <code>gde rgov @username регион [city1,city2]</code>")
+                return
+            body = {"q": rest[0], "rgov": True, "region": rest[1]}
+            if len(rest) > 2:
+                body["cities"] = [city for city in re.split(r"[,;]+", rest[2]) if city]
+            data = await _api("POST", "/mod/set", body=body)
         elif action in {"назначить", "modset"}:
             if not rest:
                 await message.answer("Формат: <code>gde назначить @username [city_id] [права]</code>")
@@ -288,7 +297,7 @@ async def gdewtf_command(message: Message) -> None:
                 result = f"✅ Предупреждения обновлены · <code>{_clean(pub)}</code> · осталось: <b>{_clean(data.get('warns_count', 0))}</b>"
             elif action in {"ник", "nick"}:
                 result = f"✅ Ник обновлён: <b>{_clean(data.get('nick'))}</b> · <code>{_clean(pub)}</code>"
-            elif action in {"город", "city", "амб", "amb", "назначить", "modset"}:
+            elif action in {"город", "city", "амб", "amb", "rgov", "регион", "региональный", "назначить", "modset"}:
                 result = "✅ Изменения сохранены.\n" + (_profile(mod) if mod else f"Модератор: <code>{_clean(pub)}</code>")
             elif action in {"снять", "modremove"}:
                 result = f"✅ Модератор снят с должности · <code>{_clean(pub)}</code>"
