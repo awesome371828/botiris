@@ -265,17 +265,100 @@ def _help() -> str:
         "<code>!назначить q [город] [права]</code> — назначить/обновить модератора\n"
         "<code>!снять q</code> — снять с модерации\n"
         "<code>!бан q [причина]</code> / <code>!разбан q</code> — бан/разбан\n\n"
-        "В качестве q указывай pub-код, @username или Telegram ID. Только владелец Pear CM может пользоваться интеграцией."
+        "В качестве q указывай pub-код, @username или Telegram ID. Доступ определяется ролью и правами твоего аккаунта в проекте GDE.WTF."
     )
 
 
 @gdewtf_router.message(F.text.startswith("!"))
 @gdewtf_router.message(F.text.regexp(r"(?i)^\s*[/.]?(?:gde|gdewtf)(?:\s|$)"))
+# Short-lived permission cache: avoids an extra GDE.WTF API lookup on every command.
+_GDEWTF_ACCESS_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_GDEWTF_ACCESS_CACHE_TTL = 30.0
+_GDEWTF_KNOWN_PERMS = {
+    "events", "marks", "users", "beta", "pvo", "maint", "stats", "support", "notice"
+}
+
+def _gdewtf_action_from_message(raw: str) -> str:
+    body = raw.strip()
+    if body.startswith("!"):
+        body = body[1:].strip()
+    else:
+        body = re.sub(r"(?i)^[/.]?(?:gde|gdewtf)\\s*", "", body).strip()
+    token = body.split(maxsplit=1)[0].casefold() if body else "help"
+    return token
+
+def _gdewtf_perms(profile: dict[str, Any]) -> set[str]:
+    raw = profile.get("perms", profile.get("permissions", []))
+    if isinstance(raw, str):
+        values = re.split(r"[,;\\s]+", raw.strip().casefold())
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(v).strip().casefold() for v in raw]
+    else:
+        values = []
+    return {v for v in values if v}
+
+async def _gdewtf_authorize(user_id: int, action: str) -> tuple[bool, str]:
+    now = time.monotonic()
+    cached = _GDEWTF_ACCESS_CACHE.get(user_id)
+    if cached and now - cached[0] < _GDEWTF_ACCESS_CACHE_TTL:
+        profile = cached[1]
+    else:
+        response = await _api("GET", "/mod", params={"q": str(user_id)})
+        mod = response.get("mod") if isinstance(response.get("mod"), dict) else None
+        if not response.get("ok") or not mod:
+            return False, "Не удалось подтвердить твои права в GDE.WTF. Проверь, что Telegram ID привязан к профилю модератора, и попробуй позже."
+        profile = mod
+        _GDEWTF_ACCESS_CACHE[user_id] = (now, profile)
+
+    role = str(profile.get("role") or "").strip().casefold()
+    perms = _gdewtf_perms(profile)
+    if role not in {"admin", "chief", "rgov", "amb", "mod"}:
+        return False, "⛔ Твой аккаунт не имеет действующей роли в проекте GDE.WTF."
+    if perms.intersection({"all", "full", "*"}):
+        return True, ""
+
+    # Read-only commands need at least one project permission. Mutations require
+    # the relevant permission; the GDE.WTF API remains the final authority.
+    read_actions = {
+        "help", "помощь", "команды", "ping", "пинг", "профиль", "who", "mod",
+        "модераторы", "mods", "города", "cities", "журнал", "лог", "log",
+    }
+    action_aliases = {
+        "warn": "marks", "варн": "marks",
+        "снятьварны": "marks", "снять-варны": "marks", "warnclear": "marks",
+        "ник": "users", "nick": "users", "город": "users", "city": "users",
+        "амб": "users", "amb": "users", "rgov": "users", "регион": "users",
+        "региональный": "users", "назначить": "users", "modset": "users",
+        "снять": "users", "modremove": "users", "бан": "users", "ban": "users",
+        "разбан": "users", "unban": "users",
+    }
+    if action in read_actions:
+        if perms.intersection(_GDEWTF_KNOWN_PERMS):
+            return True, ""
+        return False, "⛔ В проекте GDE.WTF у тебя не назначены права доступа."
+    required = action_aliases.get(action)
+    if required and (required in perms or "maint" in perms):
+        return True, ""
+    return False, (
+        f"⛔ Для команды нужна проектная привилегия <code>{_clean(required or 'maint')}</code>. "
+        "Попроси администратора GDE.WTF выдать соответствующие права."
+    )
+
+
 async def gdewtf_command(message: Message) -> None:
-    if not message.from_user or message.from_user.id != OWNER_ID or OWNER_ID <= 0:
-        await message.answer("⛔ Эта интеграция доступна только владельцу Pear CM.")
+    if not message.from_user:
         return
     text = (message.text or "").strip()
+    action_for_auth = _gdewtf_action_from_message(text)
+    try:
+        authorized, denial = await _gdewtf_authorize(message.from_user.id, action_for_auth)
+    except Exception:
+        log_gdewtf.exception("Could not verify GDE.WTF project permissions for user=%s", message.from_user.id)
+        await message.answer("⚠️ Не удалось проверить права в GDE.WTF. Команда не выполнена.")
+        return
+    if not authorized:
+        await message.answer(denial)
+        return
     if text.startswith("!"):
         command_body = text[1:].strip()
         if not re.match(r"(?i)^(?:gde|gdewtf)(?:\s|$)", command_body):
