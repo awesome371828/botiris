@@ -123,7 +123,11 @@ async def _api(method: str, path: str, *, params: dict[str, Any] | None = None,
                body: dict[str, Any] | None = None) -> dict[str, Any]:
     if not API_KEY:
         return {"ok": False, "error": "api_key_not_configured"}
-    headers = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "X-API-Key": API_KEY,
+        "Accept": "application/json",
+    }
     try:
         async with aiohttp.ClientSession(timeout=_TIMEOUT, headers=headers) as session:
             async with session.request(
@@ -164,9 +168,24 @@ async def _api(method: str, path: str, *, params: dict[str, Any] | None = None,
                     data.setdefault("ok", False)
                     data.setdefault("http_status", response.status)
                 return data
-    except (aiohttp.ClientError, TimeoutError) as exc:
-        log_gdewtf.warning("GDE.WTF API request failed (%s %s): %s", method, path, type(exc).__name__)
-        return {"ok": False, "error": "api_unavailable"}
+    except asyncio.TimeoutError as exc:
+        log_gdewtf.warning(
+            "GDE.WTF API timeout (%s %s, base=%s, total=8s)", method, path, API_BASE
+        )
+        return {"ok": False, "error": "api_unavailable", "detail": "timeout"}
+    except aiohttp.ClientConnectorError as exc:
+        # This distinguishes DNS/TCP/TLS connection failures from a slow API response.
+        log_gdewtf.warning(
+            "GDE.WTF API connection failed (%s %s, base=%s): %s: %s",
+            method, path, API_BASE, type(exc).__name__, str(exc)[:240],
+        )
+        return {"ok": False, "error": "api_unavailable", "detail": "connection"}
+    except aiohttp.ClientError as exc:
+        log_gdewtf.warning(
+            "GDE.WTF API client error (%s %s, base=%s): %s: %s",
+            method, path, API_BASE, type(exc).__name__, str(exc)[:240],
+        )
+        return {"ok": False, "error": "api_unavailable", "detail": "client_error"}
 
 
 def _clean(value: Any, default: str = "—") -> str:
