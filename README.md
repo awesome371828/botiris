@@ -71,10 +71,10 @@ Set the following environment variables in the persistent host (for example Rela
 - Optional `GDEWTF_API_BASE` — API base URL; defaults to `https://map.gde.wtf/api/ext`.
 
 Commands (owner-only; use `q` as pub code, `@username`, or Telegram ID):
-- `gde ping`, `gde профиль @username`, `gde модераторы [city_id]`, `gde города`, `gde журнал [q] [limit]`
-- `gde варн q причина`, `gde снятьварны q [index]`, `gde ник q новый_ник` (use `-` to clear)
-- `gde город q city_id` (use `-` to clear), `gde амб q`, `gde назначить q [city_id] [права]`
-- `gde снять q`, `gde бан q [причина]`, `gde разбан q`
-- `gde help` — command reference.
+- `!ping`, `!профиль @username`, `!модераторы [city_id]`, `!города`, `!журнал [q] [limit]`
+- `!варн q причина`, `!снятьварны q [index]`, `!ник q новый_ник` (use `-` to clear)
+- `!город q city_id` (use `-` to clear), `!амб q`, `!назначить q [city_id] [права]`
+- `!снять q`, `!бан q [причина]`, `!разбан q`
+- `!help` — command reference.
 
 The API key grants powerful external moderator-management access. Because the key was pasted into a chat while configuring this integration, rotate it in GDE.WTF's `auth_config.json` and restart that service, then set the replacement only as `GDEWTF_API_KEY` on the host. Do not paste the replacement into GitHub, source files, or chat.
