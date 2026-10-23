@@ -81,7 +81,7 @@ def _error_text(data: dict[str, Any]) -> str:
         "unauthorized": "Ключ GDE.WTF отклонён. Проверь GDEWTF_API_KEY.",
         "not_found": "Модератор не найден.",
         "not_a_moderator": "Этот аккаунт не является модератором.",
-        "unknown_city": "Неизвестный город. Посмотри список командой «gde города».",
+        "unknown_city": "Неизвестный город. Посмотри список командой «!города».",
         "cannot_manage_admin": "Через API нельзя изменять аккаунт администратора.",
         "reason_required": "Для предупреждения укажи причину.",
         "bad_nick": "Ник должен быть длиной 2–20 символов: буквы, цифры, _ или -.",
@@ -114,30 +114,36 @@ def _profile(mod: dict[str, Any]) -> str:
 def _help() -> str:
     return (
         "🌐 <b>GDE.WTF · управление модераторами</b>\n\n"
-        "<code>gde ping</code> — проверить связь\n"
-        "<code>gde профиль @username|ID|RND-AB3K</code> — профиль\n"
-        "<code>gde модераторы [city_id]</code> — список команды\n"
-        "<code>gde города</code> — список городов\n"
-        "<code>gde журнал [q] [limit]</code> — журнал действий\n"
-        "<code>gde варн q причина</code> — выдать предупреждение\n"
-        "<code>gde снятьварны q [index]</code> — снять одно предупреждение (index с 0) или все\n"
-        "<code>gde ник q новый_ник</code> / <code>gde ник q -</code> — назначить/снять ник\n"
-        "<code>gde город q city_id</code> — назначить/сменить город; <code>-</code> — убрать\n"
-        "<code>gde амб q</code> — назначить амбассадором города\n"
-        "<code>gde rgov q регион [city1,city2]</code> — назначить региональным управляющим\n"
-        "<code>gde назначить q [город] [права]</code> — назначить/обновить модератора\n"
-        "<code>gde снять q</code> — снять с модерации\n"
-        "<code>gde бан q [причина]</code> / <code>gde разбан q</code> — бан/разбан\n\n"
+        "<code>!ping</code> — проверить связь\n"
+        "<code>!профиль @username|ID|RND-AB3K</code> — профиль\n"
+        "<code>!модераторы [city_id]</code> — список команды\n"
+        "<code>!города</code> — список городов\n"
+        "<code>!журнал [q] [limit]</code> — журнал действий\n"
+        "<code>!варн q причина</code> — выдать предупреждение\n"
+        "<code>!снятьварны q [index]</code> — снять одно предупреждение (index с 0) или все\n"
+        "<code>!ник q новый_ник</code> / <code>!ник q -</code> — назначить/снять ник\n"
+        "<code>!город q city_id</code> — назначить/сменить город; <code>-</code> — убрать\n"
+        "<code>!амб q</code> — назначить амбассадором города\n"
+        "<code>!rgov q регион [city1,city2]</code> — назначить региональным управляющим\n"
+        "<code>!назначить q [город] [права]</code> — назначить/обновить модератора\n"
+        "<code>!снять q</code> — снять с модерации\n"
+        "<code>!бан q [причина]</code> / <code>!разбан q</code> — бан/разбан\n\n"
         "В качестве q указывай pub-код, @username или Telegram ID. Только владелец Pear CM может пользоваться интеграцией."
     )
 
 
-@gdewtf_router.message(F.text.regexp(r"(?i)^\s*[/.!]?(?:gde|gdewtf)(?:\s|$)"))
+@gdewtf_router.message(F.text.regexp(r"(?i)^\s*(?:[/.!]?(?:gde|gdewtf)(?:\s|$)|!\s*(?:[^\s]|$))"))
 async def gdewtf_command(message: Message) -> None:
     if not message.from_user or message.from_user.id != OWNER_ID or OWNER_ID <= 0:
         await message.answer("⛔ Эта интеграция доступна только владельцу Pear CM.")
         return
     text = (message.text or "").strip()
+    if text.startswith("!"):
+        command_body = text[1:].strip()
+        if not re.match(r"(?i)^(?:gde|gdewtf)(?:\s|$)", command_body):
+            text = "gde " + command_body
+        else:
+            text = command_body
     parts = text.split(maxsplit=3)
     if len(parts) == 1 or parts[1].lower() in {"help", "помощь", "команды"}:
         await message.answer(_help())
@@ -161,7 +167,7 @@ async def gdewtf_command(message: Message) -> None:
 
         if action in {"профиль", "who", "mod"}:
             if not rest:
-                await message.answer("Укажи модератора: <code>gde профиль @username</code>")
+                await message.answer("Укажи модератора: <code>!профиль @username</code>")
                 return
             data = await _api("GET", "/mod", params={"q": rest[0]})
             if data.get("ok") and isinstance(data.get("mod"), dict):
@@ -215,13 +221,13 @@ async def gdewtf_command(message: Message) -> None:
 
         if action in {"варн", "warn"}:
             if len(rest) < 2:
-                await message.answer("Формат: <code>gde варн @username причина</code>")
+                await message.answer("Формат: <code>!варн @username причина</code>")
                 return
             q, reason = rest[0], " ".join(rest[1:])
             data = await _api("POST", "/warn", body={"q": q, "reason": reason, "by": f"Pear CM / {message.from_user.id}"})
         elif action in {"снятьварны", "снять-варны", "warnclear"}:
             if not rest:
-                await message.answer("Формат: <code>gde снятьварны @username [index]</code>")
+                await message.answer("Формат: <code>!снятьварны @username [index]</code>")
                 return
             body = {"q": rest[0]}
             if len(rest) > 1:
@@ -233,22 +239,22 @@ async def gdewtf_command(message: Message) -> None:
             data = await _api("POST", "/warn/clear", body=body)
         elif action in {"ник", "nick"}:
             if len(rest) < 2:
-                await message.answer("Формат: <code>gde ник @username новый_ник</code> или <code>gde ник @username -</code>")
+                await message.answer("Формат: <code>!ник @username новый_ник</code> или <code>!ник @username -</code>")
                 return
             data = await _api("POST", "/nick", body={"q": rest[0], "nick": "" if rest[1] == "-" else " ".join(rest[1:])})
         elif action in {"город", "city"}:
             if len(rest) < 2:
-                await message.answer("Формат: <code>gde город @username city_id</code> (для удаления укажи -)")
+                await message.answer("Формат: <code>!город @username city_id</code> (для удаления укажи -)")
                 return
             data = await _api("POST", "/city", body={"q": rest[0], "city": "" if rest[1] == "-" else rest[1]})
         elif action in {"амб", "amb"}:
             if not rest:
-                await message.answer("Формат: <code>gde амб @username</code>")
+                await message.answer("Формат: <code>!амб @username</code>")
                 return
             data = await _api("POST", "/mod/set", body={"q": rest[0], "amb": True})
         elif action in {"rgov", "регион", "региональный"}:
             if len(rest) < 2:
-                await message.answer("Формат: <code>gde rgov @username регион [city1,city2]</code>")
+                await message.answer("Формат: <code>!rgov @username регион [city1,city2]</code>")
                 return
             body = {"q": rest[0], "rgov": True, "region": rest[1]}
             if len(rest) > 2:
@@ -256,7 +262,7 @@ async def gdewtf_command(message: Message) -> None:
             data = await _api("POST", "/mod/set", body=body)
         elif action in {"назначить", "modset"}:
             if not rest:
-                await message.answer("Формат: <code>gde назначить @username [city_id] [права]</code>")
+                await message.answer("Формат: <code>!назначить @username [city_id] [права]</code>")
                 return
             body = {"q": rest[0]}
             options = rest[1].split() if len(rest) > 1 else []
@@ -268,12 +274,12 @@ async def gdewtf_command(message: Message) -> None:
             data = await _api("POST", "/mod/set", body=body)
         elif action in {"снять", "modremove"}:
             if not rest:
-                await message.answer("Формат: <code>gde снять @username</code>")
+                await message.answer("Формат: <code>!снять @username</code>")
                 return
             data = await _api("POST", "/mod/remove", body={"q": rest[0]})
         elif action in {"бан", "ban"}:
             if not rest:
-                await message.answer("Формат: <code>gde бан @username [причина]</code>")
+                await message.answer("Формат: <code>!бан @username [причина]</code>")
                 return
             body = {"q": rest[0], "ban": True}
             if len(rest) > 1:
@@ -281,7 +287,7 @@ async def gdewtf_command(message: Message) -> None:
             data = await _api("POST", "/ban", body=body)
         elif action in {"разбан", "unban"}:
             if not rest:
-                await message.answer("Формат: <code>gde разбан @username</code>")
+                await message.answer("Формат: <code>!разбан @username</code>")
                 return
             data = await _api("POST", "/ban", body={"q": rest[0], "ban": False})
         else:
