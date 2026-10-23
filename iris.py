@@ -3351,7 +3351,7 @@ async def top_cmd(message: Message) -> None:
         candidates = sorted(grouped.values(), key=lambda x:x["score"], reverse=True)[:100]
         grouped_rows = await filter_current_chat_members(message.chat.id, candidates)
         ranked = sorted(grouped_rows, key=lambda x:x["score"], reverse=True)[:10]
-        title = {"money":"баланса","rank":"рангов","rep":"отношений","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
+        title = {"money":"баланса","rank":"рангов","awards":"наград","warns":"предупреждений"}.get(category_key,category_key)
         await message.answer("<b>🏆 Топ " + title + "</b>\n" + ("\n".join(f"{i}. {profile_link(int(r['user_id']), '@'+str(r['username']).lstrip('@') if r.get('username') else str(r['first_name']))} — <b>{r['score']}</b> {icon}" for i,r in enumerate(ranked,1) if int(r.get('user_id') or 0) > 0) if ranked else "Пока нет данных для рейтинга."))
         return
     # Iris-style statistics support both "топ" and "стата", with an optional count.
