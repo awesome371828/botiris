@@ -44,6 +44,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, MenuButtonWebApp,
 )
 from supabase import Client, create_client
+from gdewtf_moder_api import gdewtf_router
 from supabase.client import ClientOptions
 
 try:
@@ -166,6 +167,7 @@ bot = LowLatencyBot(
 )
 dp = Dispatcher()
 router = Router()
+dp.include_router(gdewtf_router)
 dp.include_router(router)
 
 # Reuse the bot identity across handlers instead of making a Telegram API call for
