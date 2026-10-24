@@ -5,161 +5,148 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#10140f">
 <meta name="color-scheme" content="dark">
-<title>GDE.WTF — карта тревог и радар</title>
-<meta name="description" content="GDE.WTF — независимая карта тревог и радар БПЛА. Живая карта, статусы, отметки жителей и история.">
+<title>GDE.WTF — единое приложение</title>
+<meta name="description" content="Единое приложение GDE.WTF: главный сайт, живая карта тревог и панель модерации.">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#10140f;--surface:#171d16;--surface2:#1d251b;--line:#d7edc51c;--text:#f1f5e9;--muted:#a0ad96;--lime:#d8ff83;--green:#8ee0a0;--safe:env(safe-area-inset-bottom,0px)}
+:root{color-scheme:dark;--bg:#10140f;--panel:#171d16;--panel2:#20291c;--line:#d8ff8326;--text:#f1f5e9;--muted:#a0ad96;--lime:#d8ff83;--safe:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-body{background:radial-gradient(ellipse at 10% -15%,#b9e87517,transparent 42%),var(--bg);overflow-x:hidden}
-button,input{font:inherit}button{cursor:pointer;color:inherit}button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
-#app{max-width:760px;margin:0 auto;min-height:100dvh;padding:calc(12px + env(safe-area-inset-top)) 13px calc(90px + var(--safe))}
-.top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 3px 14px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:-.6px;font-size:18px}.logo{width:39px;height:39px;border-radius:13px;background:var(--lime);color:#182014;display:grid;place-items:center;font-size:23px;font-weight:950;box-shadow:0 4px 0 #6b8e42}
-.brand small{display:block;font-size:10px;font-weight:650;color:var(--muted);letter-spacing:.2px}
-.pill{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #d8ff8326;background:#d8ff830a;border-radius:30px;color:#e1ffac;font-size:10px;font-weight:850;letter-spacing:.5px}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{background:radial-gradient(ellipse at 8% -15%,#b9e87518,transparent 44%),var(--bg)}
+button{font:inherit;cursor:pointer;color:inherit}
+button:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
+#app{max-width:980px;margin:0 auto;min-height:100dvh;padding:calc(10px + env(safe-area-inset-top)) 12px calc(92px + var(--safe))}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:3px 2px 12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:950;font-size:18px;letter-spacing:-.6px}
+.logo{width:39px;height:39px;display:grid;place-items:center;border-radius:13px;background:var(--lime);color:#182014;font-size:23px;box-shadow:0 4px 0 #6b8e42}
+.brand small{display:block;color:var(--muted);font-size:10px;letter-spacing:.2px;font-weight:650}
+.live{display:flex;align-items:center;gap:7px;border:1px solid var(--line);background:#d8ff830a;color:#e1ffac;border-radius:30px;padding:7px 10px;font-size:9px;font-weight:900;letter-spacing:.6px;white-space:nowrap}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px #d8ff83}
-.screen{display:none;animation:appear .24s ease both}.screen.active{display:block}
-@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
-.hero{padding:21px 19px 19px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(145deg,#20291c,#151b14 70%);box-shadow:inset 0 1px #ffffff0a}
-.eyebrow{display:flex;align-items:center;gap:7px;color:var(--lime);font-size:10px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase}
-h1{margin:12px 0 0;font-size:clamp(31px,8vw,44px);line-height:1.04;letter-spacing:-1.8px;font-weight:900}
+.intro{border:1px solid var(--line);border-radius:20px;padding:15px 16px;background:linear-gradient(145deg,#20291c,#151b14 75%);margin-bottom:11px}
+.eyebrow{font-size:9px;letter-spacing:1.5px;font-weight:900;color:var(--lime);text-transform:uppercase}
+h1{font-size:clamp(24px,6vw,35px);line-height:1.07;letter-spacing:-1.2px;margin:7px 0}
 h1 span{color:var(--lime)}
-.lead{margin:11px 0 0;color:#bdc8b5;font-size:13px;line-height:1.65;max-width:540px}
-.actions{display:flex;gap:8px;margin-top:17px;flex-wrap:wrap}
-.btn{min-height:43px;border-radius:13px;border:1px solid #ffffff16;padding:10px 13px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:850;background:#ffffff08;transition:transform .15s,filter .15s}
-.btn:active{transform:scale(.98)}.btn.primary{background:var(--lime);border-color:var(--lime);color:#182014}.btn.secondary{background:#ffffff08;color:var(--text)}.btn.block{width:100%}
-.notice{display:flex;gap:10px;align-items:flex-start;padding:12px 13px;margin-top:12px;border:1px solid #f1cf7840;border-radius:15px;background:#e8b94a0b;color:#d7c9a4;font-size:11px;line-height:1.55}
-.notice b{color:#ffe2a0}.notice-icon{font-size:16px;line-height:1.2}
-.section-title{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:22px 2px 10px}.section-title h2{margin:0;font-size:19px;letter-spacing:-.5px}.section-title span{font-size:10px;color:var(--muted)}
-.frame-shell{margin-top:13px;overflow:hidden;border:1px solid #d8ff8326;border-radius:20px;background:#0b0e0a}
-.frame-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 12px;background:#1a2117;border-bottom:1px solid var(--line)}
-.frame-head strong{font-size:12px}.frame-head small{display:block;font-size:10px;color:var(--muted);font-weight:500}
-.frame-status{display:flex;align-items:center;gap:6px;color:#d9ff9a;font-size:10px;font-weight:800}
-iframe{display:block;width:100%;height:min(68dvh,760px);min-height:440px;border:0;background:#11170f}
-.fallback{padding:14px;text-align:center;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.6}
-.fallback .btn{margin-top:8px}
-.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:13px}
-.card{padding:14px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(145deg,#ffffff08,#ffffff03)}
-.card .ico{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#d8ff830e;border:1px solid #d8ff831c;font-size:17px;margin-bottom:9px}
-.card strong{display:block;font-size:12px}.card p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.6}
-.statuses{display:grid;gap:8px;margin-top:12px}.status{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid var(--line);border-radius:15px;background:#ffffff05}.status-mark{width:10px;height:10px;border-radius:50%;flex:0 0 10px;background:#7fd48b;box-shadow:0 0 10px #7fd48b44}.status:nth-child(2) .status-mark{background:#f1d46f;box-shadow:0 0 10px #f1d46f44}.status:nth-child(3) .status-mark{background:#ffad60;box-shadow:0 0 10px #ffad6044}.status:nth-child(4) .status-mark{background:#ff706c;box-shadow:0 0 10px #ff706c44}.status b{font-size:12px}.status small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
-.steps{display:grid;gap:9px;margin-top:12px}.step{display:flex;gap:12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#ffffff05}.num{flex:0 0 29px;width:29px;height:29px;display:grid;place-items:center;border-radius:10px;background:var(--lime);color:#192014;font-weight:950;font-size:12px}.step b{display:block;font-size:12px}.step p{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.6}
-.search{width:100%;height:45px;margin:13px 0 10px;padding:0 13px;border-radius:13px;border:1px solid var(--line);background:#0e120d;color:var(--text);font-size:12px;outline:none}.search:focus{border-color:#d8ff8355}.search::placeholder{color:#83907b}
-.city-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.city{padding:12px;border:1px solid var(--line);border-radius:13px;background:#ffffff05;text-align:left;font-size:12px;font-weight:750;display:flex;align-items:center;justify-content:space-between;gap:8px}.city span{color:var(--lime);font-size:15px}.muted{color:var(--muted);font-size:11px;line-height:1.65}
-.panel{padding:16px;border:1px solid var(--line);border-radius:18px;background:#ffffff05;margin-top:10px}.panel h3{margin:0 0 6px;font-size:14px}.panel p{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
-.bottom{position:fixed;z-index:20;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 10px calc(8px + var(--safe));border-top:1px solid var(--line);background:#10140ff2;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
-.nav{min-height:49px;border:1px solid transparent;border-radius:13px;background:transparent;color:#8d9984;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10px;font-weight:750}.nav i{font-style:normal;font-size:18px;line-height:1.1}.nav.active{color:var(--lime);background:#d8ff830c;border-color:#d8ff8318}
-.toast{position:fixed;z-index:40;left:50%;bottom:calc(76px + var(--safe));transform:translate(-50%,8px);opacity:0;pointer-events:none;padding:9px 13px;border-radius:12px;background:#273020;color:#f5ffe9;border:1px solid #d8ff8330;font-size:11px;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,0)}
-.footer{text-align:center;margin:20px 0 5px;color:#73806a;font-size:10px}.footer b{color:#b9d78a}
-@media(min-width:620px){#app{padding-left:20px;padding-right:20px}.hero{padding:25px}.cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:360px){#app{padding-left:10px;padding-right:10px}.hero{padding:17px}.actions .btn{flex:1;padding:9px 8px;font-size:11px}.city-list{grid-template-columns:1fr}iframe{min-height:400px}}
+.intro p{color:#bdc8b5;font-size:12px;line-height:1.6;margin:0;max-width:650px}
+.quick{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:11px 0}
+.quick button{min-height:61px;padding:9px 5px;border:1px solid var(--line);border-radius:14px;background:#ffffff06;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:11px;font-weight:850}
+.quick button span{font-size:18px;color:var(--lime);line-height:1.2}
+.quick button.active{background:#d8ff8312;border-color:#d8ff8360}
+.service{display:none;animation:in .18s ease both}.service.active{display:block}
+@keyframes in{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}
+.service-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 1px 8px}
+.service-head h2{font-size:15px;margin:0;letter-spacing:-.2px}
+.service-head small{display:block;color:var(--muted);font-size:10px;font-weight:500;margin-top:1px}
+.actions{display:flex;gap:7px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:9px 12px;border:1px solid #ffffff18;border-radius:11px;background:#ffffff08;font-size:11px;font-weight:850;text-decoration:none}
+.btn.primary{background:var(--lime);color:#182014;border-color:var(--lime)}
+.btn:active{transform:scale(.985)}
+.frame-shell{border:1px solid var(--line);border-radius:17px;overflow:hidden;background:#0b0e0a}
+.frame-top{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 11px;background:#1a2117;border-bottom:1px solid var(--line)}
+.frame-top b{font-size:11px}.frame-top small{display:block;color:var(--muted);font-size:9px;font-weight:500}
+.frame-top .btn{min-height:32px;padding:6px 9px;font-size:10px;white-space:nowrap}
+iframe{display:block;width:100%;height:calc(100dvh - 285px);min-height:500px;border:0;background:#10140f}
+.frame-help{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 11px;border-top:1px solid var(--line);font-size:10px;line-height:1.45;color:var(--muted)}
+.frame-help .btn{flex-shrink:0}
+.notice{display:flex;gap:9px;align-items:flex-start;margin:11px 0;padding:11px 12px;border:1px solid #f1cf7840;border-radius:13px;background:#e8b94a0b;color:#d7c9a4;font-size:10px;line-height:1.55}
+.notice b{color:#ffe2a0}
+.info-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.info{border:1px solid var(--line);border-radius:14px;padding:12px;background:#ffffff05}
+.info b{font-size:11px;display:block}.info p{font-size:10px;line-height:1.55;color:var(--muted);margin:4px 0 0}
+.site-links{display:grid;gap:8px;margin-top:10px}
+.linkrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--line);border-radius:13px;background:#ffffff05}
+.linkrow b{font-size:11px}.linkrow small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.footer{text-align:center;color:#73806a;font-size:9px;padding:15px 0 2px}
+.bottom{position:fixed;z-index:20;left:50%;bottom:0;transform:translateX(-50%);width:min(980px,100%);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:7px 9px calc(7px + var(--safe));border-top:1px solid var(--line);background:#10140ff2;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.nav{min-height:47px;border:1px solid transparent;border-radius:12px;background:transparent;color:#8d9984;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10px;font-weight:800}
+.nav i{font-style:normal;font-size:17px;line-height:1.1}.nav.active{color:var(--lime);background:#d8ff830c;border-color:#d8ff8318}
+.toast{position:fixed;z-index:50;left:50%;bottom:calc(72px + var(--safe));transform:translate(-50%,8px);opacity:0;pointer-events:none;padding:9px 13px;border-radius:12px;background:#273020;color:#f5ffe9;border:1px solid #d8ff8330;font-size:11px;transition:.2s;max-width:90vw;text-align:center}.toast.show{opacity:1;transform:translate(-50%,0)}
+@media(min-width:700px){#app{padding-left:20px;padding-right:20px}.intro{padding:19px}.info-grid{grid-template-columns:repeat(3,minmax(0,1fr))}iframe{height:calc(100dvh - 300px);min-height:580px}}
+@media(max-width:380px){.live{font-size:8px;padding:6px 7px}.brand{font-size:16px}.logo{width:35px;height:35px}.frame-help{align-items:flex-start;flex-direction:column}.frame-help .btn{width:100%}.quick button{font-size:10px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
 <div id="app">
-<header class="top">
-  <div class="brand"><div class="logo">↗</div><div>GDE.WTF<small>Карта тревог и радар БПЛА</small></div></div>
-  <div class="pill"><i class="dot"></i> НЕЗАВИСИМЫЙ СЕРВИС</div>
+<header>
+  <div class="brand"><div class="logo">↗</div><div>GDE.WTF<small>Единое приложение проекта</small></div></div>
+  <div class="live"><i class="dot"></i> НЕЗАВИСИМЫЙ СЕРВИС</div>
 </header>
-
-<section class="screen active" data-screen="radar" id="screen-radar">
-  <div class="hero">
-    <div class="eyebrow"><span>●</span> ЖИВАЯ КАРТА · РОССИЯ</div>
-    <h1>Что происходит<br><span>рядом с тобой?</span></h1>
-    <p class="lead">Радар тревог, сообщения о дронах, взрывах и работе ПВО по городам. Открой карту, выбери город и следи за изменениями в реальном времени.</p>
-    <div class="actions"><button class="btn primary" id="openRadar">Открыть радар ↗</button><button class="btn secondary" id="refreshRadar">↻ Обновить карту</button></div>
-  </div>
-  <div class="notice"><span class="notice-icon">ⓘ</span><div><b>Важно:</b> GDE.WTF — независимый сервис, а не официальная система оповещения. При сирене или сообщении МЧС следуй официальным инструкциям. Возможны задержки и сбои данных.</div></div>
-  <div class="frame-shell">
-    <div class="frame-head"><div><strong>GDE.WTF · Радар</strong><small>Интерактивная карта с сайта проекта</small></div><div class="frame-status"><i class="dot"></i> LIVE</div></div>
-    <iframe id="radarFrame" title="Живая карта GDE.WTF" src="https://map.gde.wtf/" loading="eager" allow="geolocation; clipboard-read; clipboard-write; notifications" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-    <div class="fallback">Если карта не отображается внутри Telegram, открой её отдельно — там доступны вход, выбор города, уведомления и отметки.<br><button class="btn primary" id="openRadarFallback">Открыть карту целиком ↗</button></div>
-  </div>
-  <div class="section-title"><h2>Что показывает радар</h2><span>основные функции</span></div>
-  <div class="cards">
-    <article class="card"><div class="ico">◉</div><strong>Живая карта</strong><p>Метки по районам и улицам; свежие события выделяются ярче.</p></article>
-    <article class="card"><div class="ico">⌁</div><strong>Статус города</strong><p>Тихо, внимание, дроны или взрывы — отдельный статус для города.</p></article>
-    <article class="card"><div class="ico">◎</div><strong>Метки жителей</strong><p>Сообщи о том, что слышишь, через интерфейс карты.</p></article>
-    <article class="card"><div class="ico">✓</div><strong>Подтверждение</strong><p>По описанию проекта точка подтверждается метками трёх разных людей.</p></article>
-    <article class="card"><div class="ico">◷</div><strong>Лайв и история</strong><p>Последние минуты или расширенный период истории.</p></article>
-    <article class="card"><div class="ico">♧</div><strong>Уведомления</strong><p>Настрой уведомления для выбранного города на сайте.</p></article>
-  </div>
-  <div class="footer"><b>GDE.WTF</b> · Независимый сервис · Бесплатный радар</div>
-</section>
-
-<section class="screen" data-screen="cities" id="screen-cities">
-  <div class="hero">
-    <div class="eyebrow">⌖ ГОРОДА</div><h1>Выбери<br><span>свой город.</span></h1>
-    <p class="lead">На карте у каждого города свой уровень тревоги. Соседний город не меняет статус твоего.</p>
-    <button class="btn primary block" style="margin-top:16px" id="chooseCity">Выбрать город на радаре ↗</button>
-  </div>
-  <input class="search" id="citySearch" placeholder="Найти город…" autocomplete="off" aria-label="Поиск города">
-  <div class="city-list" id="cityList"></div>
-  <p class="muted" style="margin:12px 2px 0">Это быстрые варианты для перехода. Полный список и корректный выбор города доступны в самом радаре.</p>
-  <div class="footer"><b>GDE.WTF</b> · Карта тревог по городам</div>
-</section>
-
-<section class="screen" data-screen="how" id="screen-how">
-  <div class="hero"><div class="eyebrow">✳ КАК ЭТО РАБОТАЕТ</div><h1>Просто<br><span>и понятно.</span></h1><p class="lead">Карта объединяет открытые городские источники и отметки пользователей. Это дополнительный ориентир, а не гарантия полной или мгновенной информации.</p></div>
-  <div class="section-title"><h2>Три шага</h2><span>начало работы</span></div>
-  <div class="steps">
-    <article class="step"><div class="num">1</div><div><b>Войди через Telegram или MAX</b><p>На сайте откроется бот подтверждения. Сервис указывает, что для входа требуется номер российского формата +7 9xx; ознакомься с политикой конфиденциальности перед передачей данных.</p></div></article>
-    <article class="step"><div class="num">2</div><div><b>Выбери город и смотри карту</b><p>Проверь верхнюю строку статуса, метки и активность по районам. Можно переключать лайв и историю.</p></div></article>
-    <article class="step"><div class="num">3</div><div><b>Сообщи, если слышишь событие</b><p>Через кнопку сообщения на карте поставь метку по геопозиции. Подтверждение помогает снизить влияние одиночных ложных отметок.</p></div></article>
-  </div>
-  <div class="section-title"><h2>Четыре состояния</h2><span>статус города</span></div>
-  <div class="statuses">
-    <div class="status"><i class="status-mark"></i><div><b>Тихо</b><small>За последние минуты нет заметной активности.</small></div></div>
-    <div class="status"><i class="status-mark"></i><div><b>Внимание</b><small>Появились первые сообщения, обстановка меняется.</small></div></div>
-    <div class="status"><i class="status-mark"></i><div><b>Дроны</b><small>Подтверждённая активность над городом.</small></div></div>
-    <div class="status"><i class="status-mark"></i><div><b>Взрывы</b><small>Сообщения о взрывах или работе ПВО.</small></div></div>
-  </div>
-  <div class="panel"><h3>Укрытия рядом</h3><p>На сайте описана карта укрытий и пеший маршрут для Ростова-на-Дону; раздел обозначен как бета с постепенным открытием. Доступность зависит от текущего состояния сервиса.</p></div>
-  <div class="panel"><h3>Конфиденциальность</h3><p>В описании сервиса указаны данные Telegram-аккаунта и пользовательские метки. На радаре есть политика конфиденциальности и функция удаления аккаунта и данных. Перед входом изучи условия непосредственно на сайте.</p><button class="btn secondary block" style="margin-top:12px" id="privacy">Открыть политику ↗</button></div>
-  <div class="footer"><b>GDE.WTF</b> · Не заменяет официальные оповещения</div>
-</section>
-
-<section class="screen" data-screen="about" id="screen-about">
-  <div class="hero"><div class="eyebrow">GDE.WTF</div><h1>Быть<br><span>в курсе.</span></h1><p class="lead">Независимая карта тревог и радар БПЛА по городам. Бесплатный доступ к карте, статусам, районам и базовым уведомлениям.</p><div class="actions"><button class="btn primary" id="aboutOpenRadar">Открыть радар ↗</button><button class="btn secondary" id="aboutWebsite">Сайт проекта ↗</button></div></div>
-  <div class="panel"><h3>Бесплатно и без рекламы</h3><p>Главная страница проекта указывает, что сервис бесплатный. На радаре также описан GDE.WTF+ с дополнительными удобствами; там указано, что подписка ещё готовится. Проверяй актуальные условия на сайте.</p></div>
-  <div class="panel"><h3>Android</h3><p>На сайте есть ссылка на приложение для Android в RuStore. Для iPhone App Store обозначен как «скоро».</p><button class="btn secondary block" style="margin-top:12px" id="android">Открыть RuStore ↗</button></div>
-  <div class="panel"><h3>Поддержать проект</h3><p>На радаре есть раздел поддержки проекта. Если хочешь помочь с серверами, картами и уведомлениями, открой сайт и используй доступные там варианты.</p></div>
-  <div class="panel"><h3>Связь и ошибки</h3><p>Для ошибки на карте, доступа или предложения используй раздел «Написать модерации» на самом радаре. На главной странице также указан контакт @pravy_ru.</p><button class="btn secondary block" style="margin-top:12px" id="contact">Открыть сайт и контакты ↗</button></div>
-  <div class="notice"><span class="notice-icon">ⓘ</span><div><b>Неофициальный источник.</b> Данные могут быть неполными или запаздывать. Не используй Mini App как единственный источник сведений об угрозе.</div></div>
-  <div class="footer"><b>GDE.WTF</b> · Независимый сервис</div>
-</section>
+<div class="intro">
+  <div class="eyebrow">ВСЕ СЕРВИСЫ В ОДНОМ МЕСТЕ</div>
+  <h1>GDE.WTF — <span>без лишних переходов.</span></h1>
+  <p>Главный сайт, настоящая карта и панель модерации. Выбирай нужный раздел ниже. Если внешний сервис запрещает встраивание, открой его целиком одной кнопкой.</p>
 </div>
-
-<nav class="bottom" aria-label="Навигация">
-  <button class="nav active" data-tab="radar"><i>⌁</i>Радар</button>
-  <button class="nav" data-tab="cities"><i>⌖</i>Города</button>
-  <button class="nav" data-tab="how"><i>ⓘ</i>Как работает</button>
-  <button class="nav" data-tab="about"><i>↗</i>О проекте</button>
+<div class="quick" role="tablist" aria-label="Сервисы GDE.WTF">
+  <button class="active" data-tab="site" role="tab" aria-selected="true"><span>⌂</span>Главный сайт</button>
+  <button data-tab="map" role="tab" aria-selected="false"><span>⌁</span>Карта / радар</button>
+  <button data-tab="moder" role="tab" aria-selected="false"><span>⚙</span>Модерация</button>
+</div>
+<section class="service active" data-service="site" id="service-site">
+  <div class="service-head"><div><h2>GDE.WTF · Главная</h2><small>Описание проекта, возможности и справочная информация</small></div><div class="actions"><button class="btn primary" data-open="site">Открыть ↗</button></div></div>
+  <div class="frame-shell">
+    <div class="frame-top"><div><b>gde.wtf</b><small>Официальная главная страница проекта</small></div><button class="btn" data-reload="site">↻ Обновить</button></div>
+    <iframe id="frame-site" title="Главный сайт GDE.WTF" src="https://gde.wtf/" loading="eager" referrerpolicy="strict-origin-when-cross-origin" allow="geolocation; clipboard-read; clipboard-write; notifications"></iframe>
+    <div class="frame-help"><span>Если страница не загрузилась внутри Telegram, открой её в браузере.</span><button class="btn primary" data-open="site">Открыть gde.wtf ↗</button></div>
+  </div>
+</section>
+<section class="service" data-service="map" id="service-map">
+  <div class="service-head"><div><h2>GDE.WTF · Карта и радар</h2><small>Живая карта, города, история, метки и настройки</small></div><div class="actions"><button class="btn primary" data-open="map">Открыть ↗</button></div></div>
+  <div class="frame-shell">
+    <div class="frame-top"><div><b>map.gde.wtf</b><small>Настоящий интерфейс карты GDE.WTF</small></div><button class="btn" data-reload="map">↻ Обновить</button></div>
+    <iframe id="frame-map" title="Карта и радар GDE.WTF" src="https://map.gde.wtf/" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="geolocation; clipboard-read; clipboard-write; notifications"></iframe>
+    <div class="frame-help"><span>Вход, геолокация, уведомления и другие возможности зависят от поддержки браузера и разрешений Telegram.</span><button class="btn primary" data-open="map">Открыть карту целиком ↗</button></div>
+  </div>
+</section>
+<section class="service" data-service="moder" id="service-moder">
+  <div class="service-head"><div><h2>GDE.WTF · Модерация</h2><small>Отдельный сервис moder.gde.wtf</small></div><div class="actions"><button class="btn primary" data-open="moder">Открыть ↗</button></div></div>
+  <div class="frame-shell">
+    <div class="frame-top"><div><b>moder.gde.wtf</b><small>Панель модерации проекта</small></div><button class="btn" data-reload="moder">↻ Обновить</button></div>
+    <iframe id="frame-moder" title="Панель модерации GDE.WTF" src="https://moder.gde.wtf/" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="clipboard-read; clipboard-write"></iframe>
+    <div class="frame-help"><span>Если панель требует отдельной сессии или запрещает встраивание, открой её напрямую.</span><button class="btn primary" data-open="moder">Открыть модерацию ↗</button></div>
+  </div>
+  <div class="notice"><span>ⓘ</span><div><b>Важно:</b> панель модерации может требовать авторизацию и собственные разрешения. Внутри Mini App не подменяются её данные и не имитируются действия модератора.</div></div>
+</section>
+<section class="service" data-service="about" id="service-about">
+  <div class="intro">
+    <div class="eyebrow">GDE.WTF</div><h1>Три сервиса.<br><span>Один вход в приложение.</span></h1>
+    <p>Здесь собраны официальные веб-сервисы проекта. Содержимое сайтов загружается непосредственно с их доменов, когда это разрешено настройками самих сайтов.</p>
+  </div>
+  <div class="site-links">
+    <div class="linkrow"><div><b>Главный сайт</b><small>gde.wtf — описание и информация о проекте</small></div><button class="btn" data-open="site">Перейти ↗</button></div>
+    <div class="linkrow"><div><b>Карта и радар</b><small>map.gde.wtf — города, статусы, история и метки</small></div><button class="btn" data-open="map">Перейти ↗</button></div>
+    <div class="linkrow"><div><b>Модерация</b><small>moder.gde.wtf — отдельная панель проекта</small></div><button class="btn" data-open="moder">Перейти ↗</button></div>
+    <div class="linkrow"><div><b>Приложение Android</b><small>Официальная ссылка на RuStore, указанная на сайте</small></div><button class="btn" data-open="android">RuStore ↗</button></div>
+    <div class="linkrow"><div><b>Политика конфиденциальности</b><small>Условия обработки данных на сайте карты</small></div><button class="btn" data-open="privacy">Открыть ↗</button></div>
+  </div>
+  <div class="info-grid">
+    <div class="info"><b>Живая карта</b><p>Статусы городов, районы, метки пользователей и переключение между лайвом и историей доступны на настоящей карте.</p></div>
+    <div class="info"><b>Модерация</b><p>Панель подключена как отдельный настоящий сервис; её доступ и функции определяются самим moder.gde.wtf.</p></div>
+    <div class="info"><b>Независимый сервис</b><p>GDE.WTF не является официальной системой оповещения. Следуй официальным инструкциям экстренных служб.</p></div>
+  </div>
+  <div class="footer">GDE.WTF · Единое приложение · Содержимое сервисов загружается с их официальных доменов</div>
+</section>
+<div class="notice"><span>ⓘ</span><div><b>Предупреждение:</b> GDE.WTF — независимый сервис и не заменяет официальные оповещения. Данные могут быть неполными или задерживаться; при сирене или сообщении экстренных служб следуй официальным инструкциям.</div></div>
+<div class="footer">GDE.WTF · Главная · Карта · Модерация</div>
+</div>
+<nav class="bottom" aria-label="Навигация приложения">
+  <button class="nav active" data-tab="site"><i>⌂</i>Сайт</button>
+  <button class="nav" data-tab="map"><i>⌁</i>Карта</button>
+  <button class="nav" data-tab="moder"><i>⚙</i>Модерация</button>
+  <button class="nav" data-tab="about"><i>ⓘ</i>О проекте</button>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 const tg=window.Telegram&&window.Telegram.WebApp;
 try{if(tg){tg.ready();tg.expand();tg.setHeaderColor&&tg.setHeaderColor('#10140f');tg.setBackgroundColor&&tg.setBackgroundColor('#10140f');tg.disableVerticalSwipes&&tg.disableVerticalSwipes()}}catch(e){}
-const MAP='https://map.gde.wtf/',SITE='https://gde.wtf/';
-const cities=['Ростов-на-Дону','Москва','Санкт-Петербург','Краснодар','Таганрог','Батайск','Азов','Новочеркасск','Волгоград','Белгород','Курск','Воронеж','Брянск','Смоленск','Новороссийск','Сочи','Симферополь','Севастополь','Шахты','Гуково','Екатеринбург','Казань','Нижний Новгород','Новосибирск','Челябинск','Омск','Самара','Уфа','Красноярск','Пермь','Саратов','Тюмень','Иркутск','Хабаровск','Владивосток','Ярославль','Тула','Тверь','Калининград','Мурманск','Анапа','Геленджик','Ейск','Керчь','Махачкала','Ставрополь','Пятигорск','Тамбов','Рязань','Пенза','Калуга','Владимир','Кострома','Архангельск','Улан-Удэ','Якутск','Абакан','Сургут','Нижневартовск','Магнитогорск','Грозный','Чебоксары','Йошкар-Ола','Саранск','Великий Новгород','Курган','Оренбург','Тольятти','Ижевск','Астрахань','Липецк','Псков','Томск','Кемерово','Барнаул','Благовещенск','Чита','Южно-Сахалинск','Петропавловск-Камчатский'];
+const urls={site:'https://gde.wtf/',map:'https://map.gde.wtf/',moder:'https://moder.gde.wtf/',android:'https://www.rustore.ru/catalog/app/wtf.gde.app',privacy:'https://map.gde.wtf/privacy'};
 const toast=document.getElementById('toast');let toastTimer;
-function notify(s){toast.textContent=s;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
+function notify(text){toast.textContent=text;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),2100)}
 function openUrl(url){try{if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}}
-function openMap(){openUrl(MAP)}
-function go(tab){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===tab));document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
+function openService(key){openUrl(urls[key]||urls.site)}
+function go(tab){document.querySelectorAll('.service').forEach(s=>s.classList.toggle('active',s.dataset.service===tab));document.querySelectorAll('[data-tab]').forEach(b=>{const active=b.dataset.tab===tab;b.classList.toggle('active',active);if(b.hasAttribute('role'))b.setAttribute('aria-selected',String(active))});window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.tab)));
-['openRadar','openRadarFallback','chooseCity','aboutOpenRadar'].forEach(id=>document.getElementById(id).addEventListener('click',openMap));
-document.getElementById('refreshRadar').addEventListener('click',()=>{const f=document.getElementById('radarFrame');f.src=MAP;notify('Перезагружаю радар…')});
-document.getElementById('aboutWebsite').addEventListener('click',()=>openUrl(SITE));
-document.getElementById('contact').addEventListener('click',()=>openUrl(MAP));
-document.getElementById('privacy').addEventListener('click',()=>openUrl(MAP+'privacy'));
-document.getElementById('android').addEventListener('click',()=>openUrl('https://www.rustore.ru/catalog/app/wtf.gde.app'));
-const cityList=document.getElementById('cityList'),citySearch=document.getElementById('citySearch');
-function renderCities(){const q=citySearch.value.trim().toLocaleLowerCase('ru');const found=cities.filter(c=>c.toLocaleLowerCase('ru').includes(q));cityList.innerHTML=found.map(c=>'<button class="city" data-city="'+c.replace(/"/g,'&quot;')+'">'+c+'<span>↗</span></button>').join('')||'<p class="muted">Не найдено. Открой радар, чтобы воспользоваться полным списком городов.</p>'}
-citySearch.addEventListener('input',renderCities);cityList.addEventListener('click',e=>{if(e.target.closest('[data-city]'))openMap()});renderCities();
+document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openService(b.dataset.open)));
+document.querySelectorAll('[data-reload]').forEach(b=>b.addEventListener('click',()=>{const key=b.dataset.reload;const frame=document.getElementById('frame-'+key);frame.src='about:blank';setTimeout(()=>{frame.src=urls[key]},40);notify('Обновляю '+(key==='site'?'главную страницу':key==='map'?'радар':'панель модерации')+'…')}));
 </script>
 </body>
 </html>
