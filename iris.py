@@ -494,36 +494,68 @@ async def gdewtf_command(message: Message) -> None:
                 await message.answer("⚠️ " + _error_text(data))
                 return
             mods = [m for m in (data.get("mods") or []) if isinstance(m, dict)]
-            # Telegram limits a text message to 4096 characters. Split at row
-            # boundaries instead of truncating the directory or silently dropping people.
-            title = f"🌐 <b>Модераторы GDE.WTF · {len(mods)}</b>"
-            chunks: list[str] = []
-            current = title
+            # Compact directory: one line per moderator, remove duplicated city/role
+            # labels and the redundant @username. Keep the display name clickable.
+            title = f"🌐 <b>Модераторы GDE.WTF · {len(mods)}</b>\n"
+            rows: list[str] = []
             for mod in mods:
-                row = _mod_line(mod)
-                candidate = current + "\n" + row
-                if len(candidate) > 3900 and current != title:
-                    chunks.append(current)
-                    current = f"🌐 <b>Модераторы · продолжение</b>\n" + row
+                display = str(mod.get("nick") or mod.get("name") or mod.get("username") or mod.get("pub") or "?").strip()
+                username = str(mod.get("username") or "").strip().lstrip("@")
+                tg_id = mod.get("tg_id") or mod.get("telegram_id") or mod.get("user_id")
+                try:
+                    uid = int(tg_id or 0)
+                except (TypeError, ValueError):
+                    uid = 0
+                safe_display = _clean(display)
+                if uid > 0:
+                    linked = f'<a href="tg://user?id={uid}">{safe_display}</a>'
+                elif username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+                    linked = f'<a href="https://t.me/{username}">{safe_display}</a>'
                 else:
-                    current = candidate
-            if current:
-                chunks.append(current)
-            total = len(chunks)
-            for index, chunk in enumerate(chunks, 1):
-                if total > 1:
-                    chunk = chunk.replace(
-                        "🌐 <b>Модераторы GDE.WTF · " + str(len(mods)) + "</b>",
-                        f"🌐 <b>Модераторы GDE.WTF · {len(mods)} · {index}/{total}</b>",
-                        1,
-                    ) if index == 1 else chunk.replace(
-                        "🌐 <b>Модераторы · продолжение</b>",
-                        f"🌐 <b>Модераторы · продолжение {index}/{total}</b>",
-                        1,
-                    )
-                await message.answer(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            if not mods:
+                    linked = safe_display
+                raw_role = str(mod.get("role_label") or mod.get("role") or "модератор").strip()
+                city = str(mod.get("city_name") or mod.get("city") or "").strip()
+                # Short role labels keep 61+ entries within Telegram's message limit.
+                role_lower = raw_role.casefold()
+                if "региональ" in role_lower or "rgov" in role_lower:
+                    role = "рег.упр."
+                elif "амбассадор" in role_lower or "amb" == role_lower:
+                    role = "амб."
+                elif "админ" in role_lower or "admin" in role_lower or "chief" in role_lower:
+                    role = "админ"
+                elif "модератор" in role_lower or role_lower == "mod":
+                    role = "мод."
+                else:
+                    role = raw_role[:16]
+                # Role labels often repeat the city already shown in the city field.
+                role = re.sub(r"\s*[·—-]\s*(?:амбассадор|модератор|региональный управляющий)?\s*(?:г\.?\s*)?" + re.escape(city) + r"\s*$", "", role, flags=re.I) if city else role
+                bits = [f"<b>{_clean(role)}</b>", linked]
+                if city and city != "—":
+                    bits.append(_clean(city))
+                pub = str(mod.get("pub") or "").strip()
+                if pub:
+                    bits.append(f"<code>{_clean(pub)}</code>")
+                rows.append("• " + " · ".join(bits))
+            if not rows:
                 await message.answer("Список пуст.")
+                return
+            output = title + "\n".join(rows)
+            # Telegram text messages have a hard ~4096-character limit. Keep the
+            # entire directory in one message; fail clearly rather than silently split it.
+            if len(output) > 4000:
+                # The username and verbose role are already omitted; pub codes are the
+                # least important field for a one-message directory and can be dropped.
+                compact_rows = []
+                for mod, row in zip(mods, rows):
+                    compact_rows.append(re.sub(r"\s*·\s*<code>.*?</code>", "", row))
+                output = title + "\n".join(compact_rows)
+            if len(output) > 4000:
+                # Last-resort compact form preserves clickable names, role and city.
+                output = title + "\n".join(
+                    row if len(row) < 75 else row[:72] + "…"
+                    for row in rows
+                )
+            await message.answer(output[:4090], parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             return
 
         if action in {"города", "cities"}:
