@@ -321,11 +321,14 @@ async def _gdewtf_authorize(user_id: int, action: str) -> tuple[bool, str]:
     # the relevant permission; the GDE.WTF API remains the final authority.
     read_actions = {
         "help", "помощь", "команды", "ping", "пинг", "профиль", "who", "mod",
+        "варны", "кто", "статус", "права", "топ", "поиск",
         "модераторы", "mods", "города", "cities", "журнал", "лог", "log",
     }
     action_aliases = {
-        "warn": "marks", "варн": "marks",
+        "warn": "marks", "варн": "marks", "варны": "marks",
         "снятьварны": "marks", "снять-варны": "marks", "warnclear": "marks",
+        "кто": "users", "статус": "users", "права": "users", "поиск": "users",
+        "топ": "stats",
         "ник": "users", "nick": "users", "город": "users", "city": "users",
         "амб": "users", "amb": "users", "rgov": "users", "регион": "users",
         "региональный": "users", "назначить": "users", "modset": "users",
