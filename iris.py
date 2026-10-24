@@ -1885,20 +1885,20 @@ async def start(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if message.chat.type == ChatType.PRIVATE:
         text = (
-            "👋 <b>Привет! Я GDE.WTF</b> — бот для управления группой.\n\n"
-            "Я помогаю с модерацией и настройкой групп. Откройте сайт проекта: "\n            "<a href=\"https://gde.wtf/\">gde.wtf</a>.\n\n"\n            "Чтобы управлять группой, добавьте меня в неё и выдайте необходимые права администратора. " 
-            "муты, баны, удаление сообщений и закрепление.\n\n"
+            "👋 <b>Привет! Я бот проекта GDE.WTF</b> — помощник для управления сообществами и модерации в Telegram.\n\n"
+            "🌐 Сайт проекта: <a href=\"https://gde.wtf/\">gde.wtf</a>.\n\n"
+            "Добавьте меня в группу, чтобы пользоваться инструментами модерации. Для мутов, банов, удаления сообщений и закрепления выдайте необходимые права администратора.\n\n"
             "Откройте <b>🔗 Команды</b>, чтобы посмотреть возможности.\n\n"
-            "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
-            '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Буду очень рад поддержке!'
+            "💚 Хотите поддержать разработку? Попробуйте мой VPN: "
+            '<a href="https://t.me/awesomeproxyvpn_bot">@awesomeproxyvpn_bot</a>. Спасибо за поддержку!'
         )
     else:
         # Keep /start fast: do not wait for an extra Telegram getChatMember
         # request just to render the welcome message.
         text = (
             f"👋 Бот проекта GDE.WTF подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
-            "Нажми кнопку ниже — отвечу на запрос.\n\n"
-            "Открой кнопки под этим сообщением, чтобы пользоваться ботом."
+            "🌐 Сайт проекта: <a href=\"https://gde.wtf/\">gde.wtf</a>.\n\n"
+            "Открой кнопки под этим сообщением, чтобы пользоваться инструментами бота."
         )
 
     # Send exactly one visible message, with the inline keyboard attached.
