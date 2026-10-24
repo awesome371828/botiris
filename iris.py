@@ -2737,14 +2737,15 @@ async def mute_cmd(message: Message) -> None:
               f"duration={duration_label}; reason={reason}; moderator={message.from_user.id if message.from_user else 0}")
         if until:
             when = format_moscow_time(until)
-            await message.answer(format_panel(
-                "МУТ ВЫДАН",
-                f"🔇 <b>{mention(target[0], target[1])}</b> ограничен в отправке сообщений на <b>{escape(duration_label or 'указанный срок')}</b>. "
-                f"Причина: <b>{reason}</b>.\n"
-                f"🕒 Начало: {format_moscow_time(issued_at)}\n"
-                f"⏳ Завершится: {when}\n👮 Выдал: {actor}.",
-                "GDE.WTF · Модерация",
-            ))
+            await message.answer(
+                "🔇 <b>Мут выдан</b>\n\n"
+                f"👤 Участник: {mention(target[0], target[1])}\n"
+                f"⏱ Срок: <b>{escape(duration_label or 'указанный срок')}</b>\n"
+                f"📝 Причина: {reason}\n"
+                f"👮 Модератор: {actor}\n"
+                f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
+                f"⌛ Истекает: {when}"
+            )
         else:
             await message.answer(format_panel(
                 "ОГРАНИЧЕНИЕ ВЫДАНО",
