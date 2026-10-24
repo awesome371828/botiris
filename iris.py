@@ -1224,8 +1224,8 @@ def profile_link(user_id: int, name: str) -> str:
     return safe
 
 def mention(user_id: int, name: str) -> str:
-    """Render a user's display name as plain text; ordinary bot replies must not ping people."""
-    return escape(str(name or "пользователь"))
+    """Render a clickable Telegram profile link without sending a notification."""
+    return profile_link(user_id, name)
 
 def call_mention(user_id: int, name: str) -> str:
     """Clickable Telegram mention reserved exclusively for the explicit mass-call command."""
@@ -2336,11 +2336,11 @@ async def admins(message: Message) -> None:
 
         # Clear five-step GDE.WTF hierarchy: rank 1 is the entry moderator, rank 5 is creator.
         rank_titles = {
-            5: "👑 Создатель",
-            4: "⭐⭐⭐⭐ Старший администратор",
-            3: "⭐⭐⭐ Младший администратор",
-            2: "⭐⭐ Старший модератор",
-            1: "⭐ Младший модератор",
+            5: "👑 Создатель · полный контроль проекта и чата",
+            4: "⭐⭐⭐⭐ Старший администратор · управление администрацией и ключевыми настройками",
+            3: "⭐⭐⭐ Младший администратор · расширенная модерация и управление участниками",
+            2: "⭐⭐ Старший модератор · контроль порядка и основные меры модерации",
+            1: "⭐ Младший модератор · базовая модерация и помощь участникам",
         }
         grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
         creator_ids = set(chat_creators)
@@ -2352,7 +2352,7 @@ async def admins(message: Message) -> None:
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
-                creator_display = escape(str(name))
+                creator_display = profile_link(uid, str(name))
                 lines.append(f"👑 {creator_display} · создатель чата")
             lines.append("")
         for rank in (5, 4, 3, 2, 1):
@@ -2363,8 +2363,8 @@ async def admins(message: Message) -> None:
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
-                # Keep admin names as plain text: no profile links or mention entities.
-                safe_display_name = escape(display_name)
+                # Clickable profile link, but never a raw @username mention.
+                safe_display_name = profile_link(uid, display_name)
                 lines.append(f"{icon} {safe_display_name}")
             lines.append("")
         if len(lines) <= 2:
