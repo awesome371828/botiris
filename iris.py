@@ -214,7 +214,7 @@ def _mod_line(mod: dict[str, Any]) -> str:
     role = mod.get("role_label") or mod.get("role") or "—"
     pub = mod.get("pub") or "—"
     # One compact line per person; usernames are deliberately plain text to avoid pings.
-    username_label = f" · @{_clean(username)}" if username else ""
+    username_label = f" · <code>@{_clean(username)}</code>" if username else ""
     return (
         f"• <b>{_clean(role)}</b> ({linked_name}){username_label}"
         f" · {_clean(city)} · <code>{_clean(pub)}</code>"
