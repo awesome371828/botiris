@@ -258,6 +258,8 @@ def _help() -> str:
         "<code>!статус q</code> — онлайн, смена, бан и рейтинг\n"
         "<code>!права q</code> — проектные права\n"
         "<code>!модераторы [city_id]</code> — список команды\n"
+        "<code>!топ [city_id]</code> — рейтинг по рейтингу API\n"
+        "<code>!поиск слово</code> — поиск по модераторам и городам\n"
         "<code>!города</code> — список городов\n"
         "<code>!журнал [q] [limit]</code> — журнал действий\n"
         "<code>!варн q причина</code> — выдать предупреждение\n"
@@ -442,6 +444,31 @@ async def gdewtf_command(message: Message) -> None:
                     await message.answer(_profile(mod))
             else:
                 await message.answer("⚠️ " + _error_text(data))
+            return
+
+        if action in {"топ", "поиск"}:
+            if action == "поиск" and not rest:
+                await message.answer("Формат: <code>!поиск слово</code>")
+                return
+            params = {"city": rest[0]} if action == "топ" and rest else None
+            data = await _api("GET", "/mods", params=params)
+            if not data.get("ok"):
+                await message.answer("⚠️ " + _error_text(data))
+                return
+            mods = [m for m in (data.get("mods") or []) if isinstance(m, dict)]
+            if action == "топ":
+                mods.sort(key=lambda m: float(m.get("rating") or 0), reverse=True)
+                rows = [
+                    f"{i}. {_clean(m.get('nick') or m.get('name') or m.get('username') or m.get('pub'))} — <b>{_clean(m.get('rating', 0))}</b> · {_clean(m.get('city_name') or m.get('city'))}"
+                    for i, m in enumerate(mods[:15], start=1)
+                ]
+                title = "🏆 <b>Рейтинг модераторов</b>"
+            else:
+                query = " ".join(rest).casefold().lstrip("@")
+                mods = [m for m in mods if query in " ".join(str(m.get(k) or "") for k in ("pub", "username", "name", "nick", "city_name", "city")).casefold()]
+                rows = [_mod_line(m) for m in mods[:20]]
+                title = f"🔎 <b>Поиск · найдено {len(mods)}</b>"
+            await message.answer(title + "\\n\\n" + ("\\n\\n".join(rows) if rows else "Ничего не найдено.")[:3700])
             return
 
         if action in {"модераторы", "mods"}:
