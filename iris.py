@@ -7163,26 +7163,10 @@ async def _worker_watchdog(
 
 async def main() -> None:
     global _SCHEMA_PROBLEMS
-    log.info("GDE.WTF build tag: nickname-safe-20261022-r2")
-    # Обновляем профиль Telegram-бота под бренд проекта. Ошибка оформления не должна останавливать polling.
-    try:
-        await bot.set_my_name(name="GDE.WTF | Чат-менеджер")
-        await bot.set_my_description(
-            description=(
-                "Бот проекта GDE.WTF: модерация, управление группами и инструменты сообщества. "
-                "Сайт: https://gde.wtf/ "
-                "Поддержать разработку и пользоваться VPN: @awesomeproxyvpn_bot"
-            )
-        )
-        await bot.set_my_short_description(
-            short_description=(
-                "Бот проекта GDE.WTF: модерация и управление группами. "
-                "VPN-поддержка: @awesomeproxyvpn_bot"
-            )
-        )
-        log.info("Telegram bot profile branding updated for GDE.WTF")
-    except Exception:
-        log.exception("Could not update Telegram bot profile branding; continuing")
+    log.info("GDE.WTF build tag: nickname-safe-20261022-r3")
+    # Do not change Telegram bot profile fields on every process start. Telegram
+    # rate-limits setMyName/setMyDescription; branding should be configured once
+    # manually, not repeated during host restarts/deployments.
     if db is not None:
         try:
             schema_problems = await asyncio.to_thread(check_schema, db)
