@@ -3,187 +3,163 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0b0d15">
+<meta name="theme-color" content="#10140f">
 <meta name="color-scheme" content="dark">
-<title>Pear CM — твой чат, твои правила</title>
-<meta name="description" content="Pear CM — команды модерации, быстрый поиск и инструменты для Telegram-групп.">
+<title>GDE.WTF — карта тревог и радар</title>
+<meta name="description" content="GDE.WTF — независимая карта тревог и радар БПЛА. Живая карта, статусы, отметки жителей и история.">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#0b0d15;--panel:#141722;--panel2:#191d2b;--line:#ffffff12;--text:#f5f6fc;--muted:#9199ad;--mint:#a6f7d8;--blue:#a6b4ff;--purple:#c4a8ff;--safe:env(safe-area-inset-bottom,0px)}
+:root{color-scheme:dark;--bg:#10140f;--surface:#171d16;--surface2:#1d251b;--line:#d7edc51c;--text:#f1f5e9;--muted:#a0ad96;--lime:#d8ff83;--green:#8ee0a0;--safe:env(safe-area-inset-bottom,0px)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{background:var(--bg);scroll-behavior:smooth}
-body{margin:0;min-height:100dvh;background:radial-gradient(ellipse at 12% -10%,#6874ff20,transparent 38%),radial-gradient(ellipse at 100% 30%,#54d8c214,transparent 35%),var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow-x:hidden}
-button,input{font:inherit}button{color:inherit;cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
-#app{max-width:600px;margin:0 auto;min-height:100dvh;padding:calc(15px + env(safe-area-inset-top)) 16px calc(98px + var(--safe))}
-.topbar{display:flex;align-items:center;justify-content:space-between;margin:0 2px 25px}
-.brand{display:flex;align-items:center;gap:11px;font-weight:850;font-size:17px;letter-spacing:-.5px}
-.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:15px;background:linear-gradient(145deg,#d7fff0,#88f0d4 56%,#86cce9);color:#10221f;font-size:22px;box-shadow:0 5px 0 #315c60,0 9px 18px #64ebca22,inset 0 1px #fff}
-.brand small{display:block;color:var(--muted);font-size:11px;font-weight:550;letter-spacing:0}
-.top-pill{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #a6f7d82b;background:#a6f7d80b;border-radius:99px;color:#bfffe8;font-size:10px;font-weight:800;letter-spacing:.8px}
-.live{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px #a6f7d8}
-.page{display:none;animation:pageIn .32s cubic-bezier(.2,.7,.2,1) both}.page.active{display:block}
-@keyframes pageIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
-.kicker{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:#b7c2dc;font-size:10px;font-weight:850;letter-spacing:1.8px;text-transform:uppercase}.kicker i{font-style:normal;color:var(--mint);font-size:15px}
-h1{margin:0;font-size:clamp(35px,9vw,49px);line-height:1.02;letter-spacing:-2.1px;font-weight:900}
-.grad{background:linear-gradient(100deg,#b9ffe5,#a5c9ff 56%,#c9afff);color:transparent;background-clip:text;-webkit-background-clip:text}
-.intro{margin:15px 0 0;max-width:410px;color:#a4adc2;font-size:14px;line-height:1.7}
-.hero{position:relative;overflow:hidden;padding:25px 22px 22px;border:1px solid #ffffff16;border-radius:28px;background:linear-gradient(145deg,#202638c9,#131722e8 62%,#171a29d9);box-shadow:inset 0 1px #ffffff12,0 18px 44px #0003}
-.hero:after{content:"✳";position:absolute;right:-10px;top:-35px;color:#b5ffeb0c;font-size:170px;line-height:1;transform:rotate(12deg);pointer-events:none}
-.hero>*{position:relative;z-index:1}
-.hero-actions{display:flex;gap:10px;margin-top:23px}
-.btn{min-height:46px;border:1px solid #ffffff16;border-radius:15px;padding:12px 15px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:800;transition:transform .18s,filter .18s,background .18s;box-shadow:inset 0 1px #ffffff1c,0 4px 0 #070911,0 8px 17px #0002}
-.btn:active{transform:translateY(2px) scale(.99);box-shadow:inset 0 1px #ffffff12,0 1px 0 #070911}
-.btn.primary{color:#0c211b;background:linear-gradient(145deg,#c6ffeb,#8cebd2 65%,#8bd7dd);border-color:#d7fff0}
-.btn.soft{background:linear-gradient(145deg,#ffffff10,#ffffff04);color:#f4f5ff}
-.btn.full{width:100%}
-.section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:27px 2px 13px}
-.section-title h2{margin:0;font-size:20px;letter-spacing:-.7px;font-weight:850}
-.section-title span{color:var(--muted);font-size:11px}
-.quick-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.quick{position:relative;min-height:124px;padding:15px;border:1px solid var(--line);border-radius:21px;background:linear-gradient(145deg,#ffffff0c,#ffffff03);text-align:left;overflow:hidden;transition:transform .2s,border-color .2s}
-.quick:active{transform:scale(.98)}.quick .ico{width:38px;height:38px;display:grid;place-items:center;border:1px solid #ffffff13;border-radius:13px;background:#ffffff09;font-size:19px;margin-bottom:12px;box-shadow:inset 0 1px #ffffff16}
-.quick strong{display:block;font-size:13px;letter-spacing:-.2px}.quick small{display:block;margin-top:4px;color:var(--muted);font-size:11px;line-height:1.5}
-.strip{display:flex;align-items:center;gap:12px;padding:15px;margin-top:13px;border:1px solid #b5a5ff25;border-radius:20px;background:linear-gradient(110deg,#9b8dff14,#65e5d10a);text-align:left;width:100%}
-.strip .strip-icon{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:14px;background:#b5a5ff14;color:#d3c8ff;font-size:20px}
-.strip strong{display:block;font-size:13px}.strip small{display:block;color:var(--muted);font-size:11px;margin-top:2px}.arrow{margin-left:auto;color:#b4ffdf;font-size:19px}
-.page-heading{margin:4px 2px 18px}.page-heading h1{font-size:34px;letter-spacing:-1.2px}.page-heading p{margin:9px 0 0;color:var(--muted);font-size:13px}
-.searchbox{position:relative;margin:18px 0 12px}.searchbox span{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8c96ac;font-size:17px}
-.search{width:100%;height:48px;border:1px solid #ffffff14;border-radius:16px;padding:0 14px 0 42px;background:#11141e;color:var(--text);outline:none;font-size:13px;box-shadow:inset 0 2px 8px #0002;transition:border-color .2s}.search:focus{border-color:#a6f7d85c}.search::placeholder{color:#7f899f}
-.filters{display:flex;gap:7px;overflow:auto;scrollbar-width:none;padding:2px 0 12px}.filters::-webkit-scrollbar{display:none}
-.filter{flex:0 0 auto;padding:8px 12px;border:1px solid #ffffff12;border-radius:12px;background:#ffffff06;color:#aab2c5;font-size:11px;font-weight:750;white-space:nowrap;transition:all .18s}
-.filter.active{background:#a6f7d815;border-color:#a6f7d849;color:#c5ffe9}
-.command-list{border:1px solid #ffffff10;border-radius:21px;background:linear-gradient(145deg,#ffffff08,#ffffff02);padding:2px 14px}
-.command{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #ffffff0d;animation:pageIn .22s ease both}.command:last-child{border-bottom:0}
-.command-main{min-width:0}.command code{display:inline-block;color:#b8ffe5;background:#a6f7d80c;border:1px solid #a6f7d81c;border-radius:8px;padding:4px 7px;font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
-.command p{margin:6px 0 0;color:#939db2;font-size:11px;line-height:1.5}
-.copy{flex:0 0 34px;width:34px;height:34px;border:1px solid #ffffff14;border-radius:12px;background:#ffffff08;box-shadow:inset 0 1px #ffffff12,0 3px 0 #070911;font-size:15px;transition:transform .15s}.copy:active{transform:translateY(2px)}
-.count{color:#7f899f;font-size:10px;padding:5px 8px;border-radius:8px;background:#ffffff07}
-.empty{text-align:center;padding:25px 10px;color:var(--muted);font-size:12px}
-.tool-list{display:grid;gap:10px}.tool-card{padding:16px;border:1px solid #ffffff12;border-radius:20px;background:linear-gradient(145deg,#ffffff0a,#ffffff03)}.tool-head{display:flex;align-items:center;gap:11px;margin-bottom:7px}.tool-ico{width:39px;height:39px;display:grid;place-items:center;border-radius:13px;background:#ffffff09;border:1px solid #ffffff12;font-size:19px}.tool-card h3{margin:0;font-size:14px}.tool-card p{margin:0;color:var(--muted);font-size:12px;line-height:1.65}.example{display:block;margin-top:11px;padding:10px 11px;border-radius:12px;background:#080b12;border:1px solid #ffffff0c;color:#b7ffe4;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}
-.vpn-card{padding:20px;border:1px solid #b9a6ff28;border-radius:24px;background:linear-gradient(145deg,#9d8bff19,#71e3d50b 70%,#ffffff03);box-shadow:inset 0 1px #ffffff12}
-.vpn-card h3{margin:0;font-size:19px;letter-spacing:-.5px}.vpn-card p{margin:8px 0 16px;color:#aab3ca;font-size:12px;line-height:1.7}.vpn-symbol{width:46px;height:46px;display:grid;place-items:center;border-radius:16px;margin-bottom:15px;background:linear-gradient(145deg,#e0d9ff,#aaa1ff 60%,#8caaff);color:#1b1b3c;font-size:22px;box-shadow:0 4px 0 #4d4b8c}
-.info-card{padding:17px;border:1px solid #ffffff12;border-radius:20px;background:#ffffff06;margin-top:11px}.info-card h3{font-size:13px;margin:0 0 6px}.info-card p{font-size:12px;color:var(--muted);line-height:1.7;margin:0}
-.bottom-nav{position:fixed;z-index:30;left:50%;bottom:0;transform:translateX(-50%);width:min(600px,100%);padding:9px 12px calc(9px + var(--safe));display:grid;grid-template-columns:repeat(4,1fr);gap:4px;background:#0e111cf0;border-top:1px solid #ffffff12;box-shadow:0 -12px 35px #0003;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
-.nav-item{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:53px;padding:5px 3px;border:1px solid transparent;border-radius:15px;background:transparent;color:#7f899f;font-size:10px;font-weight:700;transition:color .2s,background .2s,transform .2s}
-.nav-item .nav-icon{font-size:19px;line-height:1.15;transition:transform .22s}.nav-item.active{color:#c2ffe9;background:linear-gradient(145deg,#a6f7d813,#a6f7d805);border-color:#a6f7d817}.nav-item.active .nav-icon{transform:translateY(-1px) scale(1.06)}.nav-item.active:before{content:"";position:absolute;top:-1px;width:17px;height:2px;border-radius:9px;background:var(--mint);box-shadow:0 0 9px #a6f7d8}
-.toast{position:fixed;z-index:50;left:50%;bottom:calc(86px + var(--safe));transform:translate(-50%,12px);opacity:0;pointer-events:none;padding:10px 15px;border:1px solid #ffffff20;border-radius:13px;background:#202535f5;color:#f7f8ff;font-size:12px;font-weight:750;box-shadow:0 10px 30px #0006;transition:opacity .2s,transform .2s;white-space:nowrap}.toast.show{opacity:1;transform:translate(-50%,0)}
-.footer{text-align:center;color:#667087;font-size:10px;margin:26px 0 4px}.footer b{color:#9ca7be}
-@media(hover:hover){.quick:hover,.tool-card:hover{border-color:#ffffff25;transform:translateY(-2px)}.btn:hover{filter:brightness(1.07);transform:translateY(-1px)}}
-@media(max-width:380px){#app{padding-left:13px;padding-right:13px}.hero{padding:22px 18px}.hero-actions{gap:8px}.btn{padding:11px 10px;font-size:11px}.quick{padding:13px;min-height:118px}.page-heading h1{font-size:31px}}
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{background:radial-gradient(ellipse at 10% -15%,#b9e87517,transparent 42%),var(--bg);overflow-x:hidden}
+button,input{font:inherit}button{cursor:pointer;color:inherit}button:focus-visible,input:focus-visible{outline:2px solid var(--lime);outline-offset:3px}
+#app{max-width:760px;margin:0 auto;min-height:100dvh;padding:calc(12px + env(safe-area-inset-top)) 13px calc(90px + var(--safe))}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 3px 14px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:-.6px;font-size:18px}.logo{width:39px;height:39px;border-radius:13px;background:var(--lime);color:#182014;display:grid;place-items:center;font-size:23px;font-weight:950;box-shadow:0 4px 0 #6b8e42}
+.brand small{display:block;font-size:10px;font-weight:650;color:var(--muted);letter-spacing:.2px}
+.pill{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #d8ff8326;background:#d8ff830a;border-radius:30px;color:#e1ffac;font-size:10px;font-weight:850;letter-spacing:.5px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px #d8ff83}
+.screen{display:none;animation:appear .24s ease both}.screen.active{display:block}
+@keyframes appear{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.hero{padding:21px 19px 19px;border:1px solid var(--line);border-radius:24px;background:linear-gradient(145deg,#20291c,#151b14 70%);box-shadow:inset 0 1px #ffffff0a}
+.eyebrow{display:flex;align-items:center;gap:7px;color:var(--lime);font-size:10px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase}
+h1{margin:12px 0 0;font-size:clamp(31px,8vw,44px);line-height:1.04;letter-spacing:-1.8px;font-weight:900}
+h1 span{color:var(--lime)}
+.lead{margin:11px 0 0;color:#bdc8b5;font-size:13px;line-height:1.65;max-width:540px}
+.actions{display:flex;gap:8px;margin-top:17px;flex-wrap:wrap}
+.btn{min-height:43px;border-radius:13px;border:1px solid #ffffff16;padding:10px 13px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:850;background:#ffffff08;transition:transform .15s,filter .15s}
+.btn:active{transform:scale(.98)}.btn.primary{background:var(--lime);border-color:var(--lime);color:#182014}.btn.secondary{background:#ffffff08;color:var(--text)}.btn.block{width:100%}
+.notice{display:flex;gap:10px;align-items:flex-start;padding:12px 13px;margin-top:12px;border:1px solid #f1cf7840;border-radius:15px;background:#e8b94a0b;color:#d7c9a4;font-size:11px;line-height:1.55}
+.notice b{color:#ffe2a0}.notice-icon{font-size:16px;line-height:1.2}
+.section-title{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:22px 2px 10px}.section-title h2{margin:0;font-size:19px;letter-spacing:-.5px}.section-title span{font-size:10px;color:var(--muted)}
+.frame-shell{margin-top:13px;overflow:hidden;border:1px solid #d8ff8326;border-radius:20px;background:#0b0e0a}
+.frame-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 12px;background:#1a2117;border-bottom:1px solid var(--line)}
+.frame-head strong{font-size:12px}.frame-head small{display:block;font-size:10px;color:var(--muted);font-weight:500}
+.frame-status{display:flex;align-items:center;gap:6px;color:#d9ff9a;font-size:10px;font-weight:800}
+iframe{display:block;width:100%;height:min(68dvh,760px);min-height:440px;border:0;background:#11170f}
+.fallback{padding:14px;text-align:center;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.6}
+.fallback .btn{margin-top:8px}
+.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:13px}
+.card{padding:14px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(145deg,#ffffff08,#ffffff03)}
+.card .ico{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#d8ff830e;border:1px solid #d8ff831c;font-size:17px;margin-bottom:9px}
+.card strong{display:block;font-size:12px}.card p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.6}
+.statuses{display:grid;gap:8px;margin-top:12px}.status{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid var(--line);border-radius:15px;background:#ffffff05}.status-mark{width:10px;height:10px;border-radius:50%;flex:0 0 10px;background:#7fd48b;box-shadow:0 0 10px #7fd48b44}.status:nth-child(2) .status-mark{background:#f1d46f;box-shadow:0 0 10px #f1d46f44}.status:nth-child(3) .status-mark{background:#ffad60;box-shadow:0 0 10px #ffad6044}.status:nth-child(4) .status-mark{background:#ff706c;box-shadow:0 0 10px #ff706c44}.status b{font-size:12px}.status small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.steps{display:grid;gap:9px;margin-top:12px}.step{display:flex;gap:12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#ffffff05}.num{flex:0 0 29px;width:29px;height:29px;display:grid;place-items:center;border-radius:10px;background:var(--lime);color:#192014;font-weight:950;font-size:12px}.step b{display:block;font-size:12px}.step p{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.6}
+.search{width:100%;height:45px;margin:13px 0 10px;padding:0 13px;border-radius:13px;border:1px solid var(--line);background:#0e120d;color:var(--text);font-size:12px;outline:none}.search:focus{border-color:#d8ff8355}.search::placeholder{color:#83907b}
+.city-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.city{padding:12px;border:1px solid var(--line);border-radius:13px;background:#ffffff05;text-align:left;font-size:12px;font-weight:750;display:flex;align-items:center;justify-content:space-between;gap:8px}.city span{color:var(--lime);font-size:15px}.muted{color:var(--muted);font-size:11px;line-height:1.65}
+.panel{padding:16px;border:1px solid var(--line);border-radius:18px;background:#ffffff05;margin-top:10px}.panel h3{margin:0 0 6px;font-size:14px}.panel p{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+.bottom{position:fixed;z-index:20;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 10px calc(8px + var(--safe));border-top:1px solid var(--line);background:#10140ff2;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.nav{min-height:49px;border:1px solid transparent;border-radius:13px;background:transparent;color:#8d9984;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10px;font-weight:750}.nav i{font-style:normal;font-size:18px;line-height:1.1}.nav.active{color:var(--lime);background:#d8ff830c;border-color:#d8ff8318}
+.toast{position:fixed;z-index:40;left:50%;bottom:calc(76px + var(--safe));transform:translate(-50%,8px);opacity:0;pointer-events:none;padding:9px 13px;border-radius:12px;background:#273020;color:#f5ffe9;border:1px solid #d8ff8330;font-size:11px;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,0)}
+.footer{text-align:center;margin:20px 0 5px;color:#73806a;font-size:10px}.footer b{color:#b9d78a}
+@media(min-width:620px){#app{padding-left:20px;padding-right:20px}.hero{padding:25px}.cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:360px){#app{padding-left:10px;padding-right:10px}.hero{padding:17px}.actions .btn{flex:1;padding:9px 8px;font-size:11px}.city-list{grid-template-columns:1fr}iframe{min-height:400px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
 <div id="app">
-<header class="topbar"><div class="brand"><div class="mark">✳</div><div>Pear CM<small>Чат-менеджер</small></div></div><div class="top-pill"><span class="live"></span> MINI APP</div></header>
+<header class="top">
+  <div class="brand"><div class="logo">↗</div><div>GDE.WTF<small>Карта тревог и радар БПЛА</small></div></div>
+  <div class="pill"><i class="dot"></i> НЕЗАВИСИМЫЙ СЕРВИС</div>
+</header>
 
-<section class="page active" id="page-home" data-page="home">
+<section class="screen active" data-screen="radar" id="screen-radar">
   <div class="hero">
-    <div class="kicker"><i>✦</i> YOUR CHAT. YOUR RULES.</div>
-    <h1>Твой чат.<br><span class="grad">Твои правила.</span></h1>
-    <p class="intro">Управляй группой без лишней суеты. Команды, модерация и полезные инструменты — в одном месте.</p>
-    <div class="hero-actions"><button class="btn primary" data-go="commands">⌕ Найти команду</button><button class="btn soft" id="addBot">＋ Добавить в чат</button></div><div class="hero-actions" style="margin-top:10px"><button class="btn soft" id="startBot">🚀 Начать пользоваться ботом</button><button class="btn soft" id="profileButton">👤 Мой профиль</button></div><div class="info-card" id="profileCard" style="display:none"><h3>👤 Твой Telegram-профиль</h3><p id="profileText">Профиль загружается…</p></div>
+    <div class="eyebrow"><span>●</span> ЖИВАЯ КАРТА · РОССИЯ</div>
+    <h1>Что происходит<br><span>рядом с тобой?</span></h1>
+    <p class="lead">Радар тревог, сообщения о дронах, взрывах и работе ПВО по городам. Открой карту, выбери город и следи за изменениями в реальном времени.</p>
+    <div class="actions"><button class="btn primary" id="openRadar">Открыть радар ↗</button><button class="btn secondary" id="refreshRadar">↻ Обновить карту</button></div>
   </div>
-  <div class="section-title"><h2>Быстрый доступ</h2><span>в одно касание</span></div>
-  <div class="quick-grid">
-    <button class="quick" data-go="commands" data-category="moderation"><span class="ico">🛡</span><strong>Модерация</strong><small>Мут, бан, варны и очистка</small></button>
-    <button class="quick" data-go="commands" data-category="chat"><span class="ico">☷</span><strong>Управление чатом</strong><small>Права, закрепы и настройки</small></button>
-    <button class="quick" data-go="commands" data-category="profile"><span class="ico">◉</span><strong>Профиль и топ</strong><small>Статистика и активность</small></button>
-    <button class="quick" data-go="tools"><span class="ico">✧</span><strong>Шпаргалки</strong><small>Примеры команд и подсказки</small></button>
+  <div class="notice"><span class="notice-icon">ⓘ</span><div><b>Важно:</b> GDE.WTF — независимый сервис, а не официальная система оповещения. При сирене или сообщении МЧС следуй официальным инструкциям. Возможны задержки и сбои данных.</div></div>
+  <div class="frame-shell">
+    <div class="frame-head"><div><strong>GDE.WTF · Радар</strong><small>Интерактивная карта с сайта проекта</small></div><div class="frame-status"><i class="dot"></i> LIVE</div></div>
+    <iframe id="radarFrame" title="Живая карта GDE.WTF" src="https://map.gde.wtf/" loading="eager" allow="geolocation; clipboard-read; clipboard-write; notifications" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <div class="fallback">Если карта не отображается внутри Telegram, открой её отдельно — там доступны вход, выбор города, уведомления и отметки.<br><button class="btn primary" id="openRadarFallback">Открыть карту целиком ↗</button></div>
   </div>
-  <button class="strip" data-go="commands"><span class="strip-icon">⌕</span><span><strong>Все команды в каталоге</strong><small>Поиск по названию и назначению</small></span><span class="arrow">→</span></button><div class="info-card" style="margin-top:13px"><h3>⭐ Избранные команды</h3><p>Отмечай команды звёздочкой в каталоге — они сохранятся на этом устройстве.</p><div id="favoritesList"></div></div>
-  <div class="section-title"><h2>Ещё один проект</h2><span>от автора</span></div>
-  <div class="vpn-card"><div class="vpn-symbol">↗</div><h3>VPN от автора Pear CM</h3><p>Тарифы, подключение и оплата — в отдельном Telegram-боте. Открой, чтобы посмотреть условия.</p><button class="btn primary full" id="vpnButton">Открыть VPN-бота <span>↗</span></button></div>
-  <div class="footer"><b>✳ PEAR CM</b><br>Инструменты для чатов. Ничего лишнего.</div>
+  <div class="section-title"><h2>Что показывает радар</h2><span>основные функции</span></div>
+  <div class="cards">
+    <article class="card"><div class="ico">◉</div><strong>Живая карта</strong><p>Метки по районам и улицам; свежие события выделяются ярче.</p></article>
+    <article class="card"><div class="ico">⌁</div><strong>Статус города</strong><p>Тихо, внимание, дроны или взрывы — отдельный статус для города.</p></article>
+    <article class="card"><div class="ico">◎</div><strong>Метки жителей</strong><p>Сообщи о том, что слышишь, через интерфейс карты.</p></article>
+    <article class="card"><div class="ico">✓</div><strong>Подтверждение</strong><p>По описанию проекта точка подтверждается метками трёх разных людей.</p></article>
+    <article class="card"><div class="ico">◷</div><strong>Лайв и история</strong><p>Последние минуты или расширенный период истории.</p></article>
+    <article class="card"><div class="ico">♧</div><strong>Уведомления</strong><p>Настрой уведомления для выбранного города на сайте.</p></article>
+  </div>
+  <div class="footer"><b>GDE.WTF</b> · Независимый сервис · Бесплатный радар</div>
 </section>
 
-<section class="page" id="page-commands" data-page="commands">
-  <div class="page-heading"><div class="kicker"><i>⌕</i> КОМАНДНЫЙ ЦЕНТР</div><h1>Команды<span class="grad">.</span></h1><p>Найди нужное, скопируй и отправь в чат. Для модерации часто нужно ответить на сообщение участника.</p></div>
-  <div class="searchbox"><span>⌕</span><input class="search" id="search" placeholder="Например: мут, профиль, очистка…" autocomplete="off" aria-label="Поиск по командам"></div>
-  <div class="filters" id="filters"><button class="filter active" data-filter="all">Все</button><button class="filter" data-filter="moderation">Модерация</button><button class="filter" data-filter="chat">Чат</button><button class="filter" data-filter="profile">Профиль</button><button class="filter" data-filter="utility">Инструменты</button><button class="filter" data-filter="owner">Служебные</button></div>
-  <div style="display:flex;align-items:center;justify-content:space-between;margin:0 2px 10px"><span style="color:var(--muted);font-size:11px">Каталог команд Pear CM</span><span class="count" id="count">0 команд</span></div>
-  <div class="command-list" id="commandList" aria-live="polite"></div>
-  <div class="info-card"><h3>Команда не сработала?</h3><p>Проверь, что бот добавлен в группу и у него есть нужные права. Команды модерации отправляй в группе; для действий над участником используй ответ на его сообщение.</p></div>
-</section>
-
-<section class="page" id="page-tools" data-page="tools">
-  <div class="page-heading"><div class="kicker"><i>✧</i> ПОД РУКОЙ</div><h1>Инструменты<span class="grad">.</span></h1><p>Короткие примеры, чтобы не вспоминать синтаксис каждый раз.</p></div>
-  <div class="tool-list">
-    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🔇</span><h3>Ограничить участника</h3></div><p>Ответь на сообщение человека командой с длительностью и причиной.</p><code class="example">/mute 1h спам</code><button class="btn soft full" style="margin-top:10px" data-copy="/mute 1h спам">⧉ Скопировать пример</button></article>
-    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🧹</span><h3>Очистить сообщения</h3></div><p>Укажи количество последних сообщений для удаления, если команда поддерживает этот формат.</p><code class="example">-смс 100</code><button class="btn soft full" style="margin-top:10px" data-copy="-смс 100">⧉ Скопировать пример</button></article>
-    <article class="tool-card"><div class="tool-head"><span class="tool-ico">🛡</span><h3>Проверить права</h3></div><p>Посмотри, хватает ли боту прав для модерации, удаления и закрепления.</p><code class="example">/checkrights</code><button class="btn soft full" style="margin-top:10px" data-copy="/checkrights">⧉ Скопировать пример</button></article>
-    <article class="tool-card"><div class="tool-head"><span class="tool-ico">📊</span><h3>Активность</h3></div><p>Покажи рейтинг или список недавно замеченных участников группы.</p><code class="example">/top · /activity · /online</code><button class="btn soft full" style="margin-top:10px" data-copy="/top">⧉ Скопировать /top</button></article>
+<section class="screen" data-screen="cities" id="screen-cities">
+  <div class="hero">
+    <div class="eyebrow">⌖ ГОРОДА</div><h1>Выбери<br><span>свой город.</span></h1>
+    <p class="lead">На карте у каждого города свой уровень тревоги. Соседний город не меняет статус твоего.</p>
+    <button class="btn primary block" style="margin-top:16px" id="chooseCity">Выбрать город на радаре ↗</button>
   </div>
-  <div class="info-card"><h3>Небольшая подсказка</h3><p>Длительность можно задавать по-русски или по-английски: <b>10м</b>, <b>1ч</b>, <b>2д</b>, <b>30m</b>, <b>1h</b>. Точный формат зависит от конкретной команды.</p></div>
+  <input class="search" id="citySearch" placeholder="Найти город…" autocomplete="off" aria-label="Поиск города">
+  <div class="city-list" id="cityList"></div>
+  <p class="muted" style="margin:12px 2px 0">Это быстрые варианты для перехода. Полный список и корректный выбор города доступны в самом радаре.</p>
+  <div class="footer"><b>GDE.WTF</b> · Карта тревог по городам</div>
 </section>
 
-<section class="page" id="page-about" data-page="about">
-  <div class="page-heading"><div class="kicker"><i>✳</i> PEAR CM</div><h1>Просто.<br><span class="grad">Удобно.</span></h1><p>Компактное пространство для управления Telegram-группами.</p></div>
-  <div class="info-card"><h3>Как начать</h3><p>1. Добавь Pear CM в свою группу.<br>2. Выдай боту необходимые права администратора.<br>3. Включи только нужные разрешения: удаление сообщений, ограничение участников и управление сообщениями.<br>4. Открой вкладку «Команды» или отправь /help.</p><button class="btn primary full" style="margin-top:14px" id="addBot2">＋ Добавить Pear CM в группу</button></div>
-  <div class="info-card"><h3>✅ Чек-лист настройки</h3><p>Отмечай пункты по мере настройки. Прогресс сохраняется на устройстве.</p><div id="permissionChecklist" style="display:grid;gap:11px;margin-top:13px"><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" data-permission="added"> Бот добавлен в группу</label><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" data-permission="admin"> Боту выданы права администратора</label><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" data-permission="delete"> Включено удаление сообщений (если нужно)</label><label style="display:flex;gap:10px;align-items:center;font-size:13px"><input type="checkbox" data-permission="restrict"> Включено ограничение участников (если нужно)</label></div><p id="permissionProgress" style="margin-top:12px;color:var(--mint)">Готово: 0 из 4</p></div>
-  <div class="info-card"><h3>Почему некоторые команды недоступны?</h3><p>Часть функций работает только в группах и только для администраторов. Действия вроде мута, бана, удаления и закрепления зависят от разрешений, выданных боту в Telegram.</p></div>
-  <div class="info-card"><h3>Обратная связь</h3><p>Идею или предложение можно отправить через команду <b>/suggest</b> в боте. Справка по функциям доступна через <b>/help</b>.</p></div>
-  <div class="vpn-card" style="margin-top:13px"><div class="vpn-symbol">↗</div><h3>VPN-проект автора</h3><p>Посмотри тарифы и условия подключения в отдельном боте.</p><button class="btn primary full" id="vpnButton2">Открыть VPN-бота ↗</button></div>
-  <div class="footer"><b>✳ PEAR CM</b><br>Сделано для удобства, без лишнего шума.</div>
+<section class="screen" data-screen="how" id="screen-how">
+  <div class="hero"><div class="eyebrow">✳ КАК ЭТО РАБОТАЕТ</div><h1>Просто<br><span>и понятно.</span></h1><p class="lead">Карта объединяет открытые городские источники и отметки пользователей. Это дополнительный ориентир, а не гарантия полной или мгновенной информации.</p></div>
+  <div class="section-title"><h2>Три шага</h2><span>начало работы</span></div>
+  <div class="steps">
+    <article class="step"><div class="num">1</div><div><b>Войди через Telegram или MAX</b><p>На сайте откроется бот подтверждения. Сервис указывает, что для входа требуется номер российского формата +7 9xx; ознакомься с политикой конфиденциальности перед передачей данных.</p></div></article>
+    <article class="step"><div class="num">2</div><div><b>Выбери город и смотри карту</b><p>Проверь верхнюю строку статуса, метки и активность по районам. Можно переключать лайв и историю.</p></div></article>
+    <article class="step"><div class="num">3</div><div><b>Сообщи, если слышишь событие</b><p>Через кнопку сообщения на карте поставь метку по геопозиции. Подтверждение помогает снизить влияние одиночных ложных отметок.</p></div></article>
+  </div>
+  <div class="section-title"><h2>Четыре состояния</h2><span>статус города</span></div>
+  <div class="statuses">
+    <div class="status"><i class="status-mark"></i><div><b>Тихо</b><small>За последние минуты нет заметной активности.</small></div></div>
+    <div class="status"><i class="status-mark"></i><div><b>Внимание</b><small>Появились первые сообщения, обстановка меняется.</small></div></div>
+    <div class="status"><i class="status-mark"></i><div><b>Дроны</b><small>Подтверждённая активность над городом.</small></div></div>
+    <div class="status"><i class="status-mark"></i><div><b>Взрывы</b><small>Сообщения о взрывах или работе ПВО.</small></div></div>
+  </div>
+  <div class="panel"><h3>Укрытия рядом</h3><p>На сайте описана карта укрытий и пеший маршрут для Ростова-на-Дону; раздел обозначен как бета с постепенным открытием. Доступность зависит от текущего состояния сервиса.</p></div>
+  <div class="panel"><h3>Конфиденциальность</h3><p>В описании сервиса указаны данные Telegram-аккаунта и пользовательские метки. На радаре есть политика конфиденциальности и функция удаления аккаунта и данных. Перед входом изучи условия непосредственно на сайте.</p><button class="btn secondary block" style="margin-top:12px" id="privacy">Открыть политику ↗</button></div>
+  <div class="footer"><b>GDE.WTF</b> · Не заменяет официальные оповещения</div>
+</section>
+
+<section class="screen" data-screen="about" id="screen-about">
+  <div class="hero"><div class="eyebrow">GDE.WTF</div><h1>Быть<br><span>в курсе.</span></h1><p class="lead">Независимая карта тревог и радар БПЛА по городам. Бесплатный доступ к карте, статусам, районам и базовым уведомлениям.</p><div class="actions"><button class="btn primary" id="aboutOpenRadar">Открыть радар ↗</button><button class="btn secondary" id="aboutWebsite">Сайт проекта ↗</button></div></div>
+  <div class="panel"><h3>Бесплатно и без рекламы</h3><p>Главная страница проекта указывает, что сервис бесплатный. На радаре также описан GDE.WTF+ с дополнительными удобствами; там указано, что подписка ещё готовится. Проверяй актуальные условия на сайте.</p></div>
+  <div class="panel"><h3>Android</h3><p>На сайте есть ссылка на приложение для Android в RuStore. Для iPhone App Store обозначен как «скоро».</p><button class="btn secondary block" style="margin-top:12px" id="android">Открыть RuStore ↗</button></div>
+  <div class="panel"><h3>Поддержать проект</h3><p>На радаре есть раздел поддержки проекта. Если хочешь помочь с серверами, картами и уведомлениями, открой сайт и используй доступные там варианты.</p></div>
+  <div class="panel"><h3>Связь и ошибки</h3><p>Для ошибки на карте, доступа или предложения используй раздел «Написать модерации» на самом радаре. На главной странице также указан контакт @pravy_ru.</p><button class="btn secondary block" style="margin-top:12px" id="contact">Открыть сайт и контакты ↗</button></div>
+  <div class="notice"><span class="notice-icon">ⓘ</span><div><b>Неофициальный источник.</b> Данные могут быть неполными или запаздывать. Не используй Mini App как единственный источник сведений об угрозе.</div></div>
+  <div class="footer"><b>GDE.WTF</b> · Независимый сервис</div>
 </section>
 </div>
 
-<nav class="bottom-nav" aria-label="Навигация приложения">
-  <button class="nav-item active" data-tab="home"><span class="nav-icon">⌂</span><span>Главная</span></button>
-  <button class="nav-item" data-tab="commands"><span class="nav-icon">⌕</span><span>Команды</span></button>
-  <button class="nav-item" data-tab="tools"><span class="nav-icon">✧</span><span>Инструменты</span></button>
-  <button class="nav-item" data-tab="about"><span class="nav-icon">◉</span><span>О боте</span></button>
+<nav class="bottom" aria-label="Навигация">
+  <button class="nav active" data-tab="radar"><i>⌁</i>Радар</button>
+  <button class="nav" data-tab="cities"><i>⌖</i>Города</button>
+  <button class="nav" data-tab="how"><i>ⓘ</i>Как работает</button>
+  <button class="nav" data-tab="about"><i>↗</i>О проекте</button>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 const tg=window.Telegram&&window.Telegram.WebApp;
-try{if(tg){tg.ready();tg.expand();tg.setHeaderColor&&tg.setHeaderColor('#0b0d15');tg.setBackgroundColor&&tg.setBackgroundColor('#0b0d15');tg.disableVerticalSwipes&&tg.disableVerticalSwipes()}}catch(e){}
-const catalog=[
-['/help','Справка по функциям и командам','chat'],['/commands','Список команд Pear CM','chat'],
-['/admins','Показать администраторов группы','chat'],['/checkrights','Проверить права бота в группе','chat'],
-['/openchat','Открыть чат для сообщений','chat'],['/closechat','Закрыть чат для сообщений','chat'],
-['/info','Информация о чате или участнике','chat'],['/pin','Закрепить сообщение (ответом)','chat'],['/unpin','Открепить сообщение','chat'],
-['/mute','Ограничить участника (ответом)','moderation'],['/unmute','Снять ограничение (ответом)','moderation'],
-['/ban','Заблокировать участника (ответом)','moderation'],['/unban','Снять бан (ответом)','moderation'],
-['/kick','Исключить участника (ответом)','moderation'],['/warn','Выдать предупреждение (ответом)','moderation'],
-['/unwarn','Снять предупреждение (ответом)','moderation'],['/clearwarns','Очистить предупреждения участника','moderation'],
-['/del','Удалить сообщение (ответом)','moderation'],['/purge','Очистить несколько сообщений','moderation'],
-['/antiflood','Настройки защиты от флуда','moderation'],['/antispam','Настройки защиты от спама','moderation'],['/antiraid','Защита от массового входа','moderation'],
-['/profile','Открыть профиль участника','profile'],['/warns','Посмотреть свои предупреждения','profile'],
-['/top','Рейтинг активных участников','profile'],['/activity','Активность участников','profile'],['/online','Недавно замеченные участники','profile'],
-['/time','Текущее время','utility'],['/calc','Калькулятор выражений','utility'],['/random','Случайное число','utility'],
-['/dice','Бросить кубик','utility'],['/date','Дата и московское время','utility'],['/suggest','Отправить предложение разработчику','utility'],
-['/quote','Цитата из сообщения (ответом)','utility'],['/favorites','Сохранить сообщение в избранное (ответом)','utility'],
-['/achievements','Посмотреть достижения','profile'],['/language','Информация о языке интерфейса','utility'],['/notifications','Информация об уведомлениях','utility'],
-['/report','Отправить жалобу','utility'],['/appeal','Отправить апелляцию','utility'],['/marry','Предложение брака (ответом)','profile'],
-['/acceptmarry','Принять предложение брака','profile'],['/marriage','Информация о браке','profile'],['/divorce','Расторгнуть брак','profile'],
-['/settrigger','Управление триггером','chat'],['/history','История чата / участника','chat'],['/auditlog','Журнал действий (при наличии прав)','chat'],
-['/owner','Панель владельца бота','owner'],['/status','Статус бота','owner'],['/ping','Проверка связи с Telegram и БД','owner'],
-['/diag','Диагностика конфигурации','owner'],['/globalstats','Глобальная статистика','owner'],['/modules','Состояние модулей','owner'],
-['/version','Версия бота','owner'],['/logs','Последние записи аудита','owner'],['/load','Информация о нагрузке','owner'],
-['/maintenance','Режим техобслуживания','owner'],['/operator','Выдать доступ оператору','owner'],['/revokeoperator','Отозвать доступ оператора','owner'],
-['/operators','Список операторов','owner'],['/globalban','Глобальный запрет внутри бота','owner'],['/globalunban','Снять глобальный запрет','owner'],
-['/exportstats','Экспорт статистики в JSON','owner'],['/permissions','Проверить разрешения бота','owner'],['/audit','Журнал аудита','owner'],
-['/reports','Очередь жалоб','owner'],['/appeals','Очередь апелляций','owner'],['/closereport','Закрыть жалобу','owner'],['/closeappeal','Закрыть апелляцию','owner']
-];
-let activeFilter='all',toastTimer;let favorites=[];try{favorites=JSON.parse(localStorage.getItem('pearFavorites')||'[]')}catch(e){favorites=[]}
-const list=document.getElementById('commandList'),search=document.getElementById('search'),toast=document.getElementById('toast');
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function notify(s){toast.textContent=s;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1750)}
-function renderCommands(){const q=(search.value||'').trim().toLowerCase();const items=catalog.filter(x=>(activeFilter==='all'||x[2]===activeFilter)&&(!q||(x[0]+' '+x[1]).toLowerCase().includes(q)));document.getElementById('count').textContent=items.length+' '+(items.length===1?'команда':items.length<5?'команды':'команд');list.innerHTML=items.length?items.map((x,i)=>'<div class="command" style="animation-delay:'+Math.min(i*12,120)+'ms"><div class="command-main"><code>'+esc(x[0])+'</code><p>'+esc(x[1])+'</p></div><button class="copy" data-copy="'+esc(x[0])+'" aria-label="Скопировать '+esc(x[0])+'">⧉</button><button class="copy" data-fav="'+esc(x[0])+'" aria-label="Добавить в избранное">'+(favorites.includes(x[0])?'★':'☆')+'</button></div>').join(''):'<div class="empty">Ничего не найдено.<br>Попробуй другой запрос.</div>';renderFavorites()}
-function go(name){document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.dataset.page===name));document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
+try{if(tg){tg.ready();tg.expand();tg.setHeaderColor&&tg.setHeaderColor('#10140f');tg.setBackgroundColor&&tg.setBackgroundColor('#10140f');tg.disableVerticalSwipes&&tg.disableVerticalSwipes()}}catch(e){}
+const MAP='https://map.gde.wtf/',SITE='https://gde.wtf/';
+const cities=['Ростов-на-Дону','Москва','Санкт-Петербург','Краснодар','Таганрог','Батайск','Азов','Новочеркасск','Волгоград','Белгород','Курск','Воронеж','Брянск','Смоленск','Новороссийск','Сочи','Симферополь','Севастополь','Шахты','Гуково','Екатеринбург','Казань','Нижний Новгород','Новосибирск','Челябинск','Омск','Самара','Уфа','Красноярск','Пермь','Саратов','Тюмень','Иркутск','Хабаровск','Владивосток','Ярославль','Тула','Тверь','Калининград','Мурманск','Анапа','Геленджик','Ейск','Керчь','Махачкала','Ставрополь','Пятигорск','Тамбов','Рязань','Пенза','Калуга','Владимир','Кострома','Архангельск','Улан-Удэ','Якутск','Абакан','Сургут','Нижневартовск','Магнитогорск','Грозный','Чебоксары','Йошкар-Ола','Саранск','Великий Новгород','Курган','Оренбург','Тольятти','Ижевск','Астрахань','Липецк','Псков','Томск','Кемерово','Барнаул','Благовещенск','Чита','Южно-Сахалинск','Петропавловск-Камчатский'];
+const toast=document.getElementById('toast');let toastTimer;
+function notify(s){toast.textContent=s;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),1800)}
+function openUrl(url){try{if(tg&&tg.openLink)tg.openLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}}
+function openMap(){openUrl(MAP)}
+function go(tab){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===tab));document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.tab)));
-document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.category){activeFilter=b.dataset.category;document.querySelectorAll('.filter').forEach(f=>f.classList.toggle('active',f.dataset.filter===activeFilter));renderCommands()}go(b.dataset.go)}));
-document.querySelectorAll('.filter').forEach(b=>b.addEventListener('click',()=>{activeFilter=b.dataset.filter;document.querySelectorAll('.filter').forEach(f=>f.classList.toggle('active',f===b));renderCommands();try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}));
-search.addEventListener('input',renderCommands);
-async function copyText(value){try{if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(value);else{const t=document.createElement('textarea');t.value=value;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}notify('Скопировано: '+value);try{tg&&tg.HapticFeedback&&tg.HapticFeedback.notificationOccurred('success')}catch(e){}}catch(e){notify('Не удалось скопировать')}}
-document.addEventListener('click',e=>{const b=e.target.closest('[data-copy]');if(b){copyText(b.dataset.copy);return}const fav=e.target.closest('[data-fav]');if(fav){const command=fav.dataset.fav;favorites=favorites.includes(command)?favorites.filter(x=>x!==command):[...favorites,command];localStorage.setItem('pearFavorites',JSON.stringify(favorites));renderCommands()}});function renderFavorites(){const el=document.getElementById('favoritesList');if(!el)return;const items=catalog.filter(x=>favorites.includes(x[0]));el.innerHTML=items.length?items.map(x=>'<div class="command"><div class="command-main"><code>'+esc(x[0])+'</code><p>'+esc(x[1])+'</p></div><button class="copy" data-copy="'+esc(x[0])+'">⧉</button><button class="copy" data-fav="'+esc(x[0])+'">★</button></div>').join(''):'<p>Пока пусто. Нажми ☆ у команды, чтобы сохранить её.</p>'}
-function openTelegram(url){try{if(tg&&tg.openTelegramLink)tg.openTelegramLink(url);else window.open(url,'_blank','noopener')}catch(e){window.location.href=url}}
-document.getElementById('addBot').addEventListener('click',()=>openTelegram('https://t.me/pear_cm_bot?startgroup=true'));document.getElementById('startBot').addEventListener('click',()=>openTelegram('https://t.me/pear_cm_bot?start=menu'));document.getElementById('profileButton').addEventListener('click',()=>{const card=document.getElementById('profileCard');const text=document.getElementById('profileText');const user=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user;card.style.display='block';text.innerHTML=user?('Имя: <b>'+esc([user.first_name,user.last_name].filter(Boolean).join(' '))+'</b><br>Telegram ID: <code>'+esc(String(user.id))+'</code><br>Username: <b>'+(user.username?'@'+esc(user.username):'не указан')+'</b><br><small>Статистику сообщений, ранг и предупреждения покажет команда /profile в чате.</small>'):'Открой Mini App внутри Telegram, чтобы увидеть данные своего аккаунта. Статистику смотри командой /profile.';card.scrollIntoView({behavior:'smooth',block:'center'});try{tg&&tg.HapticFeedback&&tg.HapticFeedback.impactOccurred('light')}catch(e){}});
-document.getElementById('addBot2').addEventListener('click',()=>openTelegram('https://t.me/pear_cm_bot?startgroup=true'));
-document.getElementById('vpnButton').addEventListener('click',()=>openTelegram('https://t.me/awesomeproxyvpn_bot'));
-document.getElementById('vpnButton2').addEventListener('click',()=>openTelegram('https://t.me/awesomeproxyvpn_bot'));const permissionChecks=[...document.querySelectorAll('[data-permission]')];let savedPermissions={};try{savedPermissions=JSON.parse(localStorage.getItem('pearPermissions')||'{}')}catch(e){savedPermissions={}}function updatePermissionProgress(){let done=0;permissionChecks.forEach(c=>{c.checked=!!savedPermissions[c.dataset.permission];if(c.checked)done++});const progress=document.getElementById('permissionProgress');if(progress)progress.textContent='Готово: '+done+' из '+permissionChecks.length+(done===permissionChecks.length?' · Всё настроено!':'')}permissionChecks.forEach(c=>c.addEventListener('change',()=>{savedPermissions[c.dataset.permission]=c.checked;localStorage.setItem('pearPermissions',JSON.stringify(savedPermissions));updatePermissionProgress();try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}));updatePermissionProgress();
-renderCommands();
+['openRadar','openRadarFallback','chooseCity','aboutOpenRadar'].forEach(id=>document.getElementById(id).addEventListener('click',openMap));
+document.getElementById('refreshRadar').addEventListener('click',()=>{const f=document.getElementById('radarFrame');f.src=MAP;notify('Перезагружаю радар…')});
+document.getElementById('aboutWebsite').addEventListener('click',()=>openUrl(SITE));
+document.getElementById('contact').addEventListener('click',()=>openUrl(MAP));
+document.getElementById('privacy').addEventListener('click',()=>openUrl(MAP));
+document.getElementById('android').addEventListener('click',()=>openUrl('https://www.rustore.ru/'));
+const cityList=document.getElementById('cityList'),citySearch=document.getElementById('citySearch');
+function renderCities(){const q=citySearch.value.trim().toLocaleLowerCase('ru');const found=cities.filter(c=>c.toLocaleLowerCase('ru').includes(q));cityList.innerHTML=found.map(c=>'<button class="city" data-city="'+c.replace(/"/g,'&quot;')+'">'+c+'<span>↗</span></button>').join('')||'<p class="muted">Не найдено. Открой радар, чтобы воспользоваться полным списком городов.</p>'}
+citySearch.addEventListener('input',renderCities);cityList.addEventListener('click',e=>{if(e.target.closest('[data-city]'))openMap()});renderCities();
 </script>
 </body>
 </html>
