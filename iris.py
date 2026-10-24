@@ -8083,39 +8083,35 @@ async def gather_cmd(message: Message) -> None:
             total = len(chunks)
             messages = [build_heading(i + 1, total) + chunk for i, chunk in enumerate(chunks)]
         if photo_file_id:
-            # Avoid posting the same announcement twice. Prefer a single photo
-            # message with the full participant list when Telegram's caption limit allows it.
-            if len(messages) == 1 and len(messages[0]) <= 1024:
+            # Telegram photo captions are limited to 1024 characters. Put every
+            # participant mention into the same photo message using a compact caption.
+            # The long announcement text cannot coexist with 68+ mentions in that limit.
+            compact_caption = (
+                f"📣 <b>ОБЩИЙ СБОР · {len(mentions)}</b>\n"
+                + " ".join(mentions)
+            )
+            if len(compact_caption) <= 1024:
                 await message.answer_photo(
                     photo=photo_file_id,
-                    caption=messages[0],
+                    caption=compact_caption,
                     parse_mode=ParseMode.HTML,
                 )
                 messages = []
             else:
-                photo_caption = (
-                    f"📣 <b>ОБЩИЙ СБОР</b>\n"
-                    f"🔔 <b>{safe_notice}</b>\n"
-                    f"👥 Кого зовём: <b>{len(mentions)}</b>"
+                # If Telegram's caption limit is exceeded, prioritize the user's
+                # explicit requirement: one message containing all pings. Sending
+                # a text message is preferable to splitting the call into several.
+                single_call = (
+                    f"📣 <b>ОБЩИЙ СБОР · {len(mentions)}</b>\n"
+                    + " ".join(mentions)
                 )
-                await message.answer_photo(
-                    photo=photo_file_id,
-                    caption=photo_caption[:1024],
-                    parse_mode=ParseMode.HTML,
-                )
-                # The photo already contains the announcement heading; send only
-                # the participant list below it, without repeating the title.
-                messages = []
-                body_chunk = ""
-                for item in mentions:
-                    separator = " " if body_chunk else ""
-                    if len(body_chunk) + len(separator) + len(item) > 3800 and body_chunk:
-                        messages.append(body_chunk)
-                        body_chunk = ""
-                        separator = ""
-                    body_chunk += separator + item
-                if body_chunk:
-                    messages.append(body_chunk)
+                if len(single_call) <= 4096:
+                    await message.answer(single_call, parse_mode=ParseMode.HTML)
+                    messages = []
+                else:
+                    raise ValueError(
+                        f"All {len(mentions)} participant mentions exceed Telegram's one-message limit"
+                    )
         for outgoing in messages:
             await message.answer(outgoing, parse_mode=ParseMode.HTML)
         await audit_wait(message.chat.id, message.from_user.id if message.from_user else 0,
