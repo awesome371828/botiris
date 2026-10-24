@@ -468,7 +468,7 @@ async def gdewtf_command(message: Message) -> None:
                 mods = [m for m in mods if query in " ".join(str(m.get(k) or "") for k in ("pub", "username", "name", "nick", "city_name", "city")).casefold()]
                 rows = [_mod_line(m) for m in mods[:20]]
                 title = f"🔎 <b>Поиск · найдено {len(mods)}</b>"
-            await message.answer(title + "\\n\\n" + ("\\n\\n".join(rows) if rows else "Ничего не найдено.")[:3700])
+            await message.answer(title + "\n\n" + ("\n\n".join(rows) if rows else "Ничего не найдено.")[:3700])
             return
 
         if action in {"модераторы", "mods"}:
