@@ -1,5 +1,5 @@
 """
-Pear / Iris-style Telegram group manager — independent implementation.
+GDE.WTF — бот проекта для управления сообществами и модерации в Telegram.
 Python 3.11+, aiogram 3, Supabase.
 Set TELEGRAM_BOT_TOKEN, SUPABASE_URL and SUPABASE_SERVICE_KEY in environment.
 """
@@ -71,7 +71,7 @@ def acquire_single_instance_lock() -> None:
     except BlockingIOError as exc:
         handle.close()
         raise RuntimeError(
-            f"Another Pear CM process already holds {lock_path}; refusing duplicate polling"
+            f"Another GDE.WTF process already holds {lock_path}; refusing duplicate polling"
         ) from exc
     _PROCESS_LOCK_HANDLE = handle  # Keep the descriptor open for the entire process lifetime.
     log.info("Single-instance polling lock acquired: %s", lock_path)
@@ -211,7 +211,7 @@ def _error_text(data: dict[str, Any]) -> str:
     if err == "api_unavailable" and detail == "connection":
         return "Не удалось подключиться к GDE.WTF (DNS/TCP/TLS). Проверь доступность домена с хоста Relax Dev."
     if err == "api_unavailable" and detail == "timeout":
-        return "GDE.WTF не ответил за 8 секунд. Это тайм-аут внешнего API, а не ошибка команды Pear CM."
+        return "GDE.WTF не ответил за 8 секунд. Это тайм-аут внешнего API."
     messages = {
         "api_key_not_configured": "Не задан секрет GDEWTF_API_KEY в окружении хоста.",
         "api_unavailable": "GDE.WTF API недоступен или не ответил за 8 секунд.",
@@ -447,7 +447,7 @@ async def gdewtf_command(message: Message) -> None:
                 await message.answer("Формат: <code>!варн @username причина</code>")
                 return
             q, reason = rest[0], " ".join(rest[1:])
-            data = await _api("POST", "/warn", body={"q": q, "reason": reason, "by": f"Pear CM / {message.from_user.id}"})
+            data = await _api("POST", "/warn", body={"q": q, "reason": reason, "by": f"GDE.WTF / {message.from_user.id}"})
         elif action in {"снятьварны", "снять-варны", "warnclear"}:
             if not rest:
                 await message.answer("Формат: <code>!снятьварны @username [index]</code>")
@@ -636,7 +636,7 @@ _BOT_COMMAND_TOPIC_TOGGLES = re.compile(r"^\s*([+-])боткоманд\s*$", re.
 
 
 async def bot_commands_topic_toggle(message: Message) -> None:
-    """Enable/disable Pear CM commands for the current Telegram forum topic."""
+    """Enable/disable GDE.WTF commands for the current Telegram forum topic."""
     match = _BOT_COMMAND_TOPIC_TOGGLES.fullmatch(message.text or "")
     if not match or not message.from_user or not is_group(message):
         return
@@ -644,7 +644,7 @@ async def bot_commands_topic_toggle(message: Message) -> None:
     try:
         member = await get_chat_member_cached(bot, message.chat.id, message.from_user.id)
         if not member or member.status not in {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR}:
-            await message.answer("⛔ Включать и отключать команды Pear CM в теме могут только администраторы чата.")
+            await message.answer("⛔ Включать и отключать команды GDE.WTF в теме могут только администраторы чата.")
             return
     except Exception:
         log.exception("Could not verify topic-toggle permissions chat=%s user=%s", message.chat.id, message.from_user.id)
@@ -653,13 +653,13 @@ async def bot_commands_topic_toggle(message: Message) -> None:
 
     if match.group(1) == "+":
         await message.answer(
-            "✅ <b>Pear CM работает во всех темах этой группы.</b>\\n"
+            "✅ <b>GDE.WTF работает во всех темах этой группы.</b>\\n"
             "Команды, модерация и ответы доступны одинаково во всех разделах. "
             "Эта команда больше не ограничивает другие темы."
         )
     else:
         await message.answer(
-            "ℹ️ <b>Pear CM продолжает работать во всех темах.</b>\\n"
+            "ℹ️ <b>GDE.WTF продолжает работать во всех темах.</b>\\n"
             "Отключение команд по отдельным темам убрано, чтобы команды не пропадали "
             "в «Общалке», «Новостях» и других разделах."
         )
@@ -902,7 +902,7 @@ class CommandRateLimitMiddleware(BaseMiddleware):
             if event.chat.type == ChatType.PRIVATE and now - notice_at >= 10:
                 _GLOBAL_BAN_NOTICE_LAST[event.from_user.id] = now
                 try:
-                    await event.answer("⛔ Доступ к функциям Pear CM для этого аккаунта ограничен.")
+                    await event.answer("⛔ Доступ к функциям GDE.WTF для этого аккаунта ограничен.")
                 except Exception:
                     pass
             return None
@@ -1449,15 +1449,15 @@ async def await_bot_rights_hint(chat_id: int) -> str:
         me = await get_bot_me_cached()
         member = await bot.get_chat_member(chat_id, me.id)
         if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-            return "⚠️ <b>Pear CM пока не администратор.</b> Назначь его администратором для команд модерации."
+            return "⚠️ <b>GDE.WTF пока не администратор.</b> Назначь его администратором для команд модерации."
         missing = []
         if not getattr(member, "can_delete_messages", False):
             missing.append("удаление сообщений")
         if not getattr(member, "can_restrict_members", False):
             missing.append("ограничение/блокировка участников")
         if missing:
-            return "⚠️ <b>Pear CM уже администратор</b>, но не хватает прав: " + ", ".join(missing) + "."
-        return "✅ <b>Pear CM уже администратор</b>; основные права модерации включены."
+            return "⚠️ <b>GDE.WTF уже администратор</b>, но не хватает прав: " + ", ".join(missing) + "."
+        return "✅ <b>GDE.WTF уже администратор</b>; основные права модерации включены."
     except Exception:
         return "⚠️ Не удалось проверить права автоматически. Напиши /checkrights в группе."
 
@@ -1851,11 +1851,11 @@ async def safe_error(message: Message, exc: Exception) -> None:
     detail = str(exc or "").strip()
     lowered = detail.lower()
     if isinstance(exc, TelegramForbiddenError):
-        user_text = "⛔ Telegram запретил действие: у бота нет доступа к чату или необходимых прав. Проверьте, что Pear CM — администратор и у него включено «Ограничение участников»."
+        user_text = "⛔ Telegram запретил действие: у бота нет доступа к чату или необходимых прав. Проверьте, что GDE.WTF — администратор и у него включено «Ограничение участников»."
     elif isinstance(exc, TelegramBadRequest) and ("administrator" in lowered or "chat owner" in lowered):
         user_text = "⛔ Цель — администратор или создатель чата. Telegram не разрешает ограничивать её этим действием."
     elif isinstance(exc, TelegramBadRequest) and any(term in lowered for term in ("not enough rights", "have no rights", "can't restrict", "cannot restrict", "not an admin")):
-        user_text = "⛔ У Pear CM не хватает прав. Назначьте его администратором и включите право «Ограничение участников»."
+        user_text = "⛔ У GDE.WTF не хватает прав. Назначьте его администратором и включите право «Ограничение участников»."
     elif isinstance(exc, TelegramBadRequest) and any(term in lowered for term in ("user not found", "participant_id_invalid", "chat not found")):
         user_text = "⛔ Не удалось найти участника в этом чате. Ответьте на его сообщение или укажите ID участника, которого бот знает."
     elif isinstance(exc, TelegramBadRequest):
@@ -1885,8 +1885,8 @@ async def start(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     if message.chat.type == ChatType.PRIVATE:
         text = (
-            "👋 <b>Привет! Я Pear CM</b> — бот для управления группой.\n\n"
-            "Добавьте меня в группу и выдайте права администратора, если нужны "
+            "👋 <b>Привет! Я GDE.WTF</b> — бот для управления группой.\n\n"
+            "Я помогаю с модерацией и настройкой групп. Откройте сайт проекта: "\n            "<a href=\"https://gde.wtf/\">gde.wtf</a>.\n\n"\n            "Чтобы управлять группой, добавьте меня в неё и выдайте необходимые права администратора. " 
             "муты, баны, удаление сообщений и закрепление.\n\n"
             "Откройте <b>🔗 Команды</b>, чтобы посмотреть возможности.\n\n"
             "💚 Если хотите поддержать разработку, можете попробовать мой VPN: "
@@ -1896,7 +1896,7 @@ async def start(message: Message) -> None:
         # Keep /start fast: do not wait for an extra Telegram getChatMember
         # request just to render the welcome message.
         text = (
-            f"👋 Pear CM подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
+            f"👋 Бот проекта GDE.WTF подключён к чату <b>{message.chat.title or 'группа'}</b>!\n\n"
             "Нажми кнопку ниже — отвечу на запрос.\n\n"
             "Открой кнопки под этим сообщением, чтобы пользоваться ботом."
         )
@@ -1927,13 +1927,13 @@ async def help_command(message: Message) -> None:
         )
     )
     help_text = (
-        "📚 <b>Pear CM — команды</b>\n\n"
+        "📚 <b>GDE.WTF — команды</b>\n\n"
         "🛡 <b>Модерация:</b> мут, бан, кик, варн, -смс, +чат / -чат. "
         "Для действия над участником можно ответить на его сообщение.\n"
         "📊 <b>Статистика:</b> топ, топ дня, топ недели, топ вся.\n"
         "👤 <b>Участники:</b> профиль, активность, администраторы, предупреждения.\n"
         "🧰 Остальные полезные функции и подробные инструкции — в полном справочнике.\n\n"
-        "📖 <a href=\"https://telegra.ph/rules-pear-cm-10-20\">Все команды и правила Pear CM</a>"
+        "🌐 <a href=\"https://gde.wtf/\">Открыть сайт проекта GDE.WTF</a>"
     )
     await message.answer(
         help_text,
@@ -1944,7 +1944,7 @@ async def help_command(message: Message) -> None:
 @router.message(F.text.in_({"📋 Меню", "Меню"}))
 async def menu_button(message: Message) -> None:
     await message.answer(
-        "👋 <b>Главное меню Pear CM</b>\n\n"
+        "👋 <b>Главное меню GDE.WTF</b>\n\n"
         "➕ Добавить в чат — выберите группу и подтвердите права бота.\n"
         "💠 Профиль — ваша статистика и предупреждения.\n"
         "🔗 Команды — список доступных команд.\n"
@@ -1964,7 +1964,7 @@ async def menu_button(message: Message) -> None:
 @router.message(F.text == "➕ Добавить в чат")
 async def add_to_chat(message: Message) -> None:
     if message.chat.type != ChatType.PRIVATE:
-        await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат». ⚠️ Чтобы команды модерации работали в этой группе, выдайте Pear CM права администратора с необходимыми разрешениями.")
+        await message.answer("Откройте бота в личных сообщениях и нажмите «➕ Добавить в чат». ⚠️ Чтобы команды модерации работали в этой группе, выдайте GDE.WTF права администратора с необходимыми разрешениями.")
         return
     try:
         me = await get_bot_me_cached()
@@ -1973,7 +1973,7 @@ async def add_to_chat(message: Message) -> None:
             InlineKeyboardButton(text="➕ Выбрать группу и добавить бота", url=add_url)
         ]])
         await message.answer(
-            "➕ <b>Добавление Pear CM в группу</b>\n\n"
+            "➕ <b>Добавление GDE.WTF в группу</b>\n\n"
             "1. Нажмите кнопку ниже и выберите группу.\n"
             "2. Подтвердите добавление бота.\n"
             "3. Для удаления сообщений, мутов и банов выдайте права администратора: «Удаление сообщений», «Блокировка пользователей» и «Ограничение участников».\n"
@@ -1987,10 +1987,10 @@ async def add_to_chat(message: Message) -> None:
 @router.message(F.text == "🛠 Установка")
 async def installation_help(message: Message) -> None:
     await message.answer(
-        "🛠 <b>Установка Pear CM — пошагово</b>\n\n"
+        "🛠 <b>Установка GDE.WTF — пошагово</b>\n\n"
         "<b>1.</b> Нажмите «➕ Добавить в чат» в главном меню.\n"
         "<b>2.</b> Выберите нужную группу в Telegram и подтвердите добавление.\n"
-        "<b>3.</b> Откройте настройки группы → Администраторы → Добавить администратора → Pear CM.\n"
+        "<b>3.</b> Откройте настройки группы → Администраторы → Добавить администратора → GDE.WTF.\n"
         "<b>4.</b> Включите необходимые права: удаление сообщений, блокировка/ограничение участников. Для команд «-чат» и «+чат» нужны права управления чатом.\n"
         "<b>5.</b> Проверьте в группе: <code>/admins</code>, <code>-смс 10</code>, <code>-чат</code> и <code>+чат</code>.\n\n"
         "Если нужна только статистика, не выдавайте права модерации. Команды доступны в группе через меню «/».",
@@ -2026,7 +2026,7 @@ async def group_menu_callback(callback: CallbackQuery) -> None:
         )
     else:
         body = (
-            "📚 <b>Основные команды Pear CM</b>\n"
+            "📚 <b>Основные команды GDE.WTF</b>\n"
             "• /profile — профиль и статистика\n• /top — топ участников\n"
             "• /admins — список администраторов\n• /warns — предупреждения\n"
             "• /help — все команды\n\n"
@@ -2048,7 +2048,7 @@ async def removed_chat_top_button(message: Message) -> None:
 
 @router.message(F.chat.type != ChatType.PRIVATE, F.text == "🌐 Открыть приложение")
 async def group_menu_text_fallback(message: Message) -> None:
-    await message.answer("🌐 Открой Mini App через кнопку приложения в личке с Pear CM. В группе используй /help для команд.")
+    await message.answer("🌐 Открой Mini App через кнопку приложения в личке с GDE.WTF. В группе используй /help для команд.")
 
 @router.message(F.text == "💠 Профиль")
 @router.message(Command("profile"))
@@ -2185,7 +2185,7 @@ async def marriage_menu(message: Message) -> None:
 @router.message(F.text.regexp(r"(?i)^[.!/]?(?:админы|кто админ)(?:\s|$)"))
 async def admins(message: Message) -> None:
     try:
-        # Show Pear CM roles plus the real Telegram chat creator.
+        # Show GDE.WTF roles plus the real Telegram chat creator.
         ranked_users_result, telegram_admins_result = await asyncio.gather(
             asyncio.to_thread(db_rows, "bot_users", limit=1000, chat_id=message.chat.id),
             bot.get_chat_administrators(message.chat.id),
@@ -2215,10 +2215,10 @@ async def admins(message: Message) -> None:
         owner_username = str(owner_row.get("username") or "").lstrip("@") or None
         if message.from_user and message.from_user.id == OWNER_ID:
             owner_username = owner_username or message.from_user.username
-        owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (4, "Владелец Pear CM", None))[1]))
+        owner_name = str(owner_row.get("first_name") or (f"@{owner_username}" if owner_username else ranks.get(OWNER_ID, (4, "Владелец GDE.WTF", None))[1]))
         ranks[OWNER_ID] = (4, owner_name, owner_username or ranks.get(OWNER_ID, (5, "", None))[2])
 
-        # Clear five-step Pear CM hierarchy: rank 1 is the entry moderator, rank 5 is creator.
+        # Clear five-step GDE.WTF hierarchy: rank 1 is the entry moderator, rank 5 is creator.
         rank_titles = {
             5: "👑 Создатель",
             4: "⭐⭐⭐⭐ Старший администратор",
@@ -2228,11 +2228,11 @@ async def admins(message: Message) -> None:
         }
         grouped: dict[int, list[tuple[int, str, str | None]]] = defaultdict(list)
         creator_ids = set(chat_creators)
-        # The chat creator is listed separately and never duplicated in Pear CM ranks.
+        # The chat creator is listed separately and never duplicated in GDE.WTF ranks.
         for uid, entry in ranks.items():
             if uid not in creator_ids:
                 grouped[entry[0]].append((uid, entry[1], entry[2]))
-        lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", ""]
+        lines = ["🛡 <b>Администраторы и модераторы GDE.WTF</b>", ""]
         if chat_creators:
             lines.append("<b>👑 Создатели чата</b>")
             for uid, name in sorted(chat_creators.items(), key=lambda item: item[1].casefold()):
@@ -2243,7 +2243,7 @@ async def admins(message: Message) -> None:
             members = sorted(grouped.get(rank, []), key=lambda item: item[1].casefold())
             if not members:
                 continue
-            lines.append(f"<b>{rank_titles[rank]} · Pear CM</b>")
+            lines.append(f"<b>{rank_titles[rank]} · GDE.WTF</b>")
             icon = {5: "👑", 4: "🛡", 3: "🔰", 2: "🔹", 1: "🔸"}[rank]
             for uid, name, username in members:
                 display_name = str(name or (f"@{username}" if username else f"ID {uid}"))
@@ -2252,11 +2252,11 @@ async def admins(message: Message) -> None:
                 lines.append(f"{icon} {safe_display_name}")
             lines.append("")
         if len(lines) <= 2:
-            lines = ["🛡 <b>Администраторы и модераторы Pear CM</b>", "Пока не найдены создатели чата или назначенные роли Pear CM."]
+            lines = ["🛡 <b>Администраторы и модераторы GDE.WTF</b>", "Пока не найдены создатели чата или назначенные роли GDE.WTF."]
         await message.answer("\n".join(lines).strip())
     except Exception:
-        log.exception("Could not build Pear CM internal admin list")
-        await message.answer("Не удалось получить список администраторов Pear CM. Попробуйте ещё раз.")
+        log.exception("Could not build GDE.WTF internal admin list")
+        await message.answer("Не удалось получить список администраторов GDE.WTF. Попробуйте ещё раз.")
 
 # ── Activity tracking and welcome ────────────────────────────────────────────
 @router.message(F.new_chat_members)
@@ -2492,7 +2492,7 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
     if not await require_admin(message, min_rank=min_rank):
         return False
     if not require_restrict:
-        # Internal warnings are stored by Pear CM and do not require Telegram restrict rights.
+        # Internal warnings are stored by GDE.WTF and do not require Telegram restrict rights.
         return True
     try:
         # Bot ID is encoded in its token; avoid a getMe HTTP round-trip on every
@@ -2505,10 +2505,10 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
         await message.answer("⛔ Не удалось проверить права бота. Убедитесь, что он состоит в чате и назначен администратором.")
         return False
     if not member or member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-        await message.answer("⛔ Pear CM не администратор чата или не удалось проверить его статус. Назначьте его администратором.")
+        await message.answer("⛔ GDE.WTF не администратор чата или не удалось проверить его статус. Назначьте его администратором.")
         return False
     if member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(member, "can_restrict_members", False):
-        await message.answer("⛔ У Pear CM нет права «Ограничение участников». Включите его в настройках администраторов.")
+        await message.answer("⛔ У GDE.WTF нет права «Ограничение участников». Включите его в настройках администраторов.")
         return False
     return True
 
@@ -2729,13 +2729,13 @@ async def check_ban_operator_access(message: Message) -> bool:
         me = await get_bot_me_cached()
         bot_member = await get_chat_member_cached(bot, message.chat.id, me.id)
     except Exception:
-        await message.answer("⛔ Не удалось проверить права Pear CM в этой группе.")
+        await message.answer("⛔ Не удалось проверить права GDE.WTF в этой группе.")
         return False
     if not bot_member or bot_member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-        await message.answer("⛔ Назначь Pear CM администратором группы.")
+        await message.answer("⛔ Назначь GDE.WTF администратором группы.")
         return False
     if bot_member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(bot_member, "can_restrict_members", False):
-        await message.answer("⛔ У Pear CM нет права «Блокировка пользователей / Ограничение участников».")
+        await message.answer("⛔ У GDE.WTF нет права «Блокировка пользователей / Ограничение участников».")
         return False
     return True
 
@@ -3310,7 +3310,7 @@ async def info_cmd(message: Message) -> None:
     )
 
 # Snapshot from the user's Iris leaderboard (14 Oct 2026, chat XVII).
-# The observed Pear CM counters at that moment are subtracted, so only newer messages
+# The observed GDE.WTF counters at that moment are subtracted, so only newer messages
 # are added on top of Iris' historical totals.
 _IRIS_BASELINE_TOTAL = 215531
 _PEAR_TOTAL_AT_BASELINE = 2452
@@ -3346,7 +3346,7 @@ _IRIS_BASELINE_USERS = {
     "wolterenko": ("Егоркин-Ю", 1263),
     "oxuest": ("oxuest", 1233),
 }
-# Pear CM all-time counts visible in the same snapshot; used as a one-time offset.
+# GDE.WTF all-time counts visible in the same snapshot; used as a one-time offset.
 _PEAR_USER_COUNTS_AT_BASELINE = {
     "tgvkq": 770, "rypyi": 518, "roseov": 308, "kobwq": 169, "oxcqw": 144,
     "bleeg": 120, "osadaq": 110, "attakill": 101, "qxhza": 66, "fxguf": 56,
@@ -3684,7 +3684,7 @@ async def top_cmd(message: Message) -> None:
         rows = await filter_current_chat_members(message.chat.id, rows)
         rows = rows[:count]
     if not rows:
-        await message.answer(f"📊 Пока нет данных для статистики {labels[period]} среди текущих участников чата. Сообщения учитываются с момента, когда Pear CM начал наблюдать чат.")
+        await message.answer(f"📊 Пока нет данных для статистики {labels[period]} среди текущих участников чата. Сообщения учитываются с момента, когда GDE.WTF начал наблюдать чат.")
         return
 
     # Display names (not usernames) are clickable profile links, like Iris.
@@ -4350,13 +4350,13 @@ async def rank_cmd(message: Message) -> None:
         actor_existing_rank = 0
     effective_actor_rank = 5 if is_chat_creator else max(4 if message.from_user.id == OWNER_ID else 3, actor_existing_rank)
     if target[0] == OWNER_ID and message.from_user.id != OWNER_ID:
-        await message.answer("⛔ Ранг владельца Pear CM защищён от изменений.")
+        await message.answer("⛔ Ранг владельца GDE.WTF защищён от изменений.")
         return
     if target_existing_rank >= 5:
         await message.answer("⛔ Ранг 5 защищён от изменения.")
         return
     if not is_chat_creator and rank >= effective_actor_rank:
-        await message.answer("⛔ Вы можете назначать только ранг ниже своего. Ранг 5 может назначать только создатель чата или владелец Pear CM.")
+        await message.answer("⛔ Вы можете назначать только ранг ниже своего. Ранг 5 может назначать только создатель чата или владелец GDE.WTF.")
         return
     if not is_chat_creator and target_existing_rank >= effective_actor_rank and target_existing_rank > 0:
         await message.answer("⛔ Нельзя менять ранг равного или старшего участника.")
@@ -4419,7 +4419,7 @@ async def promote_rank_cmd(message: Message) -> None:
         await message.answer("⛔ Нельзя изменять ранг создателя Telegram-чата.")
         return
     if new_rank == 5 and not (actor_is_owner or actor_is_creator):
-        await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец Pear CM.")
+        await message.answer("⛔ Ранг 5 «Создатель» может назначить только создатель чата или владелец GDE.WTF.")
         return
     actor_is_telegram_admin = bool(actor_member and actor_member.status == ChatMemberStatus.ADMINISTRATOR)
     actor_rank = 5 if (actor_is_owner or actor_is_creator) else max(int(actor_rank_loaded or 0), 4 if actor_is_telegram_admin else 0)
@@ -4752,7 +4752,7 @@ async def apply_configured_filter_action(message: Message, settings: dict[str, A
 @router.message(Command("premium", "pear_premium"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:премиум|pear premium)(?:\s|$)"))
 async def premium_cmd(message: Message) -> None:
-    """Chat-level Pear Premium switch managed by the bot owner/operators."""
+    """Chat-level GDE.WTF Premium switch managed by the bot owner/operators."""
     raw = (message.text or "").strip()
     parts = raw.split()
     action = parts[1].lower() if len(parts) > 1 else "info"
@@ -4765,9 +4765,9 @@ async def premium_cmd(message: Message) -> None:
         settings["pear_premium"] = True
         save_chat_settings(message.chat.id, settings)
         audit(message.chat.id, message.from_user.id if message.from_user else 0,
-              "premium_enable", None, "Pear Premium enabled")
+              "premium_enable", None, "GDE.WTF Premium enabled")
         await message.answer(
-            "💎 <b>Pear Premium активирован для этого чата!</b>\n\n"
+            "💎 <b>GDE.WTF Premium активирован для этого чата!</b>\n\n"
             "Сохранена премиум-отметка чата и включён расширенный статус модерации.\n"
             "Настройки сохраняются в Supabase, если таблица bot_chat_settings настроена."
         )
@@ -4778,17 +4778,17 @@ async def premium_cmd(message: Message) -> None:
         settings["pear_premium"] = False
         save_chat_settings(message.chat.id, settings)
         audit(message.chat.id, message.from_user.id if message.from_user else 0,
-              "premium_disable", None, "Pear Premium disabled")
-        await message.answer("💠 Pear Premium отключён для этого чата.")
+              "premium_disable", None, "GDE.WTF Premium disabled")
+        await message.answer("💠 GDE.WTF Premium отключён для этого чата.")
         return
     if action != "info":
         await message.answer("Формат: <code>/premium</code>, <code>/premium on</code> или <code>/premium off</code>.")
         return
     status = "🟢 активен" if enabled else "⚪ не активирован"
     await message.answer(
-        "💎 <b>Pear Premium</b>\n"
+        "💎 <b>GDE.WTF Premium</b>\n"
         f"Статус этого чата: <b>{status}</b>.\n\n"
-        "Это внутренняя функция Pear CM, не платёжная подписка и не копия платных функций Iris.\n"
+        "Это внутренняя функция GDE.WTF, не платёжная подписка и не копия платных функций Iris.\n"
         "Овнер/оператор: <code>/premium on</code> — включить; <code>/premium off</code> — отключить."
     )
 
@@ -4902,7 +4902,7 @@ async def auto_moderation_filters(message: Message) -> None:
 # Important: the old track_activity catch-all handler was registered before
 # moderation and consumed ordinary group updates. Register it last so command
 # handlers and automatic filters can actually run first.
-# ── Pear CM moderation stage: history, reports, appeals, settings, rights, raid ──
+# ── GDE.WTF moderation stage: history, reports, appeals, settings, rights, raid ──
 # State is per chat; durable settings and case records are stored in Supabase.
 @router.message(Command("history"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:история наказаний|нарушения)(?:\s|$)"))
@@ -5733,7 +5733,7 @@ async def export_chat_settings_cmd(message: Message) -> None:
     data = {"format": "pear-cm-chat-settings", "version": 1, "settings": _settings_exportable(settings)}
     raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
     await message.answer_document(BufferedInputFile(raw, filename=f"pear_cm_settings_{message.chat.id}.json"),
-                                 caption="Экспорт настроек Pear CM. Секреты и текущая блокировка чата не включены.")
+                                 caption="Экспорт настроек GDE.WTF. Секреты и текущая блокировка чата не включены.")
 
 @router.message(Command("importsettings", "импортнастроек"))
 @router.message(F.text.regexp(r"(?i)^\s*(?:импорт настроек|импорт настроек чата)\s*$"))
@@ -5763,7 +5763,7 @@ async def import_chat_settings_cmd(message: Message) -> None:
         await message.answer(f"✅ Импортировано настроек: <b>{len(imported)}</b>. Права чата и секреты не импортировались.")
     except Exception as exc:
         log.warning("Settings import failed: %s", type(exc).__name__)
-        await message.answer("⚠️ Не удалось импортировать JSON. Проверьте файл экспорта Pear CM и его целостность.")
+        await message.answer("⚠️ Не удалось импортировать JSON. Проверьте файл экспорта GDE.WTF и его целостность.")
 
 @router.message(Command("welcome", "приветствие"))
 @router.message(F.text.regexp(r"(?i)^\s*приветствие(?:\s|$)"))
@@ -5963,7 +5963,7 @@ _GLOBAL_SETTING_TTL = 30.0
 _GLOBAL_BAN_TTL = 30.0
 
 OWNER_HELP = (
-    "<b>🛠 Панель овнера Pear CM</b>\n\n"
+    "<b>🛠 Панель овнера GDE.WTF</b>\n\n"
     "<b>Диагностика</b>\n"
     "/status — статус и время работы\n/ping — проверка Telegram/Supabase\n"
     "/diag — конфигурация без вывода секретов\n/logs [число] — последние записи аудита\n"
@@ -6064,7 +6064,7 @@ async def owner_panel(message: Message) -> None:
     if not await _owner_or_operator(message):
         return
     await message.answer(
-        "🛠 <b>Панель управления Pear CM</b>\n\nВыберите действие кнопкой ниже. "
+        "🛠 <b>Панель управления GDE.WTF</b>\n\nВыберите действие кнопкой ниже. "
         "Для бана бот попросит прислать ID или @username, а затем срок и причину. "
         "Доступ только владельцу и активным операторам.",
         reply_markup=admin_inline_keyboard(),
@@ -6085,13 +6085,13 @@ async def home_inline_callback(callback: CallbackQuery) -> None:
     )
     if action in {"start", "home"}:
         body = (
-            "👋 <b>Главное меню Pear CM</b>\n\n"
+            "👋 <b>Главное меню GDE.WTF</b>\n\n"
             "Выберите нужный раздел. Все разделы открываются в этом сообщении — чат не засоряется."
         )
         keyboard = welcome_inline_keyboard(user_id, chat_type, privileged)
     elif action == "help":
         body = (
-            "📚 <b>Команды Pear CM</b>\n\n"
+            "📚 <b>Команды GDE.WTF</b>\n\n"
             "<b>Профиль и статистика</b>\n"
             "• /profile — профиль и статистика\n• /top — топ участников\n"
             "• /admins — список администраторов\n• /warns — мои предупреждения\n\n"
@@ -6147,10 +6147,10 @@ async def inline_menu_callback(callback: CallbackQuery) -> None:
     chat_type = callback.message.chat.type
     if action == "installation":
         body = (
-            "🛠 <b>Установка Pear CM</b>\n\n"
+            "🛠 <b>Установка GDE.WTF</b>\n\n"
             "1. Нажмите «➕ Добавить в чат» в главном меню.\n"
             "2. Выберите группу и подтвердите добавление.\n"
-            "3. В настройках группы назначьте Pear CM администратором.\n"
+            "3. В настройках группы назначьте GDE.WTF администратором.\n"
             "4. Включите нужные права: удаление сообщений, блокировка и ограничение участников. "
             "Для «-чат» и «+чат» нужны права управления чатом.\n\n"
             "Если нужна только статистика, не выдавайте права модерации."
@@ -6219,7 +6219,7 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
 
     if action in {"open", "cancel"}:
         _ADMIN_INPUT_STATE.pop(uid, None)
-        body = "🛠 <b>Админ-панель Pear CM</b>\n\nВыберите действие:"
+        body = "🛠 <b>Админ-панель GDE.WTF</b>\n\nВыберите действие:"
         keyboard = admin_inline_keyboard()
     elif action in {"ban", "unban"}:
         _ADMIN_INPUT_STATE[uid] = action
@@ -6247,7 +6247,7 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[back_admin], [back_home]])
     elif action == "stats":
         rows = await asyncio.to_thread(db_rows, "bot_users", limit=1000)
-        body = f"📊 <b>Статистика Pear CM</b>\n\nЗаписей пользователей в выборке: <b>{len(rows)}</b>."
+        body = f"📊 <b>Статистика GDE.WTF</b>\n\nЗаписей пользователей в выборке: <b>{len(rows)}</b>."
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[back_admin], [back_home]])
     elif action in {"operators_list", "globalstats", "logs", "modules", "status", "diag"}:
         commands = {
@@ -6272,7 +6272,7 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     elif action == "home":
-        body = "👋 <b>Главное меню Pear CM</b>\n\nВыберите нужный раздел."
+        body = "👋 <b>Главное меню GDE.WTF</b>\n\nВыберите нужный раздел."
         keyboard = welcome_inline_keyboard(uid, ChatType.PRIVATE, True)
     else:
         await callback.answer("Неизвестное действие.")
@@ -6318,7 +6318,7 @@ async def owner_status(message: Message) -> None:
         asyncio.to_thread(_global_setting, "maintenance", "off"),
     )
     await message.answer(
-        "<b>📡 Статус Pear CM</b>\n"
+        "<b>📡 Статус GDE.WTF</b>\n"
         f"Telegram API: <code>{telegram_state}</code>\n"
         f"Процесс: <b>работает</b> · uptime <code>{h}ч {m}м {s}с</code>\n"
         f"База: <b>{'настроена' if db is not None else 'не настроена'}</b>\n"
@@ -6383,7 +6383,7 @@ async def owner_ping(message: Message) -> None:
     await message.answer(format_panel(
         "ПРОВЕРКА СОЕДИНЕНИЯ",
         f"Telegram API: <b>{telegram}</b>\nSupabase: <b>{db_result}</b>\n<i>Показания обновляются раз в 15 секунд.</i>",
-        "Pear CM · технический статус",
+        "GDE.WTF · технический статус",
     ))
 
 @router.message(Command("diag", "diagnostics"))
@@ -6454,7 +6454,7 @@ async def owner_diagnostics(message: Message) -> None:
     await message.answer(format_panel(
         "ТЕХНИЧЕСКАЯ ДИАГНОСТИКА",
         details,
-        "Pear CM · секретные значения не выводятся",
+        "GDE.WTF · секретные значения не выводятся",
     ))
 
 @router.message(Command("globalstats", "глобальнаястатистика"))
@@ -6523,7 +6523,7 @@ async def owner_audit_user(message: Message) -> None:
 @router.message(Command("version", "версия"))
 async def owner_version(message: Message) -> None:
     if not await _owner_or_operator(message): return
-    await message.answer(f"Pear CM · сборка <code>2026.10-owner-console</code>\nPython <code>{sys.version.split()[0]}</code>\nМСК <code>{format_moscow_time(moscow_now())}</code>")
+    await message.answer(f"GDE.WTF · сборка <code>2026.10-owner-console</code>\nPython <code>{sys.version.split()[0]}</code>\nМСК <code>{format_moscow_time(moscow_now())}</code>")
 
 @router.message(Command("modules", "модули"))
 async def owner_modules(message: Message) -> None:
@@ -6641,7 +6641,7 @@ async def _notify_global_action(message: Message, uid: int, target_label: str,
     if action == "ban":
         duration_text = f" на <b>{escape(duration_label)}</b>" if duration_label else " <b>навсегда</b>"
         user_text = (
-            f"⛔ <b>Доступ к Pear CM ограничен{duration_text}.</b>\n"
+            f"⛔ <b>Доступ к GDE.WTF ограничен{duration_text}.</b>\n"
             f"Причина: {escape(reason or 'причина не указана')}\n"
             "Если считаете это ошибкой, свяжитесь с владельцем бота."
         )
@@ -6651,7 +6651,7 @@ async def _notify_global_action(message: Message, uid: int, target_label: str,
             f"Кто выдал: <code>{message.from_user.id if message.from_user else 0}</code>"
         )
     else:
-        user_text = "✅ <b>Глобальный запрет Pear CM снят.</b> Вы снова можете пользоваться ботом."
+        user_text = "✅ <b>Глобальный запрет GDE.WTF снят.</b> Вы снова можете пользоваться ботом."
         owner_text = (
             f"✅ <b>Глобальный бан снят</b>\nПользователь: {escape(target_label)} "
             f"(<code>{uid}</code>)\nКто снял: <code>{message.from_user.id if message.from_user else 0}</code>"
@@ -6748,7 +6748,7 @@ async def _global_moderation_command(message: Message, remove: bool = False) -> 
     await message.answer(
         f"🚫 Глобальный запрет включён: {escape(target_label)} (<code>{uid}</code>) {term}.\n"
         f"Причина: {escape(reason)}\n{user_notice}\n"
-        "<i>Это блокировка функций Pear CM, не бан во всех Telegram-группах.</i>"
+        "<i>Это блокировка функций GDE.WTF, не бан во всех Telegram-группах.</i>"
     )
 
 @router.message(Command("globalban", "globanban"))
@@ -6892,7 +6892,7 @@ async def achievements_cmd(message: Message) -> None:
 @router.message(Command("language", "язык"))
 @router.message(F.text.regexp(r"(?i)^\s*язык\s*$"))
 async def language_cmd(message: Message) -> None:
-    await message.answer("🌐 Сейчас интерфейс Pear CM работает на русском. Переключение языка будет доступно после добавления сохранения пользовательских предпочтений.")
+    await message.answer("🌐 Сейчас интерфейс GDE.WTF работает на русском. Переключение языка будет доступно после добавления сохранения пользовательских предпочтений.")
 
 @router.message(Command("notifications", "уведомления"))
 @router.message(F.text.regexp(r"(?i)^\s*уведомления\s*$"))
@@ -7010,7 +7010,26 @@ async def _worker_watchdog(
 
 async def main() -> None:
     global _SCHEMA_PROBLEMS
-    log.info("Pear CM build tag: nickname-safe-20261022-r2")
+    log.info("GDE.WTF build tag: nickname-safe-20261022-r2")
+    # Обновляем профиль Telegram-бота под бренд проекта. Ошибка оформления не должна останавливать polling.
+    try:
+        await bot.set_my_name(name="GDE.WTF | Чат-менеджер")
+        await bot.set_my_description(
+            description=(
+                "Бот проекта GDE.WTF: модерация, управление группами и инструменты сообщества. "
+                "Сайт: https://gde.wtf/ "
+                "Поддержать разработку и пользоваться VPN: @awesomeproxyvpn_bot"
+            )
+        )
+        await bot.set_my_short_description(
+            short_description=(
+                "Бот проекта GDE.WTF: модерация и управление группами. "
+                "VPN-поддержка: @awesomeproxyvpn_bot"
+            )
+        )
+        log.info("Telegram bot profile branding updated for GDE.WTF")
+    except Exception:
+        log.exception("Could not update Telegram bot profile branding; continuing")
     if db is not None:
         try:
             schema_problems = await asyncio.to_thread(check_schema, db)
@@ -7033,7 +7052,7 @@ async def main() -> None:
     group_commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="help", description="Справка по командам чата"),
-        BotCommand(command="commands", description="Все команды Pear CM"),
+        BotCommand(command="commands", description="Все команды GDE.WTF"),
         BotCommand(command="admins", description="Администраторы чата"),
         BotCommand(command="warns", description="Мои предупреждения"),
         BotCommand(command="top", description="Топ за период"),
@@ -7041,7 +7060,7 @@ async def main() -> None:
         BotCommand(command="unmute", description="Снять мут (ответом)"),
         BotCommand(command="ban", description="Бан (ID/@username/ответом)"),
         BotCommand(command="unban", description="Разбанить по ID/@username"),
-        BotCommand(command="premium", description="Статус Pear Premium"),
+        BotCommand(command="premium", description="Статус GDE.WTF Premium"),
         BotCommand(command="kick", description="Исключить (ответом)"),
         BotCommand(command="warn", description="Предупреждение (ответом)"),
         BotCommand(command="del", description="Удалить сообщения"),
@@ -7068,7 +7087,7 @@ async def main() -> None:
     private_commands = [
         BotCommand(command="start", description="Открыть меню бота"),
         BotCommand(command="help", description="Справка"),
-        BotCommand(command="commands", description="Все команды Pear CM"),
+        BotCommand(command="commands", description="Все команды GDE.WTF"),
         BotCommand(command="profile", description="Мой профиль"),
         BotCommand(command="warns", description="Мои предупреждения"),
         BotCommand(command="top", description="Топ участников"),
@@ -7114,7 +7133,7 @@ async def main() -> None:
     try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(
-                text="Открыть Pear CM",
+                text="Открыть GDE.WTF",
                 web_app=WebAppInfo(url=MINI_APP_URL),
             )
         )
@@ -7473,13 +7492,13 @@ async def economy_cmd(message: Message) -> None:
         if not result:
             await message.answer("⚠️ Не удалось обработать бонус. Проверь подключение Supabase.")
         elif result.get("ok"):
-            await message.answer(f"🎁 Ежедневный бонус: +100 Pear Coins!\n🪙 Баланс: <b>{int(result.get('balance') or 0)}</b>")
+            await message.answer(f"🎁 Ежедневный бонус: +100 GDE.WTF Coins!\n🪙 Баланс: <b>{int(result.get('balance') or 0)}</b>")
         else:
             await message.answer("⏳ Бонус уже получен. Попробуй позже.")
         return
 
     if norm == "магазин":
-        await message.answer("<b>🛍 Магазин Pear Coins</b>\n• Титул «Активный» — 250 монет\n• Титул «Легенда» — 1000 монет\nПокупка: <code>купить активный</code> или <code>купить легенда</code>.")
+        await message.answer("<b>🛍 Магазин GDE.WTF Coins</b>\n• Титул «Активный» — 250 монет\n• Титул «Легенда» — 1000 монет\nПокупка: <code>купить активный</code> или <code>купить легенда</code>.")
         return
 
     if norm.startswith("купить "):
@@ -7522,7 +7541,7 @@ async def economy_cmd(message: Message) -> None:
         "chat_id": chat_id, "user_id": uid, "balance": 0
     }
     if norm in {"баланс", "кошелек", "кошелёк"}:
-        await message.answer(f"🪙 Баланс: <b>{int(current.get('balance') or 0)}</b> Pear Coins.")
+        await message.answer(f"🪙 Баланс: <b>{int(current.get('balance') or 0)}</b> GDE.WTF Coins.")
         return
     await message.answer("Команды экономики: баланс, ежедневный бонус, передать, магазин, купить.")
 
@@ -8034,4 +8053,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_forever())
     except KeyboardInterrupt:
-        log.info("Pear CM stopped by operator")
+        log.info("GDE.WTF stopped by operator")
