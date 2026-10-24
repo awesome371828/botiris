@@ -253,6 +253,10 @@ def _help() -> str:
         "🌐 <b>GDE.WTF · управление модераторами</b>\n\n"
         "<code>!ping</code> — проверить связь\n"
         "<code>!профиль @username|ID|RND-AB3K</code> — профиль\n"
+        "<code>!варны q</code> — предупреждения модератора\n"
+        "<code>!кто q</code> — краткая карточка модератора\n"
+        "<code>!статус q</code> — онлайн, смена, бан и рейтинг\n"
+        "<code>!права q</code> — проектные права\n"
         "<code>!модераторы [city_id]</code> — список команды\n"
         "<code>!города</code> — список городов\n"
         "<code>!журнал [q] [limit]</code> — журнал действий\n"
@@ -391,13 +395,51 @@ async def gdewtf_command(message: Message) -> None:
                 await message.answer("⚠️ " + _error_text(data))
             return
 
-        if action in {"профиль", "who", "mod"}:
+        if action in {"профиль", "who", "mod", "варны", "кто", "статус", "права"}:
             if not rest:
-                await message.answer("Укажи модератора: <code>!профиль @username</code>")
+                await message.answer("Укажи модератора: <code>!варны @username</code>")
                 return
             data = await _api("GET", "/mod", params={"q": rest[0]})
             if data.get("ok") and isinstance(data.get("mod"), dict):
-                await message.answer(_profile(data["mod"]))
+                mod = data["mod"]
+                if action == "варны":
+                    warns = mod.get("warns") or []
+                    rows = []
+                    for i, warn in enumerate(warns[:25], start=1):
+                        if isinstance(warn, dict):
+                            ts = warn.get("ts")
+                            try:
+                                when = datetime.fromtimestamp(float(ts), timezone.utc).strftime("%d.%m.%Y %H:%M UTC") if ts else "дата неизвестна"
+                            except (ValueError, TypeError, OSError):
+                                when = "дата неизвестна"
+                            rows.append(f"<b>{i}.</b> {escape(when)} · {_clean(warn.get('reason'), 'без причины')}\nВыдал: {_clean(warn.get('by'))}")
+                    await message.answer(
+                        f"⚠️ <b>Варны · {_clean(mod.get('nick') or mod.get('username') or mod.get('pub'))}</b>\n"
+                        f"Всего: <b>{_clean(mod.get('warns_count', len(warns)))}</b>\n\n" +
+                        ("\n\n".join(rows) if rows else "Предупреждений нет.")
+                    )
+                elif action == "кто":
+                    await message.answer(
+                        f"👤 <b>Карточка модератора</b>\n\n{_mod_line(mod)}\n"
+                        f"Рейтинг: <b>{_clean(mod.get('rating', 0))}</b> · варны: <b>{_clean(mod.get('warns_count', 0))}</b>\n"
+                        f"Онлайн: <b>{'да' if mod.get('online') else 'нет'}</b> · смена: <b>{'да' if mod.get('on_shift') else 'нет'}</b>"
+                    )
+                elif action == "статус":
+                    await message.answer(
+                        f"🛰 <b>Статус модератора</b>\n\n{_mod_line(mod)}\n"
+                        f"Онлайн: <b>{'да' if mod.get('online') else 'нет'}</b>\n"
+                        f"На смене: <b>{'да' if mod.get('on_shift') else 'нет'}</b>\n"
+                        f"Бан: <b>{'да' if mod.get('banned') else 'нет'}</b>\n"
+                        f"Рейтинг: <b>{_clean(mod.get('rating', 0))}</b>"
+                    )
+                elif action == "права":
+                    await message.answer(
+                        f"🔐 <b>Права модератора</b>\n\n{_mod_line(mod)}\n"
+                        f"Роль: {_clean(mod.get('role_label') or mod.get('role'))}\n"
+                        f"Права: <code>{_clean(', '.join(map(str, mod.get('perms') or [])) or '—')}</code>"
+                    )
+                else:
+                    await message.answer(_profile(mod))
             else:
                 await message.answer("⚠️ " + _error_text(data))
             return
