@@ -155,8 +155,8 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()
 document.getElementById('refreshRadar').addEventListener('click',()=>{const f=document.getElementById('radarFrame');f.src=MAP;notify('Перезагружаю радар…')});
 document.getElementById('aboutWebsite').addEventListener('click',()=>openUrl(SITE));
 document.getElementById('contact').addEventListener('click',()=>openUrl(MAP));
-document.getElementById('privacy').addEventListener('click',()=>openUrl(MAP));
-document.getElementById('android').addEventListener('click',()=>openUrl('https://www.rustore.ru/'));
+document.getElementById('privacy').addEventListener('click',()=>openUrl(MAP+'privacy'));
+document.getElementById('android').addEventListener('click',()=>openUrl('https://www.rustore.ru/catalog/app/wtf.gde.app'));
 const cityList=document.getElementById('cityList'),citySearch=document.getElementById('citySearch');
 function renderCities(){const q=citySearch.value.trim().toLocaleLowerCase('ru');const found=cities.filter(c=>c.toLocaleLowerCase('ru').includes(q));cityList.innerHTML=found.map(c=>'<button class="city" data-city="'+c.replace(/"/g,'&quot;')+'">'+c+'<span>↗</span></button>').join('')||'<p class="muted">Не найдено. Открой радар, чтобы воспользоваться полным списком городов.</p>'}
 citySearch.addEventListener('input',renderCities);cityList.addEventListener('click',e=>{if(e.target.closest('[data-city]'))openMap()});renderCities();
