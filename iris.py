@@ -475,7 +475,7 @@ async def gdewtf_command(message: Message) -> None:
             if action == "топ":
                 mods.sort(key=lambda m: float(m.get("rating") or 0), reverse=True)
                 rows = [
-                    f"{i}. {_clean(m.get('nick') or m.get('name') or m.get('username') or m.get('pub'))} — <b>{_clean(m.get('rating', 0))}</b> · {_clean(m.get('city_name') or m.get('city'))}"
+                    f"{i}. {_mod_line(m)} · рейтинг <b>{_clean(m.get('rating', 0))}</b>"
                     for i, m in enumerate(mods[:15], start=1)
                 ]
                 title = "🏆 <b>Рейтинг модераторов</b>"
