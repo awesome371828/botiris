@@ -195,13 +195,29 @@ def _clean(value: Any, default: str = "—") -> str:
 
 
 def _mod_line(mod: dict[str, Any]) -> str:
-    display = mod.get("nick") or mod.get("name") or mod.get("username") or mod.get("pub") or "?"
-    username = f" (@{mod['username'].lstrip('@')})" if mod.get("username") else ""
+    """Compact, non-pinging moderator row with a clickable profile name."""
+    display = str(mod.get("nick") or mod.get("name") or mod.get("username") or mod.get("pub") or "?").strip()
+    username = str(mod.get("username") or "").strip().lstrip("@")
+    tg_id = mod.get("tg_id") or mod.get("telegram_id") or mod.get("user_id")
+    safe_name = _clean(display)
+    try:
+        numeric_id = int(tg_id or 0)
+    except (TypeError, ValueError):
+        numeric_id = 0
+    if numeric_id > 0:
+        linked_name = f'<a href="tg://user?id={numeric_id}">{safe_name}</a>'
+    elif username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        linked_name = f'<a href="https://t.me/{username}">{safe_name}</a>'
+    else:
+        linked_name = safe_name
     city = mod.get("city_name") or mod.get("city") or "—"
     role = mod.get("role_label") or mod.get("role") or "—"
+    pub = mod.get("pub") or "—"
+    # One compact line per person; usernames are deliberately plain text to avoid pings.
+    username_label = f" · @{_clean(username)}" if username else ""
     return (
-        f"• <b>{_clean(display)}</b>{_clean(username, '')}\n"
-        f"  {_clean(role)} · город: {_clean(city)} · pub: <code>{_clean(mod.get('pub'))}</code>"
+        f"• <b>{_clean(role)}</b> ({linked_name}){username_label}"
+        f" · {_clean(city)} · <code>{_clean(pub)}</code>"
     )
 
 
@@ -477,9 +493,37 @@ async def gdewtf_command(message: Message) -> None:
             if not data.get("ok"):
                 await message.answer("⚠️ " + _error_text(data))
                 return
-            mods = data.get("mods") or []
-            body = "\n\n".join(_mod_line(m) for m in mods[:60] if isinstance(m, dict))
-            await message.answer(f"🌐 <b>Модераторы GDE.WTF · {len(mods)}</b>\n\n{body or 'Список пуст.'}"[:3900])
+            mods = [m for m in (data.get("mods") or []) if isinstance(m, dict)]
+            # Telegram limits a text message to 4096 characters. Split at row
+            # boundaries instead of truncating the directory or silently dropping people.
+            title = f"🌐 <b>Модераторы GDE.WTF · {len(mods)}</b>"
+            chunks: list[str] = []
+            current = title
+            for mod in mods:
+                row = _mod_line(mod)
+                candidate = current + "\\n" + row
+                if len(candidate) > 3900 and current != title:
+                    chunks.append(current)
+                    current = f"🌐 <b>Модераторы · продолжение</b>\n" + row
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
+            total = len(chunks)
+            for index, chunk in enumerate(chunks, 1):
+                if total > 1:
+                    chunk = chunk.replace(
+                        "🌐 <b>Модераторы GDE.WTF · " + str(len(mods)) + "</b>",
+                        f"🌐 <b>Модераторы GDE.WTF · {len(mods)} · {index}/{total}</b>",
+                        1,
+                    ) if index == 1 else chunk.replace(
+                        "🌐 <b>Модераторы · продолжение</b>",
+                        f"🌐 <b>Модераторы · продолжение {index}/{total}</b>",
+                        1,
+                    )
+                await message.answer(chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            if not mods:
+                await message.answer("Список пуст.")
             return
 
         if action in {"города", "cities"}:
