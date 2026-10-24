@@ -2733,18 +2733,18 @@ async def mute_cmd(message: Message) -> None:
         if until:
             when = format_moscow_time(until)
             await message.answer(format_panel(
-                "ОГРАНИЧЕНИЕ ВЫДАНО",
-                f"🔇 {mention(target[0], target[1])} замучен на <b>{escape(duration_label or 'указанный срок')}</b> "
-                f"по причине: <b>{reason}</b>.\n"
-                f"🕒 Выдан: {format_moscow_time(issued_at)}\n"
-                f"⏳ Истекает: {when}\n👮 Модератор: {actor}.",
-                "Модерация · действие выполнено",
+                "МУТ ВЫДАН",
+                f"🔇 <b>{mention(target[0], target[1])}</b> ограничен в отправке сообщений на <b>{escape(duration_label or 'указанный срок')}</b>. "
+                f"Причина: <b>{reason}</b>.\n"
+                f"🕒 Начало: {format_moscow_time(issued_at)}\n"
+                f"⏳ Завершится: {when}\n👮 Выдал: {actor}.",
+                "GDE.WTF · Модерация",
             ))
         else:
             await message.answer(format_panel(
                 "ОГРАНИЧЕНИЕ ВЫДАНО",
-                f"🔇 {mention(target[0], target[1])} замучен <b>бессрочно</b> "
-                f"по причине: <b>{reason}</b>.\n👮 Модератор: {actor}.",
+                f"🔇 <b>{mention(target[0], target[1])}</b> ограничен в отправке сообщений <b>без срока окончания</b>. "
+                f"Причина: <b>{reason}</b>.\n👮 Выдал: {actor}.",
                 "Модерация · действие выполнено",
             ))
     except Exception as exc:
