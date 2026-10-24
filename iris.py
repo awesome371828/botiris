@@ -4788,7 +4788,7 @@ async def premium_cmd(message: Message) -> None:
     await message.answer(
         "💎 <b>GDE.WTF Premium</b>\n"
         f"Статус этого чата: <b>{status}</b>.\n\n"
-        "Это внутренняя функция GDE.WTF, не платёжная подписка и не копия платных функций Iris.\n"
+        "Это служебная функция GDE.WTF для управления возможностями чата, а не платная подписка.\n"
         "Овнер/оператор: <code>/premium on</code> — включить; <code>/premium off</code> — отключить."
     )
 
