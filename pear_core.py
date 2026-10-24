@@ -226,11 +226,13 @@ def parse_duration_prefix(tokens: list[str]) -> tuple[timedelta, int, str] | Non
         return None
     return timedelta(seconds=total), consumed, " ".join(labels)
 
-def format_panel(title: str, body: str, footer: str = "Pear CM · Чат-менеджер") -> str:
-    """Quiet, consistent Telegram HTML panel: restrained header and spacing."""
+def format_panel(title: str, body: str, footer: str = "GDE.WTF · Модерация") -> str:
+    """Consistent, clean Telegram HTML card without heavy box-drawing borders."""
     title = title.strip()
     body = body.strip()
-    return f"╭ <b>{title}</b>\n╰━━━━━━━━━━━━━━━━━━\n\n{body}\n\n<i>{footer}</i>"
+    footer = footer.strip()
+    # Compact hierarchy: clear title, readable body, quiet signature.
+    return f"🛡️ <b>{title}</b>\n\n{body}\n\n<blockquote>— {footer}</blockquote>"
 
 def check_schema(client: Any) -> list[str]:
     """Check core PostgREST tables/columns without mutating the database."""
