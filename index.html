@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#10140f">
+<title>GDE.WTF</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#10140f;color:#fff;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+nav{display:flex;gap:8px;padding:8px;background:#10140f;border-bottom:1px solid #ffffff1a;flex-shrink:0}
+button{flex:1;border:1px solid #ffffff20;background:#1a2117;color:#d9e5d0;border-radius:10px;padding:11px 8px;font:700 13px inherit;cursor:pointer}
+button.active{background:#d8ff83;color:#182014;border-color:#d8ff83}
+main{position:relative;flex:1;min-height:0}
+iframe{display:none;width:100%;height:100%;border:0;background:#fff}
+iframe.active{display:block}
+#fallback{display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;text-align:center;background:#10140f}
+#fallback p{color:#b6c2ac;line-height:1.5}
+#fallback a{color:#182014;background:#d8ff83;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:800}
+</style>
+</head>
+<body>
+<nav aria-label="Сайты GDE.WTF">
+<button class="active" data-site="home">gde.wtf</button>
+<button data-site="map">map.gde.wtf</button>
+</nav>
+<main>
+<iframe id="home" class="active" title="GDE.WTF" src="https://gde.wtf/" allow="geolocation; clipboard-read; clipboard-write; notifications" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<iframe id="map" title="GDE.WTF карта" data-src="https://map.gde.wtf/" allow="geolocation; clipboard-read; clipboard-write; notifications" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<div id="fallback"><strong>Сайт не разрешает отображение внутри приложения</strong><p>Открой оригинальную страницу в браузере.</p><a id="openExternal" href="https://gde.wtf/" target="_blank" rel="noopener">Открыть сайт ↗</a></div>
+</main>
+<script>
+const tg=window.Telegram&&window.Telegram.WebApp;
+try{if(tg){tg.ready();tg.expand();tg.setHeaderColor('#10140f');tg.setBackgroundColor('#10140f')}}catch(e){}
+const urls={home:'https://gde.wtf/',map:'https://map.gde.wtf/'};
+function select(key){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.site===key));document.querySelectorAll('iframe').forEach(f=>f.classList.toggle('active',f.id===key));const frame=document.getElementById(key);if(!frame.src||frame.src==='about:blank')frame.src=urls[key];document.getElementById('openExternal').href=urls[key];document.getElementById('fallback').style.display='none';try{tg&&tg.HapticFeedback&&tg.HapticFeedback.selectionChanged()}catch(e){}}
+document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()=>select(b.dataset.site)));
+document.getElementById('openExternal').addEventListener('click',e=>{if(tg&&tg.openLink){e.preventDefault();tg.openLink(e.currentTarget.href)}});
+</script>
+</body>
+</html>
