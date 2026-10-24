@@ -501,7 +501,7 @@ async def gdewtf_command(message: Message) -> None:
             current = title
             for mod in mods:
                 row = _mod_line(mod)
-                candidate = current + "\\n" + row
+                candidate = current + "\n" + row
                 if len(candidate) > 3900 and current != title:
                     chunks.append(current)
                     current = f"🌐 <b>Модераторы · продолжение</b>\n" + row
