@@ -506,6 +506,8 @@ async def gdewtf_command(message: Message) -> None:
                     uid = int(tg_id or 0)
                 except (TypeError, ValueError):
                     uid = 0
+                if len(display) > 22:
+                    display = display[:21] + "…"
                 safe_display = _clean(display)
                 if uid > 0:
                     linked = f'<a href="tg://user?id={uid}">{safe_display}</a>'
@@ -531,10 +533,7 @@ async def gdewtf_command(message: Message) -> None:
                 role = re.sub(r"\s*[·—-]\s*(?:амбассадор|модератор|региональный управляющий)?\s*(?:г\.?\s*)?" + re.escape(city) + r"\s*$", "", role, flags=re.I) if city else role
                 bits = [f"<b>{_clean(role)}</b>", linked]
                 if city and city != "—":
-                    bits.append(_clean(city))
-                pub = str(mod.get("pub") or "").strip()
-                if pub:
-                    bits.append(f"<code>{_clean(pub)}</code>")
+                    bits.append(_clean(city[:15] + "…" if len(city) > 16 else city))
                 rows.append("• " + " · ".join(bits))
             if not rows:
                 await message.answer("Список пуст.")
