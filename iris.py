@@ -2564,23 +2564,28 @@ async def check_mod(message: Message, min_rank: int = 2, require_restrict: bool 
     if not await require_admin(message, min_rank=min_rank):
         return False
     if not require_restrict:
-        # Internal warnings are stored by GDE.WTF and do not require Telegram restrict rights.
         return True
+    # Always fetch live bot status here; a cached "not admin" result can become
+    # stale immediately after an administrator grants permissions in Telegram.
     try:
-        # Bot ID is encoded in its token; avoid a getMe HTTP round-trip on every
-        # moderation command. Reuse the short-lived member cache as well.
-        member = await get_chat_member_cached(bot, message.chat.id, bot.id)
+        member = await bot.get_chat_member(message.chat.id, bot.id)
+        _CHAT_MEMBER_CACHE[(message.chat.id, bot.id)] = (member, time.monotonic())
     except TelegramForbiddenError:
-        await message.answer("⛔ Бот не имеет доступа к чату. Добавьте его обратно и выдайте права администратора.")
+        await message.answer("⛔ <b>Нет доступа к чату</b>\\nДобавь бота обратно в группу и повтори команду.")
         return False
-    except TelegramBadRequest:
-        await message.answer("⛔ Не удалось проверить права бота. Убедитесь, что он состоит в чате и назначен администратором.")
+    except TelegramBadRequest as exc:
+        log.warning("Live bot status check failed chat=%s: %s", message.chat.id, str(exc)[:250])
+        await message.answer("⚠️ <b>Telegram не подтвердил права бота</b>\\nПроверь, что бот состоит в группе. Если его только что назначили администратором, подожди несколько секунд и повтори команду.")
+        return False
+    except Exception as exc:
+        log.warning("Unexpected live bot status check failure chat=%s error=%s: %s", message.chat.id, type(exc).__name__, str(exc)[:250])
+        await message.answer("⚠️ <b>Не удалось проверить права через Telegram</b>\\nНичего не выполнено. Повтори попытку чуть позже.")
         return False
     if not member or member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
-        await message.answer("⛔ GDE.WTF не администратор чата или не удалось проверить его статус. Назначьте его администратором.")
+        await message.answer("⛔ <b>Боту нужны права администратора</b>\\nВключи администраторский статус GDE.WTF в настройках группы.")
         return False
     if member.status == ChatMemberStatus.ADMINISTRATOR and not getattr(member, "can_restrict_members", False):
-        await message.answer("⛔ У GDE.WTF нет права «Ограничение участников». Включите его в настройках администраторов.")
+        await message.answer("⛔ <b>Не хватает права на муты</b>\\nВключи «Блокировка пользователей» / «Ограничение участников» для GDE.WTF.")
         return False
     return True
 
