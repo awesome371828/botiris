@@ -8076,7 +8076,7 @@ async def gather_cmd(message: Message) -> None:
         messages: list[str] = []
         body = ""
         for item in mentions:
-            separator = "  •  " if body else ""
+            separator = " " if body else ""
             if len(heading) + len(body) + len(separator) + len(item) > 3800 and body:
                 messages.append(heading + body)
                 body = ""
@@ -8088,7 +8088,7 @@ async def gather_cmd(message: Message) -> None:
             chunks: list[str] = []
             current = ""
             for item in mentions:
-                separator = "  •  " if current else ""
+                separator = " " if current else ""
                 if len(build_heading(99, 99)) + len(current) + len(separator) + len(item) > 3800 and current:
                     chunks.append(current)
                     current = ""
@@ -8124,7 +8124,7 @@ async def gather_cmd(message: Message) -> None:
                 messages = []
                 body_chunk = ""
                 for item in mentions:
-                    separator = "\n" if body_chunk else ""
+                    separator = " " if body_chunk else ""
                     if len(body_chunk) + len(separator) + len(item) > 3800 and body_chunk:
                         messages.append(body_chunk)
                         body_chunk = ""
